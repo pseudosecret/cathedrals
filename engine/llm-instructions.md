@@ -76,7 +76,7 @@ When determining what is true, use this order:
 10. `engine/data/claimants.yaml`
 11. `engine/data/threshold-geomancy.yaml` if present
 12. `engine/data/work-instance.yaml` if present
-13. `engine/docs/human-decision-contract.md` if present
+13. `engine/docs/human-decision-contract.md` if present, for escalation-only guidance
 14. `engine/docs/content-schema-contract.md` if present
 15. `engine/docs/build-contract.md` if present
 16. `engine/docs/validation-runbook.md` if present
@@ -186,7 +186,7 @@ For story work, always use this order unless explicitly overridden:
 1. Read source-of-truth files.
 2. Audit what exists and what is missing.
 3. Update or create `engine/data/work-instance.yaml` if needed.
-4. Apply defaults from `engine/docs/human-decision-contract.md` if the human has not answered a material but non-blocking question.
+4. Resolve machine-selectable decisions from `engine/data/work-instance.yaml`; use `engine/docs/human-decision-contract.md` only when policy requires human override.
 5. Obey the current phase gate in `engine/data/work-instance.yaml` before touching any downstream output directory.
 6. Obey the active execution milestone in `engine/data/work-instance.yaml` unless the human explicitly changes scope.
 7. If the phase is `engine_revision`, mutate only `engine/` files and stop before any `schema-generation/` or `prose/` writes.
@@ -219,6 +219,8 @@ Before generating substantial prose, ensure there is a concrete work instance de
 
 If this file does not exist, propose or create `engine/data/work-instance.yaml` before large-scale generation.
 
+The work instance should also carry machine-resolution policy for any bounded decision the system is expected to derive without human intervention.
+
 ## Planning Artifacts Requirement
 
 Before generating scenes, create planning artifacts.
@@ -228,6 +230,7 @@ Before generating scenes, create planning artifacts.
 Write to `schema-generation/work-briefs/`.
 Should summarize the current work instance, major pressures, active routes, and output scope.
 Use the naming and field rules in `engine/docs/content-schema-contract.md`.
+Include the relevant assumption-registry and deferred-decision summary from `engine/data/work-instance.yaml`.
 
 ### Claimant profiles
 

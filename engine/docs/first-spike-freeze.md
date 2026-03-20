@@ -1,4 +1,8 @@
+FILE FOR ARCHIVAL PURPOSES ONLY
+
 # First Spike Freeze
+
+Current operational scope is controlled by `engine/data/work-instance.yaml`.
 
 ## Purpose
 

@@ -33,7 +33,8 @@ Required contents:
 - artifact families
 - allowed endings
 - current execution milestone summary
-- open questions that remain acceptable
+- assumption registry summary relevant to the planned outputs
+- deferred decision status that remains acceptable
 
 Source shape:
 
@@ -268,6 +269,9 @@ status: draft
 Path:
 
 - `schema-generation/decision-graph.json`
+
+This file is a compiled structural artifact derived from accepted planning outputs.
+Do not treat it as hand-authored canon.
 
 Required top-level shape:
 

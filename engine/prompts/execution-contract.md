@@ -7,7 +7,7 @@ The source of truth is:
 - engine/docs/artistic-constitution.md
 - engine/docs/specs.md
 - engine/docs/repo-contract.md
-- engine/docs/human-decision-contract.md if present
+- engine/docs/human-decision-contract.md if present, as escalation-only guidance
 - engine/docs/content-schema-contract.md if present
 - engine/docs/build-contract.md if present
 - engine/docs/validation-runbook.md if present
@@ -49,7 +49,7 @@ The agent may not:
 
 1. Read source-of-truth files
 2. Read and obey `execution_phase.current_phase` in `engine/data/work-instance.yaml`
-3. Apply the current execution milestone and default decisions from work-instance and the human-decision contract unless the human overrides them
+3. Apply the current execution milestone and resolve machine-selectable decisions from `engine/data/work-instance.yaml`; consult the human-decision contract only for true escalation triggers
 4. If phase is `engine_revision`, mutate only `engine/` and stop before downstream output generation
 5. Compile claimant profiles when claimant generation is enabled and the phase gate allows planning compilation
 6. Produce the planning outputs required by the current milestone in `schema-generation/` only when the phase gate allows it

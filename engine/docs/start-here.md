@@ -32,12 +32,11 @@ This repo defines and will eventually render a static, build-time-generated lite
 
 The immediate goal is narrower:
 
-- make the repo blind-executable for the current engine-revision phase
+- make the repo blind-executable for the current work-instance phase and milestone
 - keep canon in repo files
 - treat the invoked directory as the full project boundary
 - do not inspect parent or sibling directories unless the human explicitly authorizes it
-- keep `schema-generation/` and `prose/` untouched during engine revision
-- move into compilation only after the phase gate in `engine/data/work-instance.yaml` changes
+- obey `engine/data/work-instance.yaml` as the single operational scope controller
 - keep the final reader experience static and Astro-based
 
 ## Default First Task
@@ -45,11 +44,11 @@ The immediate goal is narrower:
 If the user says "continue" or gives a broad execution instruction, start here:
 
 1. audit repo truth against the read order above
-2. apply defaults from `engine/docs/human-decision-contract.md`
+2. resolve machine-selectable decisions from `engine/data/work-instance.yaml`
 3. treat the invoked directory as the complete project root and do not inspect parent or sibling directories
 4. check the current phase gate in `engine/data/work-instance.yaml`
 5. if the phase is `engine_revision`, mutate only `engine/` files
-6. do not compile `schema-generation/` or `prose/` outputs until the phase gate changes
+6. use `engine/docs/human-decision-contract.md` only if repo policy explicitly requires human override
 7. validate engine-side contract consistency using `engine/docs/validation-runbook.md`
 8. update build code only after the phase gate allows downstream work
 9. mirror execution state into Linear only after repo artifacts are current
@@ -66,15 +65,18 @@ Stop and ask for human review if:
 
 ## Current Scope Lock
 
-The current operational scope is:
+The live operational scope is controlled by `engine/data/work-instance.yaml`.
 
-- work: `hospice-annex-v01`
-- current phase: `engine_revision`
-- milestone: `planning_parity_01`
-- claimant routes in scope: `custodian_route`, `mourner_route`, `examiner_route`
-- route package shape: three scenes plus one artifact spec per claimant route
-- contamination: canonical but deferred from the current milestone
-- retraction: preserved in canon and state logic, not required as playable output in the current milestone
-- prose/build parity: not yet required
-- writes to `schema-generation/` and `prose/`: forbidden until the phase gate changes
-- parent/sibling directory inspection: forbidden unless the human explicitly authorizes it
+Read these sections there instead of relying on stale summaries:
+
+- `execution_phase`
+- `execution_milestone`
+- `generation_resolution_policy`
+- `decision_status`
+- `assumption_registry`
+
+Project-wide guardrails remain:
+
+- work id is `hospice-annex-v01`
+- current claimant roster is `custodian`, `mourner`, `examiner`
+- parent/sibling directory inspection remains forbidden unless the human explicitly authorizes it

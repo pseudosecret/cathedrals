@@ -41,6 +41,7 @@ Fail if:
 
 Pass if:
 
+- `engine/data/work-instance.yaml` contains machine-resolution policy, decision status, and assumption registry sections sufficient for current scope
 - the claimant-profile artifact exists when claimant generation is enabled
 - the active claimant set passes identity-integrity and expressive-separation checks
 - each compiled claimant profile includes a selected contamination profile and focus-escalation notes
@@ -56,6 +57,7 @@ Pass if:
 
 Fail if:
 
+- machine-resolvable project decisions live only in chat or tracker state instead of `engine/data/work-instance.yaml`
 - claimant profiles violate archetype law or collapse into interchangeable voices
 - claimant balancing silently relaxes hard constraints to get a result
 - planning output goes to the wrong directory

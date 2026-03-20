@@ -12,7 +12,7 @@ Execute phases in this order unless the human explicitly overrides the sequence.
 
 1. Audit
 2. Phase gate check
-3. Human question pass
+3. Machine resolution pass
 4. Planning compilation
 5. Prose generation
 6. Validation
@@ -48,17 +48,20 @@ If `execution_phase.current_phase` is `engine_revision`:
 
 Only proceed into downstream phases after repo truth changes the phase gate explicitly.
 
-## 3. Human Question Pass
+## 3. Machine Resolution Pass
 
 Before asking anything, exhaust repo truth first.
+
+Resolve machine-selectable decisions from `engine/data/work-instance.yaml`.
 
 Ask the human only if:
 
 - a required answer cannot be derived from repo files
 - the answer materially changes planning or generation
-- the default in `engine/docs/human-decision-contract.md` would be too risky for the requested task
+- `engine/docs/human-decision-contract.md` identifies the case as a true escalation trigger
 
-If the human does not answer, use the defaults in that contract and record that choice in the generated artifact or validation report as needed.
+Do not invent new defaults in chat.
+If escalation is necessary, update `engine/data/work-instance.yaml` before downstream work continues.
 
 ## 4. Planning Compilation
 
@@ -159,6 +162,7 @@ Unless the human explicitly changes the milestone in repo truth:
 - treat `engine/data/work-instance.yaml` as the only operational scope controller
 - honor `execution_phase.current_phase` before touching any downstream output directory
 - while phase is `engine_revision`, mutate only `engine/`
+- resolve patient identity, metaphysical visibility, contamination scaling, route-length variation, and retraction scope from work-instance policy rather than operator preference
 - compile balanced claimant profiles before route planning
 - keep route packages at three scenes plus one artifact each for `custodian_route`, `mourner_route`, and `examiner_route`
 - keep contamination deferred as a planning-side dependency only

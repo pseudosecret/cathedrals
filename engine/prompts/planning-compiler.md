@@ -41,7 +41,7 @@ Always read and obey these files first, if present:
 - `engine/docs/artistic-constitution.md`
 - `engine/docs/specs.md`
 - `engine/docs/repo-contract.md`
-- `engine/docs/human-decision-contract.md`
+- `engine/docs/human-decision-contract.md` as escalation-only guidance
 - `engine/docs/content-schema-contract.md`
 - `engine/docs/validation-runbook.md`
 - `engine/canon/ontology.md`
@@ -142,7 +142,8 @@ The work brief file in `schema-generation/work-briefs/` must contain:
 - hidden route summary if enabled
 - target scope
 - current execution milestone summary
-- open questions that remain acceptable at planning stage
+- assumption registry summary relevant to the planned outputs
+- deferred decision status that remains acceptable at planning stage
 
 The work brief should be concise, specific, and operational.
 It should summarize the work being built, not restate the entire constitution.

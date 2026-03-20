@@ -12,7 +12,7 @@ When determining what is true, use this order:
 2. engine/docs/specs.md
 3. engine/docs/repo-contract.md
 4. engine/data/work-instance.yaml
-5. engine/docs/human-decision-contract.md, if present
+5. engine/docs/human-decision-contract.md, if present, as escalation-only guidance
 6. engine/docs/content-schema-contract.md, if present
 7. engine/canon/ontology.md
 8. engine/canon/arc-grammar.md

@@ -8,7 +8,9 @@ work:
   description: >
     A static, build-time-generated literary mystery set in a snowbound hospice annex
     where accusation selects reality, indecision accumulates contamination, and the
-    reader gradually realizes they are judging rather than merely investigating.
+    reader gradually realizes they are judging rather than merely investigating. The
+    story's arcs should be exciting, gripping, and thrilling, regardless of any
+    narrative/stylistic contamination present.
 
 execution_phase:
   current_phase: engine_revision
@@ -28,6 +30,7 @@ execution_phase:
       planning_compilation_allowed: false
       prose_generation_allowed: false
       build_mutation_allowed: false
+      change_phase_allowed: false
       notes:
         - "Use engine-revision passes to change canon, data, prompts, docs, and templates only."
         - "Do not create, update, or regenerate files under schema-generation/ during this phase."
@@ -41,6 +44,7 @@ execution_phase:
       planning_compilation_allowed: true
       prose_generation_allowed: false
       build_mutation_allowed: false
+      change_phase_allowed: true
     prose_generation:
       engine_writes_allowed: true
       schema_generation_writes_allowed: true
@@ -49,6 +53,7 @@ execution_phase:
       planning_compilation_allowed: true
       prose_generation_allowed: true
       build_mutation_allowed: false
+      change_phase_allowed: true
     graph_or_build:
       engine_writes_allowed: true
       schema_generation_writes_allowed: true
@@ -57,6 +62,7 @@ execution_phase:
       planning_compilation_allowed: true
       prose_generation_allowed: true
       build_mutation_allowed: true
+      change_phase_allowed: true
   global_rules:
     - "Current phase gates what directories may be mutated."
     - "Phase changes must happen in repo truth before downstream compilation begins."
@@ -66,11 +72,11 @@ scope:
   target_form: short_playable_work
   target_total_arcs: 3
   target_total_scenes_min: 9
-  target_total_scenes_soft_max: 15
-  target_total_scenes_hard_max: 18
+  target_total_scenes_soft_max: 23
+  target_total_scenes_hard_max: 35
   target_total_artifacts_min: 3
-  target_total_artifacts_soft_max: 6
-  target_total_endings: 4
+  target_total_artifacts_soft_max: 8
+  target_total_endings: 12
   notes:
     - "This is the first instantiation of the engine, not the final large-scale work."
     - "Favor controlled depth over route count."
@@ -279,9 +285,9 @@ threshold_geomancy:
     - "Allow arc termination before a next scene if termination conditions are met."
 
 arc_rules:
-  default_min_scenes_per_arc: 2
-  default_soft_max_scenes_per_arc: 5
-  default_hard_max_scenes_per_arc: 7
+  default_min_scenes_per_arc: 3
+  default_soft_max_scenes_per_arc: 6
+  default_hard_max_scenes_per_arc: 9
   early_termination_enabled: true
   allowed_premature_endings:
     - death
@@ -332,6 +338,161 @@ prose_contamination:
     - "Artifact framing may drift more than the core document body."
     - "Document bodies must remain plausible and readable objects."
     - "Heavy contamination must remain materially grounded and parseable."
+
+generation_resolution_policy:
+  deterministic_resolution:
+    seed_namespace: hospice-annex-v01
+    reproducibility_required: true
+    selection_rule: seeded_bounded_choice
+    notes:
+      - "All machine-resolved selections must be derivable from repo truth plus seed."
+      - "Selections may vary across works, but not across repeated runs of the same work and seed."
+  patient_identity_policy:
+    internal_subject_id: released_resident_01
+    external_identity_mode: role_defined_optional_name
+    naming_strategy:
+      allowed:
+        - unnamed
+        - first_name_only
+        - surname_only
+        - role_reference_only
+      disallowed:
+        - full_biographical_dossier
+        - melodramatic_symbolic_naming
+        - route_specific_identity_replacement
+    default_selection:
+      primary_mode: role_reference_only
+      reveal_thresholds:
+        planning: unnamed
+        prose_generation: unnamed_or_partial
+        endings: partial_allowed
+    invariants:
+      - "The same underlying resident must be referenced across all routes."
+      - "Contradictions may affect framing, chart position, room relation, or naming form, but not replace the underlying subject."
+      - "Identity must remain concrete enough to anchor the impossible release."
+    validation:
+      must:
+        - preserve_single_subject_continuity
+        - avoid_backstory_bloat
+      fail_if:
+        - route_specific_subject_substitution
+        - proper_name_forced_without_structural_need
+  metaphysical_visibility_policy:
+    current_band: residue_forward
+    allowed_bands:
+      - surface_only
+      - residue_forward
+      - drift_explicit
+      - overt_metaphysical
+    band_rules:
+      planning:
+        max_allowed: residue_forward
+      prose_generation_v0_1:
+        max_allowed: residue_forward
+      endings_v0_1:
+        max_allowed: drift_explicit
+    permitted_manifestations:
+      - regime_drift
+      - environmental_contradiction
+      - ontological_residue
+      - judgment_pressure
+      - impossible_administrative_coherence
+    forbidden_manifestations_before_late_scope:
+      - direct_cosmology_exposition
+      - named_metaphysical_systems
+      - explicit_explanation_of_adjudication_mechanics
+    validation:
+      must:
+        - keep_surface_transgression_concrete
+      fail_if:
+        - hidden_layer_explains_itself
+        - metaphysical_content_displaces_dramatic_function
+  contamination_policy:
+    primary_driver: claimant_focus
+    focus_bands:
+      ambient: mostly_neutral
+      passing_focus: very_light_to_light
+      primary_focus: moderate
+      dominant_focus: moderate_to_heavy
+    spotlight_rules:
+      scenes: focus_scaled
+      artifacts:
+        framing: focus_scaled
+        document_body: constrained_focus_scaled
+      endings: deferred_until_explicit_scope
+    trigger_rules:
+      accusation_alone_is_insufficient: true
+      indecision_can_accumulate_contamination: true
+      prolonged_noncommitment_can_unlock_hidden_route: true
+    invariants:
+      - "Contamination intensity is determined by spotlight pressure, not by route label alone."
+      - "Claimant-specific contamination must appear in diction, cadence, and structure."
+      - "Heavy contamination must remain readable and concretely grounded."
+    validation:
+      must:
+        - claimant_specific_surface_behavior
+        - framing_body_separation_for_artifacts_when_needed
+      fail_if:
+        - adjective_swap_only
+        - generic_uncanniness
+        - unreadable_document_body
+  route_architecture_policy:
+    architecture_model: fixed_beat_families_variable_route_length
+    route_level_requirements:
+      required_beat_families:
+        - invitation_or_plausibility
+        - contradiction_or_artifact_pressure
+        - threshold
+      optional_beat_families:
+        - aftershock
+        - residue
+        - premature_lock
+      minimum_scene_jobs_per_scene: 2
+    per_route_scene_budget_policy:
+      default_min: 3
+      default_soft_max: 6
+      default_hard_max: 9
+      claimant_variation_allowed: true
+      variation_rule:
+        - "Shorter routes are lawful if dramatic pressure escalates cleanly and threshold consequence lands."
+        - "Longer routes are lawful if each additional scene performs distinct structural work."
+    route_shape_constraints:
+      - "All claimant routes must satisfy the authored architecture, not just mood progression."
+      - "Variation may alter pacing, amplitude, and scene count, but not remove threshold consequence."
+      - "No route may become structurally inert or baggy."
+    validation:
+      must:
+        - preserve_authored_architecture
+        - justify_scene_count_variation
+      fail_if:
+        - claimant_route_is_only_cosmetically_distinct
+        - additional_scenes_do_not_add_new_structural_work
+  retraction_policy:
+    v0_1_mode: stateful_non_route_action
+    current_playability:
+      planning: yes_as_state_logic
+      prose_generation_v0_1: optional_local_choice_only
+      route_family: false
+      ending_family: false
+    state_effects:
+      - clear_accused_claimant
+      - increase_retraction_count
+      - increase_contamination
+      - add_world_scar
+    dramatic_requirements:
+      - "Retraction must reopen ambiguity."
+      - "Retraction must leave damage."
+      - "Retraction must reduce trust in neutrality."
+    usage_constraints:
+      - "Retraction may appear as a local decision or aftermath behavior."
+      - "Retraction must not dominate v0.1 route identity."
+      - "Retraction must not become a separate claimant alternative in parity planning."
+    validation:
+      must:
+        - leave_residue
+      fail_if:
+        - acts_as_cost_free_reset
+        - becomes_primary_route_content_without_scope_change
 
 build_target:
   framework: astro
@@ -460,6 +621,7 @@ execution_milestone:
     - "Compile claimant profiles before route planning."
     - "Keep route ids stable and claimant-specific."
     - "Preserve a three-scene plus one-artifact package for each claimant route."
+    - "This milestone temporarily normalizes route length for parity comparison and does not override the broader route architecture policy."
     - "Defer contamination-route execution unless a planning dependency makes it unavoidable."
     - "Do not require prose or Astro build parity for this milestone."
     - "Fail validation instead of relaxing route differentiation to force parity."
@@ -476,12 +638,52 @@ execution_milestone:
     - "The current milestone proves planning-system breadth, not reader build completeness."
     - "Milestone scope does not override the current execution phase write gate."
 
-open_questions:
-  - "What exact patient identity or absence most sharply drives the impossible release?"
-  - "How visibly should the deeper metaphysical layer surface in v0.1?"
-  - "How harsh should contamination feel once the hidden route becomes executable?"
-  - "Should retraction stay planning-only until post-parity prose work begins?"
-  - "Whether later prose generation should keep the shared three-beat route scaffold or vary scene count by claimant."
+decision_status:
+  resolved_by_policy:
+    - patient_identity
+    - metaphysical_visibility
+    - contamination_scaling
+    - route_length_variation
+    - retraction_scope
+  deferred_until_scope_expansion:
+    - contamination_ending_surface_rules
+    - ending_level_contamination_behavior
+    - post_v0_1_retraction_expansion
+  requires_human_override_only_if:
+    - claimant_roster_changes
+    - ontology_changes
+    - central_transgression_class_changes
+    - milestone_scope_changes
+    - explicit_naming_specificity_request
+    - validation_failure_shows_policy_envelope_is_insufficient
+
+assumption_registry:
+  source_priority:
+    - authorial_directive
+    - canonical_engine_rule
+    - work_instance_policy
+    - compiled_artifact_selection
+  active_assumptions:
+    - id: patient_identity_concreteness
+      status: resolved
+      source: generation_resolution_policy.patient_identity_policy
+      summary: "Use one stable released resident identity; keep external naming minimal in v0.1."
+    - id: metaphysical_visibility_v0_1
+      status: resolved
+      source: generation_resolution_policy.metaphysical_visibility_policy
+      summary: "Keep metaphysics legible through residue and drift, not exposition."
+    - id: contamination_scaling
+      status: resolved
+      source: generation_resolution_policy.contamination_policy
+      summary: "Spotlight on claimant determines contamination intensity."
+    - id: route_length_variation
+      status: resolved
+      source: generation_resolution_policy.route_architecture_policy
+      summary: "Routes may vary in length and pacing within bounded architecture."
+    - id: retraction_v0_1_scope
+      status: resolved
+      source: generation_resolution_policy.retraction_policy
+      summary: "Retraction exists as damaging state logic, not a standalone route family or ending family in v0.1."
 
 authorial_intent:
   summary: >

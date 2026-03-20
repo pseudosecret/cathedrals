@@ -25,6 +25,7 @@ The build layer reads from:
 - `schema-generation/decision-graph.json`
 
 The build layer does not invent route structure.
+`schema-generation/decision-graph.json` is a compiled structural artifact derived from accepted planning outputs, not hand-authored canon.
 The build layer also does not expose route-structure language to the normal reader unless an explicit debug view is enabled.
 
 ## Route Structure
