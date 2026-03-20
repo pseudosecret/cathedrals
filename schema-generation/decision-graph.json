@@ -1,0 +1,94 @@
+{
+  "version": "0.1",
+  "work_id": "hospice-annex-v01",
+  "generated_from": {
+    "work_brief": "schema-generation/work-briefs/hospice-annex-v01-work-brief.md",
+    "arc_briefs": [
+      "schema-generation/arc-briefs/custodian-arc-01.md"
+    ],
+    "scene_specs": [
+      "schema-generation/scene-specs/custodian-scene-01.md",
+      "schema-generation/scene-specs/custodian-scene-02.md",
+      "schema-generation/scene-specs/custodian-scene-03.md"
+    ],
+    "artifact_specs": [
+      "schema-generation/artifact-specs/intake-discrepancy-01.md"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "custodian_scene_01",
+      "type": "scene",
+      "title": "Numbered Doors",
+      "route_context": "custodian_route",
+      "output_path": "prose/scenes/custodian-scene-01.mdx",
+      "status": "draft"
+    },
+    {
+      "id": "custodian_scene_02",
+      "type": "scene",
+      "title": "Intake Lines",
+      "route_context": "custodian_route",
+      "output_path": "prose/scenes/custodian-scene-02.mdx",
+      "status": "draft"
+    },
+    {
+      "id": "custodian_scene_03",
+      "type": "scene",
+      "title": "Release Window",
+      "route_context": "custodian_route",
+      "output_path": "prose/scenes/custodian-scene-03.mdx",
+      "status": "draft"
+    },
+    {
+      "id": "accusation_custodian_01",
+      "type": "ending",
+      "title": "Procedural Dominance",
+      "route_context": "custodian_route",
+      "output_path": "prose/endings/custodian-ending-01.mdx",
+      "status": "draft"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_custodian_scene_01_to_scene_02",
+      "from": "custodian_scene_01",
+      "to": "custodian_scene_02",
+      "label": "Inspect the intake record behind the room assignment",
+      "kind": "progression",
+      "availability": "playable"
+    },
+    {
+      "id": "edge_custodian_scene_02_to_scene_03",
+      "from": "custodian_scene_02",
+      "to": "custodian_scene_03",
+      "label": "Follow the discharge chain to the release window",
+      "kind": "progression",
+      "availability": "playable"
+    },
+    {
+      "id": "edge_custodian_scene_03_to_accusation_custodian_01",
+      "from": "custodian_scene_03",
+      "to": "accusation_custodian_01",
+      "label": "Sign the custodian into blame",
+      "kind": "ending",
+      "availability": "playable",
+      "sibling_group": "custodian_scene_03_final_decision"
+    },
+    {
+      "id": "edge_custodian_scene_03_withhold_judgment_reserved",
+      "from": "custodian_scene_03",
+      "to": "accusation_custodian_01",
+      "label": "Leave the witness line blank",
+      "kind": "decision",
+      "availability": "reserved",
+      "sibling_group": "custodian_scene_03_final_decision",
+      "render_destination_title": false,
+      "notes": "Reserved sibling anchored to the existing ending node for non-dangling graph structure; build should render its label as a foreclosed alternative, not a playable destination."
+    }
+  ],
+  "path_trace_defaults": {
+    "mode": "normal",
+    "debug_mode_available": true
+  }
+}

@@ -1,0 +1,337 @@
+version: 0.2
+
+claimant_generation_model:
+  mode: instantiation_only
+  semantic_drift: expression_only
+  balancing_mode: hybrid
+  notes:
+    - "Canonical claimant archetypes remain fixed repo truth."
+    - "Generation may vary expression, not core claimant identity."
+    - "Use hard authored bands first, then score valid candidate sets for expressive separation."
+  hard_identity_axes:
+    - genre_ontology
+    - role_pressure
+    - primary_truth_style_family
+    - primary_evidence_family
+    - voice_family
+    - route_identity
+  scoring_axes:
+    - secondary_evidence_affinities
+    - speech_texture_variants
+    - contradiction_motifs
+    - environmental_drift_variants
+    - local_framing_tendencies
+    - artifact_pressure_profile
+    - scene_surface_mutation_details
+  global_failure_conditions:
+    - "No active claimant pair may collapse into the same ontology class."
+    - "No active claimant pair may share the same primary evidence family."
+    - "No active claimant pair may share the same voice family."
+    - "Reject claimant sets that score apart numerically but still read as interchangeable in validation."
+
+prose_contamination_model:
+  primary_driver: claimant_focus
+  surface_axes:
+    - diction
+    - cadence
+    - structure
+  focus_ladder:
+    ambient:
+      intensity: mostly_neutral
+      notes:
+        - "No claimant is actively spotlighted."
+        - "Keep sentence behavior close to baseline prose."
+    passing_focus:
+      intensity: very_light_to_light
+      notes:
+        - "A claimant is brushed against or present in passing."
+        - "Allow lexical and rhythmic contamination without strong structural takeover."
+    primary_focus:
+      intensity: moderate
+      notes:
+        - "A claimant is the main interpretive pressure in the scene or artifact."
+        - "Require claimant-specific diction, cadence, and paragraph behavior."
+    dominant_focus:
+      intensity: moderate_to_heavy
+      notes:
+        - "A claimant is under strong intentional pressure, such as threshold dominance or accusation pressure."
+        - "Intensify syntax and structural recurrence without collapsing readability."
+  scope_defaults:
+    scenes: required
+    artifacts: required
+    endings: deferred
+  global_rules:
+    - "Focus, not accusation alone, drives contamination intensity."
+    - "Contamination must be claimant-specific and legible at the sentence and paragraph level."
+    - "Scenes may not satisfy contamination only through adjective swaps or surface mood."
+    - "Artifacts may drift more in framing than in the document body."
+    - "Document bodies must remain plausible objects even when materially distorted."
+    - "Heavy contamination must remain readable and concretely grounded."
+
+claimants:
+  - id: custodian
+    label: The Custodian
+    archetype_law:
+      route_identity: custodian_route
+      role_pressure: procedural coherence
+      genre_ontology: bureaucratic dread
+      primary_truth_style_family: procedural_record_truth
+      primary_evidence_family: institutional_records
+      voice_family: procedural_restraint
+      accusation_consequence_direction:
+        - reality becomes document-heavy and procedural
+      retraction_consequence_direction:
+        - records begin contradicting themselves
+      forbidden_traits:
+        - melodramatic confession
+        - explicit mysticism
+      immutable_core_notes:
+        - "The custodian remains a pressure toward institutional order and custodial access."
+        - "Expression may drift, but the claimant must still read as procedural rather than intimate or diagnostic."
+    instantiation_envelope:
+      secondary_evidence_affinities:
+        - intake forms
+        - maintenance records
+        - room assignments
+        - release ledgers
+        - key-control logs
+        - corridor update notices
+      speech_texture_variants:
+        - exacting
+        - restrained
+        - institutional
+        - plainspoken
+        - clipped
+      contradiction_motifs:
+        - overwritten room designations
+        - duplicate initials
+        - chain-of-custody breaks
+        - records corrected after the fact
+      environmental_drift_variants:
+        - labels proliferate
+        - doors gain numbers
+        - language becomes administrative
+        - domestic traces are subordinated to processing categories
+      local_framing_tendencies:
+        - ordinary procedure treated as sufficient explanation
+        - errors presented as late paperwork rather than mystery
+        - authority expressed through access and repetition
+      artifact_pressure_profile:
+        - contradiction sharpened by forms, signatures, and room logic
+      scene_surface_mutation_details:
+        - plaques replaced in place
+        - drawers categorized more aggressively
+        - corridor naming tightened into unit numbering
+    prose_contamination_profile:
+      diction_markers:
+        - concrete nouns are replaced by institutional labels when pressure rises
+        - repeated room numbers, form headers, and status words accumulate
+        - corrective phrasing appears as if the prose is revising itself into compliance
+      cadence_markers:
+        - clipped declaratives interrupt longer observations
+        - list pressure appears in short administrative bursts
+        - sentences narrow toward procedural conclusions
+      structure_markers:
+        - paragraphs sometimes behave like field clusters or inventory turns
+        - recurring administrative openings return with slight correction
+        - descriptive movement tightens into filing-order logic
+      artifact_contamination_markers:
+        - corrections remain visibly legible instead of being cleanly overwritten
+        - labels repeat across framing and body copy
+        - omissions read like missing paperwork rather than lyrical silence
+      focus_escalation_curve:
+        ambient: "Keep prose mostly neutral, with only faint administrative vocabulary pressure."
+        passing_focus: "Introduce mild institutional substitutions and one clipped cadence cluster."
+        primary_focus: "Require procedural substitutions, list pressure, and field-like paragraph behavior."
+        dominant_focus: "Push repetition, correction, and administrative segmentation toward near-overwrite while preserving legibility."
+    hard_no_cross_constraints:
+      disallowed_ontologies:
+        - gothic grief
+        - clinical unreality
+      disallowed_truth_style_families:
+        - mnemonic_truth
+        - diagnostic_truth
+      disallowed_voice_families:
+        - elegiac_recursion
+        - analytic_withholding
+      disallowed_primary_evidence_family_collisions:
+        - intimate_relics
+        - clinical_observation
+
+  - id: mourner
+    label: The Mourner
+    archetype_law:
+      route_identity: mourner_route
+      role_pressure: emotional and mnemonic coherence
+      genre_ontology: gothic grief
+      primary_truth_style_family: mnemonic_truth
+      primary_evidence_family: intimate_relics
+      voice_family: elegiac_recursion
+      accusation_consequence_direction:
+        - reality becomes haunted by relational meaning
+      retraction_consequence_direction:
+        - memories lose sequence but gain emotional charge
+      forbidden_traits:
+        - sterile procedural speech
+        - techno-babble
+      immutable_core_notes:
+        - "The mourner remains a pressure toward memory, devotion, and unfinished attachment."
+        - "Expression may drift, but the claimant must still read as intimate rather than procedural or diagnostic."
+    instantiation_envelope:
+      secondary_evidence_affinities:
+        - letters
+        - keepsakes
+        - ritualized personal objects
+        - visitation notes
+        - name cards
+        - folded photographs
+      speech_texture_variants:
+        - intimate
+        - recursive
+        - elegiac
+        - apologetic
+        - devotional
+      contradiction_motifs:
+        - names returning in incompatible forms
+        - personal objects placed where they should not be
+        - memory sequence breaking under emotional certainty
+        - testimony that preserves feeling while losing chronology
+      environmental_drift_variants:
+        - rooms feel inhabited by residue
+        - names return in fragments
+        - objects seem cherished or arranged
+        - domestic traces regain emotional priority over institution
+      local_framing_tendencies:
+        - significance expressed through attachment rather than proof
+        - contradiction felt as grief pressure before logic pressure
+        - ordinary objects treated as witnesses
+      artifact_pressure_profile:
+        - contradiction sharpened by sentimental residue and mnemonic mismatch
+      scene_surface_mutation_details:
+        - names recur in handwriting
+        - personal arrangements persist after removal
+        - memorial traces outrank official signage
+    prose_contamination_profile:
+      diction_markers:
+        - names, relations, and forms of address recur more than neutral reference would allow
+        - devotional or apologetic phrasing shades concrete observation
+        - memory words return as if the prose cannot release them
+      cadence_markers:
+        - sentences loop back on themselves with soft variation
+        - clause returns create elegiac recurrence rather than administrative narrowing
+        - rhythm lengthens around remembered details before breaking
+      structure_markers:
+        - paragraph openings echo prior phrasing or images
+        - description accretes through return rather than inventory
+        - small refrains reappear with emotional drift
+      artifact_contamination_markers:
+        - marginal or repeated names pressure the artifact surface
+        - arrangement and emphasis imply cherishing or ritual handling
+        - omissions feel like grief avoidance rather than clerical loss
+      focus_escalation_curve:
+        ambient: "Keep prose mostly stable, with only a faint pull toward relational naming."
+        passing_focus: "Allow a light recurrence of names, address, or remembered phrasing."
+        primary_focus: "Require recursive cadence, relational diction, and echoed paragraph movement."
+        dominant_focus: "Push refrain, return, and emotional recursion toward heavy pressure without dissolving the scene into lyric haze."
+    hard_no_cross_constraints:
+      disallowed_ontologies:
+        - bureaucratic dread
+        - clinical unreality
+      disallowed_truth_style_families:
+        - procedural_record_truth
+        - diagnostic_truth
+      disallowed_voice_families:
+        - procedural_restraint
+        - analytic_withholding
+      disallowed_primary_evidence_family_collisions:
+        - institutional_records
+        - clinical_observation
+
+  - id: examiner
+    label: The Examiner
+    archetype_law:
+      route_identity: examiner_route
+      role_pressure: diagnostic coherence
+      genre_ontology: clinical unreality
+      primary_truth_style_family: diagnostic_truth
+      primary_evidence_family: clinical_observation
+      voice_family: analytic_withholding
+      accusation_consequence_direction:
+        - reality becomes diagnostic and conditional
+      retraction_consequence_direction:
+        - the criteria for sanity or validity begin shifting
+      forbidden_traits:
+        - romantic rhetoric
+        - folklore explanation
+      immutable_core_notes:
+        - "The examiner remains a pressure toward symptoms, thresholds, and classificatory order."
+        - "Expression may drift, but the claimant must still read as analytic rather than intimate or custodial."
+    instantiation_envelope:
+      secondary_evidence_affinities:
+        - charts
+        - evaluations
+        - dosage notes
+        - threshold reports
+        - observational checklists
+        - triage annotations
+      speech_texture_variants:
+        - analytic
+        - cool
+        - withholding
+        - classificatory
+        - precise
+      contradiction_motifs:
+        - criteria changing mid-record
+        - observations turning into diagnoses
+        - charts that classify what they cannot stabilize
+        - treatment logic outrunning witnessed events
+      environmental_drift_variants:
+        - spaces become triage-like
+        - bodies feel observed
+        - language turns classificatory
+        - care spaces become threshold spaces
+      local_framing_tendencies:
+        - uncertainty treated as a diagnostic condition
+        - contradiction framed as evidence of unstable criteria
+        - authority expressed through observation and categorization
+      artifact_pressure_profile:
+        - contradiction sharpened by thresholds, classifications, and symptom logic
+      scene_surface_mutation_details:
+        - signage adopts evaluation language
+        - body-related details become chart-like
+        - rooms read as conditional holding spaces
+    prose_contamination_profile:
+      diction_markers:
+        - classificatory nouns and threshold terms displace ordinary description
+        - observational qualifiers narrow what can be claimed confidently
+        - criteria vocabulary appears where neutral narration would otherwise suffice
+      cadence_markers:
+        - sentences break into diagnostic segments
+        - abrupt category pivots interrupt continuity
+        - withholding precision creates cool stop-start motion
+      structure_markers:
+        - paragraphs behave like conditional assessments or reclassifications
+        - observations are restated under stricter criteria
+        - prose flow approaches chart logic without becoming literal chart transcription
+      artifact_contamination_markers:
+        - fields imply categorization pressure even when they remain plausible
+        - revisions read like changing criteria rather than correction alone
+        - absences feel like excluded data points rather than missing memories
+      focus_escalation_curve:
+        ambient: "Keep prose mostly neutral, with only faint classificatory language pressure."
+        passing_focus: "Allow light qualifier creep and one diagnostic segmentation turn."
+        primary_focus: "Require threshold language, diagnostic cadence, and paragraph-level reclassification."
+        dominant_focus: "Push conditional logic and analytic segmentation toward near-chart pressure while preserving readability."
+    hard_no_cross_constraints:
+      disallowed_ontologies:
+        - bureaucratic dread
+        - gothic grief
+      disallowed_truth_style_families:
+        - procedural_record_truth
+        - mnemonic_truth
+      disallowed_voice_families:
+        - procedural_restraint
+        - elegiac_recursion
+      disallowed_primary_evidence_family_collisions:
+        - institutional_records
+        - intimate_relics

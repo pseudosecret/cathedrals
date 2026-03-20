@@ -1,0 +1,1429 @@
+version: 0.1
+dot_values:
+  1:
+    label: manifest
+    meaning: expressed, active, overt
+  2:
+    label: liminal
+    meaning: unstable, tense, transitional
+  3:
+    label: latent
+    meaning: withheld, concealed, recessive
+rows:
+  - fire row—awareness and intentionality
+  - air row—reasoning and classification
+  - water row—emotion and raw experience
+  - earth row—action and physicality
+figures:
+  - id: 1-1-1-1
+    name: The Pilgrim
+    summary: movement, flow, momentum, journey, full emergence
+    archetype: The Pilgrim, one who advances because the road itself is the answer
+    object_action: a winding road, setting out at dawn
+    scene_motion: Begins in movement, passes through flow, momentum, journey, and tends toward full emergence.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward movement
+      - colors transitions with full emergence
+      - introduces imagery like a winding road, setting out at dawn
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 1-1-1-2
+    name: The Improviser
+    summary: breakthrough, improvisation, live adjustment, momentum seeking form
+    archetype: The Improviser, one who builds the bridge while crossing it
+    object_action: wet clay, reshaping by hand
+    scene_motion: Begins in breakthrough, passes through improvisation, live adjustment, and tends toward momentum seeking form.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward breakthrough
+      - colors transitions with momentum seeking form
+      - introduces imagery like wet clay, reshaping by hand
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 1-1-1-3
+    name: The Closer
+    summary: endings, conclusions, severance, release, exit
+    archetype: The Closer, one who knows when the door must shut
+    object_action: a closing gate, cutting the cord
+    scene_motion: Begins in endings, passes through conclusions, severance, release, and tends toward exit.
+    pressure_type: closure / diminishment
+    likely_effects:
+      - steers the scene toward endings
+      - colors transitions with exit
+      - introduces imagery like a closing gate, cutting the cord
+    termination_bias:
+      death: 2
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 1-1-2-1
+    name: The Striver
+    summary: decisive action, mixed feeling, embodied tension, conflicted momentum
+    archetype: The Striver, one who acts despite inner conflict
+    object_action: clenched fists, pressing ahead under strain
+    scene_motion: Begins in decisive action, passes through mixed feeling, embodied tension, and tends toward conflicted momentum.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward decisive action
+      - colors transitions with conflicted momentum
+      - introduces imagery like clenched fists, pressing ahead under strain
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 1
+      confession: 0
+  - id: 1-1-2-2
+    name: The Mediator-in-Motion
+    summary: negotiated momentum, ambivalent push, adaptive embodiment, unstable balance
+    archetype: The Mediator-in-Motion, one who keeps things moving without forcing resolution
+    object_action: a balancing pole, adjusting mid-stride
+    scene_motion: Begins in negotiated momentum, passes through ambivalent push, adaptive embodiment, and tends toward unstable balance.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward negotiated momentum
+      - colors transitions with unstable balance
+      - introduces imagery like a balancing pole, adjusting mid-stride
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 1-1-2-3
+    name: The Restless Messenger
+    summary: mixed signals, assertive drift, unresolved push, ungrounded tension
+    archetype: The Restless Messenger, one who presses on without knowing where to land
+    object_action: scattered papers, pacing the room
+    scene_motion: Begins in mixed signals, passes through assertive drift, unresolved push, and tends toward ungrounded tension.
+    pressure_type: mixed signals pressure
+    likely_effects:
+      - steers the scene toward mixed signals
+      - colors transitions with ungrounded tension
+      - introduces imagery like scattered papers, pacing the room
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 1-1-3-1
+    name: The Young Warrior
+    summary: aggression, assertion, daring, conflict, raw initiative
+    archetype: The Young Warrior, one who strikes first and sorts it out later
+    object_action: a spear, charging
+    scene_motion: Begins in aggression, passes through assertion, daring, conflict, and tends toward raw initiative.
+    pressure_type: force / confrontation
+    likely_effects:
+      - steers the scene toward aggression
+      - colors transitions with raw initiative
+      - introduces imagery like a spear, charging
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 1
+      confession: 0
+  - id: 1-1-3-2
+    name: The Tethered Fighter
+    summary: pressure, restraint, controlled aggression, unstable initiative
+    archetype: The Tethered Fighter, one held back but ready to strike
+    object_action: a drawn bow, holding tension
+    scene_motion: Begins in pressure, passes through restraint, controlled aggression, and tends toward unstable initiative.
+    pressure_type: force / confrontation
+    likely_effects:
+      - steers the scene toward pressure
+      - colors transitions with unstable initiative
+      - introduces imagery like a drawn bow, holding tension
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 1
+      confession: 0
+  - id: 1-1-3-3
+    name: The Crowned Favorite
+    summary: swift outside-sourced fortune, brief success, unstable advantage, borrowed momentum
+    archetype: The Crowned Favorite, one lifted up by luck, patronage, or timing
+    object_action: a laurel wreath, receiving applause
+    scene_motion: Begins in swift outside-sourced fortune, passes through brief success, unstable advantage, and tends toward borrowed momentum.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward swift outside-sourced fortune
+      - colors transitions with borrowed momentum
+      - introduces imagery like a laurel wreath, receiving applause
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 1-2-1-1
+    name: The Confessor
+    summary: passionate disclosure, unstable thinking, vivid enactment, emotionally led action
+    archetype: The Confessor, one whose feelings outrun their plans
+    object_action: an open letter, blurting the truth
+    scene_motion: Begins in passionate disclosure, passes through unstable thinking, vivid enactment, and tends toward emotionally led action.
+    pressure_type: disclosure / feeling
+    likely_effects:
+      - steers the scene toward passionate disclosure
+      - colors transitions with emotionally led action
+      - introduces imagery like an open letter, blurting the truth
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 1
+  - id: 1-2-1-2
+    name: The Earnest Improviser
+    summary: emotional candor, improvisation, uncertain strategy, provisional outcome
+    archetype: The Earnest Improviser, one making truth up in real time
+    object_action: a cracked script, speaking off-book
+    scene_motion: Begins in emotional candor, passes through improvisation, uncertain strategy, and tends toward provisional outcome.
+    pressure_type: disclosure / feeling
+    likely_effects:
+      - steers the scene toward emotional candor
+      - colors transitions with provisional outcome
+      - introduces imagery like a cracked script, speaking off-book
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 1
+  - id: 1-2-1-3
+    name: The Flooded Poet
+    summary: outpouring, doubt, momentum without anchor, expressive instability
+    archetype: The Flooded Poet, one pouring out what cannot yet be shaped
+    object_action: spilled ink, weeping into the page
+    scene_motion: Begins in outpouring, passes through doubt, momentum without anchor, and tends toward expressive instability.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward outpouring
+      - colors transitions with expressive instability
+      - introduces imagery like spilled ink, weeping into the page
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 1
+  - id: 1-2-2-1
+    name: The Go-Between
+    summary: negotiation embodied, liminal heat, relational testing, adaptive advance
+    archetype: The Go-Between, one who lives inside tense exchange
+    object_action: clasped hands, brokering the deal
+    scene_motion: Begins in negotiation embodied, passes through liminal heat, relational testing, and tends toward adaptive advance.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward negotiation embodied
+      - colors transitions with adaptive advance
+      - introduces imagery like clasped hands, brokering the deal
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 1-2-2-2
+    name: The Threshold Keeper
+    summary: liminality, suspension, crossroads, negotiation, unstable balance
+    archetype: The Threshold Keeper, one who dwells where no side has won
+    object_action: a crossroads, waiting before choosing
+    scene_motion: Begins in liminality, passes through suspension, crossroads, negotiation, and tends toward unstable balance.
+    pressure_type: threshold / suspension
+    likely_effects:
+      - steers the scene toward liminality
+      - colors transitions with unstable balance
+      - introduces imagery like a crossroads, waiting before choosing
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 1-2-2-3
+    name: The Hesitant Catalyst
+    summary: stalled emergence, unresolved tension, threshold conflict, no firm ground
+    archetype: The Hesitant Catalyst, one full of charge but lacking a landing
+    object_action: a struck match in rain, pacing at the doorway
+    scene_motion: Begins in stalled emergence, passes through unresolved tension, threshold conflict, and tends toward no firm ground.
+    pressure_type: threshold / suspension
+    likely_effects:
+      - steers the scene toward stalled emergence
+      - colors transitions with no firm ground
+      - introduces imagery like a struck match in rain, pacing at the doorway
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 1
+      confession: 0
+  - id: 1-2-3-1
+    name: The Operative
+    summary: masked motive, uncertain strategy, concrete action, cool control
+    archetype: The Operative, one who moves in the world without revealing the heart
+    object_action: a sealed file, making the move quietly
+    scene_motion: Begins in masked motive, passes through uncertain strategy, concrete action, and tends toward cool control.
+    pressure_type: concealment / reserve
+    likely_effects:
+      - steers the scene toward masked motive
+      - colors transitions with cool control
+      - introduces imagery like a sealed file, making the move quietly
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 1-2-3-2
+    name: The Chess Player
+    summary: guarded advance, partial disclosure, provisional control, calculated hesitation
+    archetype: The Chess Player, one who commits only in pieces
+    object_action: a rook, testing the line
+    scene_motion: Begins in guarded advance, passes through partial disclosure, provisional control, and tends toward calculated hesitation.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward guarded advance
+      - colors transitions with calculated hesitation
+      - introduces imagery like a rook, testing the line
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 1
+  - id: 1-2-3-3
+    name: The Silent Aspirant
+    summary: cold ambition, muted affect, uncertain direction, unstable reserve
+    archetype: The Silent Aspirant, one wanting ascent without revealing hunger
+    object_action: a sealed dossier, watching from the edge
+    scene_motion: Begins in cold ambition, passes through muted affect, uncertain direction, and tends toward unstable reserve.
+    pressure_type: concealment / reserve
+    likely_effects:
+      - steers the scene toward cold ambition
+      - colors transitions with unstable reserve
+      - introduces imagery like a sealed dossier, watching from the edge
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 1-3-1-1
+    name: The Beloved
+    summary: beauty, attraction, receptivity, harmony, embodied charm
+    archetype: The Beloved, one who draws by grace rather than force
+    object_action: a mirror, receiving admiration
+    scene_motion: Begins in beauty, passes through attraction, receptivity, harmony, and tends toward embodied charm.
+    pressure_type: attraction / surrender
+    likely_effects:
+      - steers the scene toward beauty
+      - colors transitions with embodied charm
+      - introduces imagery like a mirror, receiving admiration
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 1-3-1-2
+    name: The Enchanting Unknown
+    summary: allure in transition, emotional openness, hidden thought, unstable beauty
+    archetype: The Enchanting Unknown, one whose softness conceals unreadable intent
+    object_action: a veil in motion, turning slightly away
+    scene_motion: Begins in allure in transition, passes through emotional openness, hidden thought, and tends toward unstable beauty.
+    pressure_type: attraction / surrender
+    likely_effects:
+      - steers the scene toward allure in transition
+      - colors transitions with unstable beauty
+      - introduces imagery like a veil in motion, turning slightly away
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 1-3-1-3
+    name: The Giver
+    summary: loss, expenditure, release, desire, surrender
+    archetype: The Giver, one who lets go because wanting and losing are linked
+    object_action: coins from an open hand, offering them away
+    scene_motion: Begins in loss, passes through expenditure, release, desire, and tends toward surrender.
+    pressure_type: closure / diminishment
+    likely_effects:
+      - steers the scene toward loss
+      - colors transitions with surrender
+      - introduces imagery like coins from an open hand, offering them away
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 1
+  - id: 1-3-2-1
+    name: The Reserved Lover
+    summary: inner ambiguity, quiet passion, hard-to-read warmth, embodied privacy
+    archetype: The Reserved Lover, one deeply moved but difficult to read
+    object_action: a sealed perfume vial, lingering scent
+    scene_motion: Begins in inner ambiguity, passes through quiet passion, hard-to-read warmth, and tends toward embodied privacy.
+    pressure_type: inner ambiguity pressure
+    likely_effects:
+      - steers the scene toward inner ambiguity
+      - colors transitions with embodied privacy
+      - introduces imagery like a sealed perfume vial, lingering scent
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 1-3-2-2
+    name: The Veiled Courtier
+    summary: concealed feelings, adaptive reserve, private complexity, unstable poise
+    archetype: The Veiled Courtier, one managing appearances while much remains unsaid
+    object_action: a fan, covering the mouth
+    scene_motion: Begins in concealed feelings, passes through adaptive reserve, private complexity, and tends toward unstable poise.
+    pressure_type: concealment / reserve
+    likely_effects:
+      - steers the scene toward concealed feelings
+      - colors transitions with unstable poise
+      - introduces imagery like a fan, covering the mouth
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 1-3-2-3
+    name: The Smoldering Veil
+    summary: veiled volatility, obscured feeling, hidden push, ungrounded privacy
+    archetype: The Smoldering Veil, one whose calm conceals a fault line
+    object_action: incense smoke, curling behind a screen
+    scene_motion: Begins in veiled volatility, passes through obscured feeling, hidden push, and tends toward ungrounded privacy.
+    pressure_type: concealment / reserve
+    likely_effects:
+      - steers the scene toward veiled volatility
+      - colors transitions with ungrounded privacy
+      - introduces imagery like incense smoke, curling behind a screen
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 1
+      confession: 0
+  - id: 1-3-3-1
+    name: The Prisoner
+    summary: delays, setbacks, limitations, prisons, confinement
+    archetype: The Prisoner, one constrained by walls, duty, or consequence
+    object_action: bars and keys, waiting in confinement
+    scene_motion: Begins in delays, passes through setbacks, limitations, prisons, and tends toward confinement.
+    pressure_type: closure / diminishment
+    likely_effects:
+      - steers the scene toward delays
+      - colors transitions with confinement
+      - introduces imagery like bars and keys, waiting in confinement
+    termination_bias:
+      death: 2
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 1-3-3-2
+    name: The Blocked Traveler
+    summary: bottleneck, constrained motion, delay, partial blockage, tension in reserve
+    archetype: The Blocked Traveler, one ready to move but held in queue
+    object_action: a locked gate, stalled at the checkpoint
+    scene_motion: Begins in bottleneck, passes through constrained motion, delay, partial blockage, and tends toward tension in reserve.
+    pressure_type: concealment / reserve
+    likely_effects:
+      - steers the scene toward bottleneck
+      - colors transitions with tension in reserve
+      - introduces imagery like a locked gate, stalled at the checkpoint
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 1-3-3-3
+    name: The Dancer
+    summary: joy, uplift, ascent, praise, celebration
+    archetype: The Dancer, one rises through delight and release
+    object_action: a garland, raising the arms skyward
+    scene_motion: Begins in joy, passes through uplift, ascent, praise, and tends toward celebration.
+    pressure_type: release / collectivity
+    likely_effects:
+      - steers the scene toward joy
+      - colors transitions with celebration
+      - introduces imagery like a garland, raising the arms skyward
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 2-1-1-1
+    name: The Herald-at-the-Gate
+    summary: poised emergence, articulate feeling, near-materialization, threshold arrival
+    archetype: The Herald-at-the-Gate, one about to step fully into visibility
+    object_action: a trumpet, announcing arrival
+    scene_motion: Begins in poised emergence, passes through articulate feeling, near-materialization, and tends toward threshold arrival.
+    pressure_type: threshold / suspension
+    likely_effects:
+      - steers the scene toward poised emergence
+      - colors transitions with threshold arrival
+      - introduces imagery like a trumpet, announcing arrival
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-1-1-2
+    name: The Balancer
+    summary: suspension, live process, open negotiation, becoming
+    archetype: The Balancer, one keeping many forces in motion at once
+    object_action: spinning plates, keeping them aloft
+    scene_motion: Begins in suspension, passes through live process, open negotiation, and tends toward becoming.
+    pressure_type: threshold / suspension
+    likely_effects:
+      - steers the scene toward suspension
+      - colors transitions with becoming
+      - introduces imagery like spinning plates, keeping them aloft
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-1-1-3
+    name: The Scout
+    summary: testing the waters, soft launch, partial emergence, no foothold
+    archetype: The Scout, one sent ahead before the camp is built
+    object_action: a probing staff, dipping a toe in
+    scene_motion: Begins in testing the waters, passes through soft launch, partial emergence, and tends toward no foothold.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward testing the waters
+      - colors transitions with no foothold
+      - introduces imagery like a probing staff, dipping a toe in
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-1-2-1
+    name: The Field Surgeon
+    summary: cautious action, mixed feeling, clear plan, embodied testing
+    archetype: The Field Surgeon, one precise amid uncertainty
+    object_action: a measured incision, steady hands
+    scene_motion: Begins in cautious action, passes through mixed feeling, clear plan, and tends toward embodied testing.
+    pressure_type: disclosure / feeling
+    likely_effects:
+      - steers the scene toward cautious action
+      - colors transitions with embodied testing
+      - introduces imagery like a measured incision, steady hands
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-1-2-2
+    name: The Tuner
+    summary: calibration, ambiguity, live adjustment, unstable trial
+    archetype: The Tuner, one listening for the exact note that has not appeared yet
+    object_action: a tuning fork, turning the peg
+    scene_motion: Begins in calibration, passes through ambiguity, live adjustment, and tends toward unstable trial.
+    pressure_type: calibration pressure
+    likely_effects:
+      - steers the scene toward calibration
+      - colors transitions with unstable trial
+      - introduces imagery like a tuning fork, turning the peg
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 2-1-2-3
+    name: The Draftsman
+    summary: exploratory logic, unresolved affect, unfinished embodiment, thin momentum
+    archetype: The Draftsman, one sketching what cannot yet stand
+    object_action: a blueprint, erasing and redrawing
+    scene_motion: Begins in exploratory logic, passes through unresolved affect, unfinished embodiment, and tends toward thin momentum.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward exploratory logic
+      - colors transitions with thin momentum
+      - introduces imagery like a blueprint, erasing and redrawing
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-1-3-1
+    name: The Tactician
+    summary: strategic restraint, poised control, muted feeling, careful embodiment
+    archetype: The Tactician, one who prepares the move before claiming the field
+    object_action: a campaign map, placing markers
+    scene_motion: Begins in strategic restraint, passes through poised control, muted feeling, and tends toward careful embodiment.
+    pressure_type: disclosure / feeling
+    likely_effects:
+      - steers the scene toward strategic restraint
+      - colors transitions with careful embodiment
+      - introduces imagery like a campaign map, placing markers
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-1-3-2
+    name: The Watch Officer
+    summary: held-back action, planning, provisional containment, controlled uncertainty
+    archetype: The Watch Officer, one ready but not released
+    object_action: a lantern in fog, holding position
+    scene_motion: Begins in held-back action, passes through planning, provisional containment, and tends toward controlled uncertainty.
+    pressure_type: held-back action pressure
+    likely_effects:
+      - steers the scene toward held-back action
+      - colors transitions with controlled uncertainty
+      - introduces imagery like a lantern in fog, holding position
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-1-3-3
+    name: The Cold Engineer
+    summary: detached planning, suspended force, ungrounded reserve, incomplete control
+    archetype: The Cold Engineer, one designs power that has not yet entered the world
+    object_action: a dormant engine, checking the schematics
+    scene_motion: Begins in detached planning, passes through suspended force, ungrounded reserve, and tends toward incomplete control.
+    pressure_type: concealment / reserve
+    likely_effects:
+      - steers the scene toward detached planning
+      - colors transitions with incomplete control
+      - introduces imagery like a dormant engine, checking the schematics
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-2-1-1
+    name: The Torn Heart
+    summary: emotional crossroads, embodied ambiguity, feeling-led tension, active uncertainty
+    archetype: The Torn Heart, one pulled by multiple living truths
+    object_action: two diverging paths, stopping between them
+    scene_motion: Begins in emotional crossroads, passes through embodied ambiguity, feeling-led tension, and tends toward active uncertainty.
+    pressure_type: threshold / suspension
+    likely_effects:
+      - steers the scene toward emotional crossroads
+      - colors transitions with active uncertainty
+      - introduces imagery like two diverging paths, stopping between them
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-2-1-2
+    name: The Weather Vane
+    summary: flux, wavering, contingency, transition, unresolved expression
+    archetype: The Weather Vane, one turns with every shift in the air
+    object_action: a weather vane, spinning
+    scene_motion: Begins in flux, passes through wavering, contingency, transition, and tends toward unresolved expression.
+    pressure_type: flux pressure
+    likely_effects:
+      - steers the scene toward flux
+      - colors transitions with unresolved expression
+      - introduces imagery like a weather vane, spinning
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-2-1-3
+    name: The Drifter
+    summary: expressive uncertainty, drift, no anchor, emotional testing
+    archetype: The Drifter, one moves because staying would force a decision
+    object_action: a loose boat, unmoored on the tide
+    scene_motion: Begins in expressive uncertainty, passes through drift, no anchor, and tends toward emotional testing.
+    pressure_type: disclosure / feeling
+    likely_effects:
+      - steers the scene toward expressive uncertainty
+      - colors transitions with emotional testing
+      - introduces imagery like a loose boat, unmoored on the tide
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-2-2-1
+    name: The Threshold Body
+    summary: embodiment under tension, liminality, negotiation, process-state
+    archetype: The Threshold Body, one becoming through friction itself
+    object_action: a doorway, standing in it
+    scene_motion: Begins in embodiment under tension, passes through liminality, negotiation, and tends toward process-state.
+    pressure_type: threshold / suspension
+    likely_effects:
+      - steers the scene toward embodiment under tension
+      - colors transitions with process-state
+      - introduces imagery like a doorway, standing in it
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-2-2-2
+    name: The Hinge
+    summary: pure threshold, suspension, metastability, unresolved process, in-between
+    archetype: The Hinge, one belongs to neither side and therefore holds both
+    object_action: a hinge, swinging but not settling
+    scene_motion: Begins in pure threshold, passes through suspension, metastability, unresolved process, and tends toward in-between.
+    pressure_type: threshold / suspension
+    likely_effects:
+      - steers the scene toward pure threshold
+      - colors transitions with in-between
+      - introduces imagery like a hinge, swinging but not settling
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-2-2-3
+    name: The Stalled Metamorph
+    summary: stalled threshold, no footing, suspension, unresolved becoming
+    archetype: The Stalled Metamorph, one caught mid-transformation
+    object_action: a cocoon that will not open, waiting too long
+    scene_motion: Begins in stalled threshold, passes through no footing, suspension, and tends toward unresolved becoming.
+    pressure_type: threshold / suspension
+    likely_effects:
+      - steers the scene toward stalled threshold
+      - colors transitions with unresolved becoming
+      - introduces imagery like a cocoon that will not open, waiting too long
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 1
+      confession: 0
+  - id: 2-2-3-1
+    name: The Diplomat
+    summary: guarded uncertainty, embodied reserve, muted tension, careful ambiguity
+    archetype: The Diplomat, one whose strength lies in saying less than they know
+    object_action: a folded treaty, delaying the signature
+    scene_motion: Begins in guarded uncertainty, passes through embodied reserve, muted tension, and tends toward careful ambiguity.
+    pressure_type: concealment / reserve
+    likely_effects:
+      - steers the scene toward guarded uncertainty
+      - colors transitions with careful ambiguity
+      - introduces imagery like a folded treaty, delaying the signature
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-2-3-2
+    name: The Withdrawn Referee
+    summary: restrained liminality, partial withdrawal, cool suspension, unstable reserve
+    archetype: The Withdrawn Referee, one keeps conflict from collapsing into decision
+    object_action: a raised hand, calling pause
+    scene_motion: Begins in restrained liminality, passes through partial withdrawal, cool suspension, and tends toward unstable reserve.
+    pressure_type: threshold / suspension
+    likely_effects:
+      - steers the scene toward restrained liminality
+      - colors transitions with unstable reserve
+      - introduces imagery like a raised hand, calling pause
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 1
+      confession: 0
+  - id: 2-2-3-3
+    name: The Sleeping Gate
+    summary: hidden threshold, muted process, withdrawal, suspended closure
+    archetype: The Sleeping Gate, one closed without ever truly locking
+    object_action: a shuttered archway, waiting in dimness
+    scene_motion: Begins in hidden threshold, passes through muted process, withdrawal, and tends toward suspended closure.
+    pressure_type: threshold / suspension
+    likely_effects:
+      - steers the scene toward hidden threshold
+      - colors transitions with suspended closure
+      - introduces imagery like a shuttered archway, waiting in dimness
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-3-1-1
+    name: The Gentle Guest
+    summary: quiet feeling, tacit openness, tentative embodiment, soft arrival
+    archetype: The Gentle Guest, one arrives softly and changes the room anyway
+    object_action: a teacup set down carefully, entering without noise
+    scene_motion: Begins in quiet feeling, passes through tacit openness, tentative embodiment, and tends toward soft arrival.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward quiet feeling
+      - colors transitions with soft arrival
+      - introduces imagery like a teacup set down carefully, entering without noise
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 2-3-1-2
+    name: The Veiled Guest
+    summary: private emergence, unspoken feeling, delicate adaptation, partial arrival
+    archetype: The Veiled Guest, one present in feeling before fully appearing in form
+    object_action: a curtain stirred by wind, half-entering
+    scene_motion: Begins in private emergence, passes through unspoken feeling, delicate adaptation, and tends toward partial arrival.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward private emergence
+      - colors transitions with partial arrival
+      - introduces imagery like a curtain stirred by wind, half-entering
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-3-1-3
+    name: The Yearner
+    summary: tacit longing, hidden feeling, unstable emergence, partial manifestation
+    archetype: The Yearner, one moves toward what cannot yet be named aloud
+    object_action: an unopened letter, holding it to the chest
+    scene_motion: Begins in tacit longing, passes through hidden feeling, unstable emergence, and tends toward partial manifestation.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward tacit longing
+      - colors transitions with partial manifestation
+      - introduces imagery like an unopened letter, holding it to the chest
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-3-2-1
+    name: The Closed Vessel
+    summary: opaque interiority, embodied half-knowledge, unclear motives, quiet tension
+    archetype: The Closed Vessel, one contains more than they can explain
+    object_action: a sealed jar, weighing it in the hand
+    scene_motion: Begins in opaque interiority, passes through embodied half-knowledge, unclear motives, and tends toward quiet tension.
+    pressure_type: opaque interiority pressure
+    likely_effects:
+      - steers the scene toward opaque interiority
+      - colors transitions with quiet tension
+      - introduces imagery like a sealed jar, weighing it in the hand
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 2-3-2-2
+    name: The Masked Witness
+    summary: obscurity, concealment, ambiguity, inner negotiation, liminal privacy
+    archetype: The Masked Witness, one sees but does not declare
+    object_action: a mask, watching from the edge
+    scene_motion: Begins in obscurity, passes through concealment, ambiguity, inner negotiation, and tends toward liminal privacy.
+    pressure_type: concealment / reserve
+    likely_effects:
+      - steers the scene toward obscurity
+      - colors transitions with liminal privacy
+      - introduces imagery like a mask, watching from the edge
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 2-3-2-3
+    name: The Sleepwalker
+    summary: veiled uncertainty, inner fog, weak footing, recessive tension
+    archetype: The Sleepwalker, one moves through a world not fully lit
+    object_action: mist on glass, groping forward
+    scene_motion: Begins in veiled uncertainty, passes through inner fog, weak footing, and tends toward recessive tension.
+    pressure_type: veiled uncertainty pressure
+    likely_effects:
+      - steers the scene toward veiled uncertainty
+      - colors transitions with recessive tension
+      - introduces imagery like mist on glass, groping forward
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-3-3-1
+    name: The Shut-In
+    summary: internalized delay, tentative confinement, soft blockage, hidden restraint
+    archetype: The Shut-In, one limited more by inward walls than outer ones
+    object_action: a bolted room, staying indoors
+    scene_motion: Begins in internalized delay, passes through tentative confinement, soft blockage, and tends toward hidden restraint.
+    pressure_type: closure / diminishment
+    likely_effects:
+      - steers the scene toward internalized delay
+      - colors transitions with hidden restraint
+      - introduces imagery like a bolted room, staying indoors
+    termination_bias:
+      death: 2
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-3-3-2
+    name: The Waiting Patient
+    summary: inward suspension, private holding pattern, muted blockage, partial arrest
+    archetype: The Waiting Patient, one held in quiet postponement
+    object_action: a waiting-room chair, counting the minutes
+    scene_motion: Begins in inward suspension, passes through private holding pattern, muted blockage, and tends toward partial arrest.
+    pressure_type: threshold / suspension
+    likely_effects:
+      - steers the scene toward inward suspension
+      - colors transitions with partial arrest
+      - introduces imagery like a waiting-room chair, counting the minutes
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 2-3-3-3
+    name: The Buried Seed
+    summary: sealed liminality, inner stagnation, withdrawn tension, buried impasse
+    archetype: The Buried Seed, one with life intact but inaccessible
+    object_action: compacted soil, refusing to sprout
+    scene_motion: Begins in sealed liminality, passes through inner stagnation, withdrawn tension, and tends toward buried impasse.
+    pressure_type: threshold / suspension
+    likely_effects:
+      - steers the scene toward sealed liminality
+      - colors transitions with buried impasse
+      - introduces imagery like compacted soil, refusing to sprout
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 3-1-1-1
+    name: The Newcomer
+    summary: beginnings, arrivals, openings, entry, increase
+    archetype: The Newcomer, one whose presence marks the start of a cycle
+    object_action: a threshold stone, stepping over it
+    scene_motion: Begins in beginnings, passes through arrivals, openings, entry, and tends toward increase.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward beginnings
+      - colors transitions with increase
+      - introduces imagery like a threshold stone, stepping over it
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 3-1-1-2
+    name: The Apprentice
+    summary: partial beginning, emerging contact, soft entry, incomplete arrival
+    archetype: The Apprentice, one admitted but not yet initiated
+    object_action: a newly lit candle, shielding the first flame
+    scene_motion: Begins in partial beginning, passes through emerging contact, soft entry, and tends toward incomplete arrival.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward partial beginning
+      - colors transitions with incomplete arrival
+      - introduces imagery like a newly lit candle, shielding the first flame
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 3-1-1-3
+    name: The Broker
+    summary: meetings, crossings, links, commerce, connection
+    archetype: The Broker, one whose art is bringing separate things together
+    object_action: a handshake, joining two roads
+    scene_motion: Begins in meetings, passes through crossings, links, commerce, and tends toward connection.
+    pressure_type: negotiation / contact
+    likely_effects:
+      - steers the scene toward meetings
+      - colors transitions with connection
+      - introduces imagery like a handshake, joining two roads
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 3-1-2-1
+    name: The Negotiator
+    summary: clear but complicated, mixed reception, embodied contact, thoughtful arrival
+    archetype: The Negotiator, one enters with both clarity and caution
+    object_action: an exchange of tokens, sitting at the table
+    scene_motion: Begins in clear but complicated, passes through mixed reception, embodied contact, and tends toward thoughtful arrival.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward clear but complicated
+      - colors transitions with thoughtful arrival
+      - introduces imagery like an exchange of tokens, sitting at the table
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 3-1-2-2
+    name: The Intermediary
+    summary: negotiation through contact, mixed signals, partial joining, adaptive exchange
+    archetype: The Intermediary, one lives in the space between parties
+    object_action: a relay baton, passing it on
+    scene_motion: Begins in negotiation through contact, passes through mixed signals, partial joining, and tends toward adaptive exchange.
+    pressure_type: negotiation / contact
+    likely_effects:
+      - steers the scene toward negotiation through contact
+      - colors transitions with adaptive exchange
+      - introduces imagery like a relay baton, passing it on
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 3-1-2-3
+    name: The Missed Connection
+    summary: weak linkage, complicated meeting, no stable union, recessive contact
+    archetype: The Missed Connection, one near the meeting but not inside it
+    object_action: crossed wires, arriving too late
+    scene_motion: Begins in weak linkage, passes through complicated meeting, no stable union, and tends toward recessive contact.
+    pressure_type: negotiation / contact
+    likely_effects:
+      - steers the scene toward weak linkage
+      - colors transitions with recessive contact
+      - introduces imagery like crossed wires, arriving too late
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 3-1-3-1
+    name: The Merchant
+    summary: gain, increase, acquisition, profit, accumulation
+    archetype: The Merchant, one gathers value and knows what to keep
+    object_action: a full purse, weighing the scales
+    scene_motion: Begins in gain, passes through increase, acquisition, profit, and tends toward accumulation.
+    pressure_type: gain / ascent
+    likely_effects:
+      - steers the scene toward gain
+      - colors transitions with accumulation
+      - introduces imagery like a full purse, weighing the scales
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 3-1-3-2
+    name: The Speculator
+    summary: growing advantage, partial gain, strategic buildup, unstable increase
+    archetype: The Speculator, one profits before the outcome is secure
+    object_action: stacked chips, calculating the odds
+    scene_motion: Begins in growing advantage, passes through partial gain, strategic buildup, and tends toward unstable increase.
+    pressure_type: gain / ascent
+    likely_effects:
+      - steers the scene toward growing advantage
+      - colors transitions with unstable increase
+      - introduces imagery like stacked chips, calculating the odds
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 3-1-3-3
+    name: The Red Reveler
+    summary: passion, volatility, danger, intoxication, rupture
+    archetype: The Red Reveler, one burns hot enough to become hazardous
+    object_action: a wine cup, overturning the table
+    scene_motion: Begins in passion, passes through volatility, danger, intoxication, and tends toward rupture.
+    pressure_type: passion pressure
+    likely_effects:
+      - steers the scene toward passion
+      - colors transitions with rupture
+      - introduces imagery like a wine cup, overturning the table
+    termination_bias:
+      death: 2
+      unresolved: 0
+      collapse: 1
+      confession: 0
+  - id: 3-2-1-1
+    name: The Deep Current
+    summary: hidden drive, open feeling, uncertain thought, solid undercurrent
+    archetype: The Deep Current, one is moved by forces others sense before they see
+    object_action: an undertow, pulling from below
+    scene_motion: Begins in hidden drive, passes through open feeling, uncertain thought, and tends toward solid undercurrent.
+    pressure_type: concealment / reserve
+    likely_effects:
+      - steers the scene toward hidden drive
+      - colors transitions with solid undercurrent
+      - introduces imagery like an undertow, pulling from below
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 3-2-1-2
+    name: The Half-Spoken Dreamer
+    summary: half-spoken feeling, uncertain longing, provisional disclosure, unstable contact
+    archetype: The Half-Spoken Dreamer, one who almost reveals the heart but cannot quite shape it
+    object_action: a half-open journal, stopping mid-sentence
+    scene_motion: Begins in half-spoken feeling, passes through uncertain longing, provisional disclosure, and tends toward unstable contact.
+    pressure_type: negotiation / contact
+    likely_effects:
+      - steers the scene toward half-spoken feeling
+      - colors transitions with unstable contact
+      - introduces imagery like a half-open journal, stopping mid-sentence
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 1
+  - id: 3-2-1-3
+    name: The Fading Confessor
+    summary: vulnerable reserve, quiet disclosure, receding shape, soft undercurrent
+    archetype: The Fading Confessor, one whose truths recede even while spoken
+    object_action: a voice behind a curtain, words trailing off
+    scene_motion: Begins in vulnerable reserve, passes through quiet disclosure, receding shape, and tends toward soft undercurrent.
+    pressure_type: concealment / reserve
+    likely_effects:
+      - steers the scene toward vulnerable reserve
+      - colors transitions with soft undercurrent
+      - introduces imagery like a voice behind a curtain, words trailing off
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 1
+  - id: 3-2-2-1
+    name: The Depth Analyst
+    summary: buried complexity, negotiated feeling, interior process, grounded ambiguity
+    archetype: The Depth Analyst, one knows the visible story is never the whole one
+    object_action: an auger, drilling beneath the surface
+    scene_motion: Begins in buried complexity, passes through negotiated feeling, interior process, and tends toward grounded ambiguity.
+    pressure_type: disclosure / feeling
+    likely_effects:
+      - steers the scene toward buried complexity
+      - colors transitions with grounded ambiguity
+      - introduces imagery like an auger, drilling beneath the surface
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 3-2-2-2
+    name: The Cryptic Alchemist
+    summary: muted process, half-visible tension, withdrawn complexity, unstable ambiguity
+    archetype: The Cryptic Alchemist, one tends a reaction in a closed vessel
+    object_action: a sealed retort, watching it change
+    scene_motion: Begins in muted process, passes through half-visible tension, withdrawn complexity, and tends toward unstable ambiguity.
+    pressure_type: muted process pressure
+    likely_effects:
+      - steers the scene toward muted process
+      - colors transitions with unstable ambiguity
+      - introduces imagery like a sealed retort, watching it change
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 3-2-2-3
+    name: The Hushed Doubter
+    summary: recessed ambivalence, weak formation, quiet confusion, interior drift
+    archetype: The Hushed Doubter, one is unconvinced even of their own retreat
+    object_action: ash settling in water, losing definition
+    scene_motion: Begins in recessed ambivalence, passes through weak formation, quiet confusion, and tends toward interior drift.
+    pressure_type: recessed ambivalence pressure
+    likely_effects:
+      - steers the scene toward recessed ambivalence
+      - colors transitions with interior drift
+      - introduces imagery like ash settling in water, losing definition
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 3-2-3-1
+    name: The Archivist
+    summary: cold storage, hidden motive, stable reserve, contained withdrawal
+    archetype: The Archivist, one preserves power by withholding it
+    object_action: a locked cabinet, filing it away
+    scene_motion: Begins in cold storage, passes through hidden motive, stable reserve, and tends toward contained withdrawal.
+    pressure_type: concealment / reserve
+    likely_effects:
+      - steers the scene toward cold storage
+      - colors transitions with contained withdrawal
+      - introduces imagery like a locked cabinet, filing it away
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 3-2-3-2
+    name: The Retreating Strategist
+    summary: guarded recession, suspended reserve, partial withdrawal, uncertain closure
+    archetype: The Retreating Strategist, one steps back without conceding
+    object_action: a lowered banner, falling back in order
+    scene_motion: Begins in guarded recession, passes through suspended reserve, partial withdrawal, and tends toward uncertain closure.
+    pressure_type: concealment / reserve
+    likely_effects:
+      - steers the scene toward guarded recession
+      - colors transitions with uncertain closure
+      - introduces imagery like a lowered banner, falling back in order
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 3-2-3-3
+    name: The Hermit
+    summary: dormancy, withdrawal, concealment, nonaction, sealed reserve
+    archetype: The Hermit, one leaves the world to preserve an inner flame
+    object_action: a shuttered lamp, turning inward
+    scene_motion: Begins in dormancy, passes through withdrawal, concealment, nonaction, and tends toward sealed reserve.
+    pressure_type: concealment / reserve
+    likely_effects:
+      - steers the scene toward dormancy
+      - colors transitions with sealed reserve
+      - introduces imagery like a shuttered lamp, turning inward
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 3-3-1-1
+    name: The Builder
+    summary: slow self-made fortune, lasting success, stable advantage, earned momentum
+    archetype: The Builder, one whose success rests on foundations they laid themselves
+    object_action: a cornerstone, raising the house brick by brick
+    scene_motion: Begins in slow self-made fortune, passes through lasting success, stable advantage, and tends toward earned momentum.
+    pressure_type: movement / emergence
+    likely_effects:
+      - steers the scene toward slow self-made fortune
+      - colors transitions with earned momentum
+      - introduces imagery like a cornerstone, raising the house brick by brick
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 3-3-1-2
+    name: The Cultivator
+    summary: slow growth, partial realization, deep support, not-yet-secure gain
+    archetype: The Cultivator, one tends what will matter later
+    object_action: a young tree, staking it upright
+    scene_motion: Begins in slow growth, passes through partial realization, deep support, and tends toward not-yet-secure gain.
+    pressure_type: gain / ascent
+    likely_effects:
+      - steers the scene toward slow growth
+      - colors transitions with not-yet-secure gain
+      - introduces imagery like a young tree, staking it upright
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 3-3-1-3
+    name: The Sage
+    summary: clarity, wisdom, peace, purification, reflection
+    archetype: The Sage, one clears the water until truth can be seen
+    object_action: a white bowl, washing the hands
+    scene_motion: Begins in clarity, passes through wisdom, peace, purification, and tends toward reflection.
+    pressure_type: clarification / insight
+    likely_effects:
+      - steers the scene toward clarity
+      - colors transitions with reflection
+      - introduces imagery like a white bowl, washing the hands
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 3-3-2-1
+    name: The Seer of Fine Lines
+    summary: inward discernment, quiet complexity, embodied subtlety, deep reading
+    archetype: The Seer of Fine Lines, one reads what others miss
+    object_action: a lens, studying the grain closely
+    scene_motion: Begins in inward discernment, passes through quiet complexity, embodied subtlety, and tends toward deep reading.
+    pressure_type: clarification / insight
+    likely_effects:
+      - steers the scene toward inward discernment
+      - colors transitions with deep reading
+      - introduces imagery like a lens, studying the grain closely
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+  - id: 3-3-2-2
+    name: The Contemplative
+    summary: contemplation in suspension, nuanced stillness, partial clarity, subtle process
+    archetype: The Contemplative, one waits for meaning to settle rather than forcing it
+    object_action: still water, watching the sediment fall
+    scene_motion: Begins in contemplation in suspension, passes through nuanced stillness, partial clarity, and tends toward subtle process.
+    pressure_type: threshold / suspension
+    likely_effects:
+      - steers the scene toward contemplation in suspension
+      - colors transitions with subtle process
+      - introduces imagery like still water, watching the sediment fall
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 3-3-2-3
+    name: The Clouded Oracle
+    summary: misted wisdom, recessed perception, incomplete clarity, hidden subtlety
+    archetype: The Clouded Oracle, one senses truly but not yet cleanly
+    object_action: frosted glass, breathing on it to see through
+    scene_motion: Begins in misted wisdom, passes through recessed perception, incomplete clarity, and tends toward hidden subtlety.
+    pressure_type: clarification / insight
+    likely_effects:
+      - steers the scene toward misted wisdom
+      - colors transitions with hidden subtlety
+      - introduces imagery like frosted glass, breathing on it to see through
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 3-3-3-1
+    name: The Mourner
+    summary: sorrow, burden, heaviness, decline, exhaustion
+    archetype: The Mourner, one carrying grief as a daily weight
+    object_action: a black stone, bowing the head
+    scene_motion: Begins in sorrow, passes through burden, heaviness, decline, and tends toward exhaustion.
+    pressure_type: closure / diminishment
+    likely_effects:
+      - steers the scene toward sorrow
+      - colors transitions with exhaustion
+      - introduces imagery like a black stone, bowing the head
+    termination_bias:
+      death: 2
+      unresolved: 0
+      collapse: 1
+      confession: 0
+  - id: 3-3-3-2
+    name: The Recoverer
+    summary: muted reprieve, fragile easing, provisional relief, private thaw
+    archetype: The Recoverer, one who is not yet restored but no longer fully crushed
+    object_action: an ember under ash, warming the hands in dim light
+    scene_motion: Begins in muted reprieve, passes through fragile easing, provisional relief, and tends toward private thaw.
+    pressure_type: muted reprieve pressure
+    likely_effects:
+      - steers the scene toward muted reprieve
+      - colors transitions with private thaw
+      - introduces imagery like an ember under ash, warming the hands in dim light
+    termination_bias:
+      death: 0
+      unresolved: 2
+      collapse: 0
+      confession: 0
+  - id: 3-3-3-3
+    name: The Chorus
+    summary: crowd, diffusion, collectivity, passivity, multitude
+    archetype: The Chorus, many voices becoming one field of presence
+    object_action: a gathered crowd, murmuring together
+    scene_motion: Begins in crowd, passes through diffusion, collectivity, passivity, and tends toward multitude.
+    pressure_type: release / collectivity
+    likely_effects:
+      - steers the scene toward crowd
+      - colors transitions with multitude
+      - introduces imagery like a gathered crowd, murmuring together
+    termination_bias:
+      death: 0
+      unresolved: 0
+      collapse: 0
+      confession: 0
+
+resultant_rules:
+  method: |
+    Derive each child row from two parent rows using two parallel outputs:
+
+    1. Resultant state:
+       Use the asymmetric ternary combination table below. This produces the child's
+       actual row value: 1, 2, or 3.
+
+       Combination table:
+         left\right:
+           1 -> 1, 1, 2
+           2 -> 1, 2, 3
+           3 -> 2, 3, 3
+
+       Equivalent mapping:
+         T(1,1)=1
+         T(1,2)=1
+         T(1,3)=2
+         T(2,1)=1
+         T(2,2)=2
+         T(2,3)=3
+         T(3,1)=2
+         T(3,2)=3
+         T(3,3)=3
+
+       Interpretation:
+       - identical poles remain themselves
+       - liminality resolves toward the non-liminal parent it meets
+       - manifest meeting latent yields true liminality
+       - the child state is the visible condition produced by the meeting
+
+    2. Drift:
+       Compute directional drift separately from the child state.
+
+       Formula:
+         D = L - R
+
+       Where:
+       - L = the numeric value of the left parent row
+       - R = the numeric value of the right parent row
+       - row values are the literal dot values: 1, 2, 3
+
+       Drift meanings:
+       - D = -2: strong drift toward manifestation
+       - D = -1: slight drift toward manifestation
+       - D =  0: stable, holding, or internally balanced
+       - D = +1: slight drift toward latency
+       - D = +2: strong drift toward latency
+
+       Important:
+       - the child state and the drift are not the same thing
+       - the child state answers "what condition is produced?"
+       - the drift answers "which way is that condition leaning or moving?"
+       - because drift is directional, left and right parent order must always be preserved
+
+    Read the child as:
+      child_state = what the row is now
+      drift = what the row is tending toward
+
+    Example:
+      if L=1 and R=3:
+        child_state = T(1,3) = 2
+        drift = 1 - 3 = -2
+      This means:
+        the child row is liminal,
+        but it is liminal with a strong pull toward manifestation.
+
+    Another example:
+      if L=3 and R=1:
+        child_state = T(3,1) = 2
+        drift = 3 - 1 = +2
+      This means:
+        the child row is liminal,
+        but it is liminal with a strong pull toward latency.
+
+    This system avoids adding new dot-count states.
+    Nuance is carried by ancestry and directional drift, not by inventing 4-dot or 5-dot figures.
+    A child figure is complete in itself, but its parents reveal where it is coming from and where it is tending.
+  notes:
+    - |
+      Preserve parent order. The method is intentionally non-symmetric. Swapping left and right parents can change both the child state and the drift.
+    - |
+      The child state is the primary symbolic result. Drift is a secondary interpretive modifier. Do not replace the child state with the drift.
+    - |
+      Strong drift does not erase the child state. A liminal child with D=-2 is still liminal, but it is liminal in an emergent or manifesting way. A liminal child with D=+2 is still liminal, but it is liminal in a recessive or latent way.
+    - |
+      When interpreting rows as aspects, apply drift within the meaning of that aspect:
+      - Fire row drift: toward assertion, ignition, action, or toward quiescence, suppression, concealment
+      - Air row drift: toward articulation, clarity, contact, or toward obscurity, uncertainty, silence
+      - Water row drift: toward disclosure, emotional permeability, resonance, or toward reserve, containment, withdrawal
+      - Earth row drift: toward embodiment, realization, stabilization, or toward delay, suspension, non-embodiment
+    - |
+      Use the size of the drift to judge intensity:
+      - absolute drift 0 = stable or internally balanced
+      - absolute drift 1 = mild tendency, partial leaning, soft vector
+      - absolute drift 2 = strong tendency, decisive pull, dominant vector
+    - |
+      Child flavor can appear before or after the child is explicitly realized. If one parent strongly conditions the other, the child may be present as an undertone, precursor, pressure, omen, residue, or afterimage. This is especially useful for scene-to-scene narrative transitions.
+    - |
+      Interpret parent order narratively if needed:
+      - left parent can be treated as what is presently foregrounded, nearer, self-side, or already in play
+      - right parent can be treated as what is incoming, more future, more other, or exerting pressure from beyond the present state
+      Choose one framing and keep it consistent across the whole system.
+    - |
+      For LLM use:
+      - always compute child_state first using the table
+      - always compute drift second using D = L - R
+      - never infer drift from vibes alone
+      - never reorder the parents unless explicitly instructed
+      - when explaining a row, mention both the produced state and the directional pull
+    - |
+      Recommended compact notation:
+      - state only: 1, 2, 3
+      - state with drift: 2[-2], 2[-1], 2[0], 2[+1], 2[+2]
+      This keeps the visible figure ternary while preserving directional nuance.

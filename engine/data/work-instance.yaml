@@ -1,0 +1,501 @@
+version: 0.1
+
+work:
+  id: hospice-annex-v01
+  title_working: "The Annex"
+  format: literary_escape_room
+  status: planning
+  description: >
+    A static, build-time-generated literary mystery set in a snowbound hospice annex
+    where accusation selects reality, indecision accumulates contamination, and the
+    reader gradually realizes they are judging rather than merely investigating.
+
+execution_phase:
+  current_phase: engine_revision
+  allowed_engine_roots:
+    - engine/docs
+    - engine/canon
+    - engine/data
+    - engine/prompts
+    - engine/planning
+    - engine/llm-instructions.md
+  phase_write_policy:
+    engine_revision:
+      engine_writes_allowed: true
+      schema_generation_writes_allowed: false
+      prose_writes_allowed: false
+      graph_compilation_allowed: false
+      planning_compilation_allowed: false
+      prose_generation_allowed: false
+      build_mutation_allowed: false
+      notes:
+        - "Use engine-revision passes to change canon, data, prompts, docs, and templates only."
+        - "Do not create, update, or regenerate files under schema-generation/ during this phase."
+        - "Do not create, update, or regenerate files under prose/ during this phase."
+        - "If compiled outputs need to change, switch phases explicitly before doing that work."
+    planning_compilation:
+      engine_writes_allowed: true
+      schema_generation_writes_allowed: true
+      prose_writes_allowed: false
+      graph_compilation_allowed: false
+      planning_compilation_allowed: true
+      prose_generation_allowed: false
+      build_mutation_allowed: false
+    prose_generation:
+      engine_writes_allowed: true
+      schema_generation_writes_allowed: true
+      prose_writes_allowed: true
+      graph_compilation_allowed: false
+      planning_compilation_allowed: true
+      prose_generation_allowed: true
+      build_mutation_allowed: false
+    graph_or_build:
+      engine_writes_allowed: true
+      schema_generation_writes_allowed: true
+      prose_writes_allowed: true
+      graph_compilation_allowed: true
+      planning_compilation_allowed: true
+      prose_generation_allowed: true
+      build_mutation_allowed: true
+  global_rules:
+    - "Current phase gates what directories may be mutated."
+    - "Phase changes must happen in repo truth before downstream compilation begins."
+    - "Engine revision is the default when revising the engine itself."
+
+scope:
+  target_form: short_playable_work
+  target_total_arcs: 3
+  target_total_scenes_min: 9
+  target_total_scenes_soft_max: 15
+  target_total_scenes_hard_max: 18
+  target_total_artifacts_min: 3
+  target_total_artifacts_soft_max: 6
+  target_total_endings: 4
+  notes:
+    - "This is the first instantiation of the engine, not the final large-scale work."
+    - "Favor controlled depth over route count."
+    - "Do not expand claimant count in v0.1."
+
+surface_container:
+  id: snowbound_hospice_annex
+  label: Snowbound Hospice Annex
+  description: >
+    A sealed, materially concrete annex attached to or adjacent to a hospice-like
+    facility in winter isolation. It contains rooms, intake records, maintenance
+    traces, medication and treatment documentation, personal effects, and signs of
+    ongoing institutional use. It should feel real enough to anchor the reader before
+    ontological drift becomes obvious.
+  properties:
+    isolated: true
+    mutable: true
+    institution_like: true
+    domestic_traces_present: true
+    weather_pressure: snowbound
+    traversal_style: room_document_interview
+  mutation_law_summary: >
+    The annex mutates in response to judgment pressure. As one claimant’s regime
+    becomes dominant, room function, document tone, naming conventions, and sensory
+    atmosphere drift toward that claimant’s ontology.
+
+central_transgression:
+  id: impossible_release
+  summary: >
+    A patient or resident was moved, released, transferred, or signed out under
+    contradictory and possibly impossible circumstances.
+  surface_question: "Who is responsible for the impossible release?"
+  underlying_pressure: >
+    The apparent question of institutional responsibility conceals a deeper struggle
+    over what kind of reality is being selected through judgment.
+  constraints:
+    - "The transgression must remain concrete on the surface."
+    - "Do not resolve the deeper metaphysical layer too early."
+    - "Different claimants must frame the same event differently."
+    - "Evidence must be interpretable under multiple regimes."
+
+reader_role:
+  apparent_role: investigator
+  actual_role: judge
+  hidden_implication: >
+    By interpreting evidence and accusing a claimant, the reader collapses the annex
+    toward one world-logic and starves alternative realities.
+  behavioral_risks:
+    - premature certainty
+    - false neutrality
+    - extractive completionism
+    - prolonged refusal to commit
+
+claimants:
+  active:
+    - custodian
+    - mourner
+    - examiner
+  inactive: []
+  notes:
+    - "Use only the active claimants for v0.1."
+    - "Do not invent additional claimants without explicit approval."
+
+claimant_generation:
+  mode: instantiation_only
+  semantic_drift: expression_only
+  balancing_mode: hybrid
+  variation_level: high
+  seed: hospice-annex-v01-claimants-v1
+  output_profile_path: schema-generation/claimant-profiles/hospice-annex-v01-claimant-profiles.yaml
+  compile_stage: before_arc_briefs
+  hard_separation_requirements:
+    - "Each active claimant must preserve its fixed genre ontology."
+    - "Each active claimant must preserve its role pressure and route identity."
+    - "No active claimant pair may share the same primary truth style family."
+    - "No active claimant pair may share the same primary evidence family."
+    - "No active claimant pair may share the same voice family."
+    - "Forbidden traits remain fixed and non-negotiable."
+  scoring_axes:
+    - secondary_evidence_affinities
+    - speech_texture_variants
+    - contradiction_motifs
+    - environmental_drift_variants
+    - local_framing_tendencies
+    - artifact_pressure_profile
+    - scene_surface_mutation_details
+  anti_slop_guardrails:
+    - "Reject claimant sets that are numerically distinct but still read as voice-blurred."
+    - "Reject drift that weakens route differentiation instead of sharpening it."
+    - "Reject novelty that changes ontology, role pressure, or forbidden traits."
+  notes:
+    - "Minor semantic drift is allowed in expression only."
+    - "Claimant profiles are compiled structural artifacts, not new canon."
+    - "Determinism matters: the same seed and source data should reproduce the same claimant profiles."
+
+route_model:
+  primary_routes:
+    - custodian_route
+    - mourner_route
+    - examiner_route
+  special_routes:
+    - contamination_route
+  route_constraints:
+    - "Each claimant route must feel ontologically distinct."
+    - "Route differences must not be merely cosmetic."
+    - "At least one artifact should pressure each claimant route differently."
+    - "Accusation endings must visibly alter reality."
+    - "Retraction may exist, but should not dominate v0.1 scope."
+
+state_logic_profile:
+  accusation_enabled: true
+  retraction_enabled: true
+  indecision_enabled: true
+  contamination_enabled: true
+  hidden_route_enabled: true
+  state_priorities:
+    - accusation
+    - dominant_regime
+    - contamination
+    - indecision_count
+    - retraction_count
+    - world_scars
+  notes:
+    - "Indecision preserves plurality temporarily but becomes costly when prolonged."
+    - "Retraction should reopen ambiguity but leave residue."
+    - "Contamination should emerge from noncommittal, extractive traversal."
+
+hidden_route:
+  id: contamination_route
+  enabled: true
+  premise: >
+    A reader who tries to consume all possible interpretations without accepting the
+    cost of judgment begins to resemble the very noncommittal, parasitic intelligence
+    the system fears or is attempting to detect.
+  trigger_logic:
+    all_of:
+      - seen_all_active_claimants
+      - no_stable_commitment
+      - contamination_gte_3
+  route_effects:
+    - "The reader is reframed as object of judgment."
+    - "Neutrality becomes suspect."
+    - "The system recognizes behavior rather than belief."
+  constraints:
+    - "Do not make this route feel like a completionist prize."
+    - "It must emerge from thematically legible behavior."
+    - "It should reframe the reader rather than merely reward exploration."
+
+artifacts:
+  families:
+    - intake_document
+    - maintenance_log
+    - treatment_chart
+    - personal_letter
+    - release_form
+    - room_assignment_record
+  artifact_rules:
+    - "Artifacts are evidence, not decoration."
+    - "Each artifact must support, complicate, or bias interpretation."
+    - "At least one artifact must plausibly support multiple claimants."
+    - "Artifacts must remain readable on mobile."
+  v0_1_minimum:
+    required_count: 3
+    current_milestone_count: 3
+
+ending_model:
+  allowed_endings:
+    - accusation_custodian
+    - accusation_mourner
+    - accusation_examiner
+    - contamination_ending
+  ending_rules:
+    - "Each accusation ending must visibly collapse the annex into that claimant’s regime."
+    - "The contamination ending must implicate the reader."
+    - "Do not over-explain the hidden cosmology in endings."
+    - "Endings should feel like selection and foreclosure, not just conclusion."
+  decision_scar_view:
+    enabled: true
+    default_mode: normal
+    debug_mode_available: true
+    render_rules:
+      - "Render the taken path as the primary spine."
+      - "Render closed sibling options at each decision point."
+      - "In normal mode, show rejected option labels only."
+      - "In debug mode, show rejected option labels plus destination scene titles."
+      - "Do not render the full decision tree by default."
+
+threshold_geomancy:
+  enabled: true
+  role: compositional_engine
+  purpose:
+    - scene_flow
+    - transition_logic
+    - arc_pressure
+    - premature_termination_bias
+  constraints:
+    - "Use threshold geomancy as hidden generation grammar first, not explicit lore."
+    - "Do not invent resultant math."
+    - "Use only explicitly defined figure meanings and resultant rules."
+    - "If a rule is missing, flag it rather than guessing."
+  operational_model:
+    - "Assign a threshold figure to each scene."
+    - "Assign a next-figure when a subsequent scene exists."
+    - "Use the current figure to shape the scene’s motion."
+    - "Use the resultant of current and next to shape the transition."
+    - "Allow arc termination before a next scene if termination conditions are met."
+
+arc_rules:
+  default_min_scenes_per_arc: 2
+  default_soft_max_scenes_per_arc: 5
+  default_hard_max_scenes_per_arc: 7
+  early_termination_enabled: true
+  allowed_premature_endings:
+    - death
+    - disappearance
+    - unresolved_exit
+    - collapse
+    - adjudicated_lock
+  constraints:
+    - "Arcs are finite."
+    - "Not every arc must reach full realization."
+    - "Premature endings must feel like consequences, not missing content."
+
+style_profile:
+  tone: controlled_weirdness
+  density: literary_but_legible
+  emphasis:
+    - concrete_detail_before_abstraction
+    - pressure_before_explanation
+    - claimant_specific_register
+    - artifacts_as_real_objects
+  prohibitions:
+    - lore_dumping
+    - generic_ominous_atmosphere
+    - faux_profundity
+    - claimant_voice_blurring
+    - decorative_artifacts
+    - AI_stock_phrases
+  notes:
+    - "This work should feel architecturally dense rather than branchy."
+    - "Weirdness must be patterned and legible, not random."
+
+prose_contamination:
+  enabled: true
+  primary_driver: claimant_focus
+  required_surfaces:
+    - scenes
+    - artifacts
+  deferred_surfaces:
+    - endings
+  focus_ladder:
+    ambient: mostly_neutral
+    passing_focus: very_light_to_light
+    primary_focus: moderate
+    dominant_focus: moderate_to_heavy
+  operational_rules:
+    - "Focus, not accusation alone, determines contamination intensity."
+    - "Scene prose must show contamination through diction, cadence, and structure when focus is primary or dominant."
+    - "Artifact framing may drift more than the core document body."
+    - "Document bodies must remain plausible and readable objects."
+    - "Heavy contamination must remain materially grounded and parseable."
+
+build_target:
+  framework: astro
+  content_format: mdx
+  static_only: true
+  no_live_api_calls: true
+  no_server_side_processing: true
+  output_goal: >
+    Prose and artifact files should remain directly readable and editable as MDX
+    during development, without requiring full site compilation for every revision.
+
+repo_layout:
+  engine_root: engine
+  planning_dir: engine/planning
+  schema_generation_dir: schema-generation
+  prose_dir: prose
+  expectations:
+    - "Canon, operator docs, prompts, and planning templates live under engine/."
+    - "Compiled structural artifacts live under schema-generation/."
+    - "Generated prose and artifacts live under prose/."
+    - "The repo is the source of truth."
+    - "Linear tracks execution, not canon."
+
+linear_workflow:
+  enabled: true
+  role: execution_tracker
+  rules:
+    - "Arc briefs and scene specs should be stored in repo first, then mirrored into Linear."
+    - "Linear must not be the only location for lore or route truth."
+    - "No scene should be generated without a scene spec."
+    - "No task should be marked complete without validation."
+    - "If repo and Linear disagree, repo wins."
+
+validation_profile:
+  required_checks:
+    - claimant_profile_balance
+    - planning_parity_completeness
+    - focus_scaled_contamination
+    - ontology_consistency
+    - claimant_consistency
+    - scene_function
+    - route_differentiation
+    - cross_route_artifact_differentiation
+    - style_compliance
+    - artifact_relevance
+    - mobile_readability
+  rejection_conditions:
+    - "Claimant profiles that are interchangeable despite different scores"
+    - "Atmospheric but inert prose"
+    - "Claimant routes that feel cosmetically different but structurally the same"
+    - "Artifacts that do not change interpretation"
+    - "Scenes that do not perform a beat function"
+    - "Lore explanation replacing dramatic consequence"
+
+planning_expectations:
+  required_generated_artifacts:
+    - schema-generation/work-briefs/*.md
+    - schema-generation/claimant-profiles/*.yaml
+    - schema-generation/arc-briefs/*.md
+    - schema-generation/scene-specs/*.md
+    - schema-generation/artifact-specs/*.md
+  generation_order:
+    - "Read canon and data files."
+    - "Compile work brief."
+    - "Compile claimant profiles for the active claimant set."
+    - "Compile arc briefs."
+    - "Compile scene and artifact specs."
+    - "Validate specs."
+    - "Generate prose from approved specs."
+    - "Validate prose."
+    - "Compile structural graph/path-trace artifacts."
+    - "Build static site views."
+  stop_conditions:
+    - "Canon conflict"
+    - "Missing claimant law"
+    - "Missing threshold geomancy rule needed for generation"
+    - "Scene spec cannot satisfy beat grammar"
+    - "Work-instance ambiguity that would require new ontology invention"
+    - "Current execution milestone cannot be completed without relaxing route differentiation rules"
+
+execution_milestone:
+  id: planning_parity_01
+  phase: planning
+  status: active
+  purpose: >
+    Prove that the system can compile a balanced claimant-profile artifact plus three
+    structurally parallel claimant-route planning packages before widening prose or
+    build execution.
+  scope_controller: sole_operational_scope
+  route_families_in_scope:
+    - custodian_route
+    - mourner_route
+    - examiner_route
+  route_families_deferred:
+    - contamination_route
+  route_package_shape:
+    scenes_per_route: 3
+    artifacts_per_route: 1
+    beat_sequence:
+      - invitation_or_plausibility
+      - contradiction_or_artifact_pressure
+      - threshold
+  prose_parity_required: false
+  build_parity_required: false
+  graph_parity_required: false
+  deliverables:
+    - schema-generation/work-briefs/hospice-annex-v01-work-brief.md
+    - schema-generation/claimant-profiles/hospice-annex-v01-claimant-profiles.yaml
+    - schema-generation/arc-briefs/custodian-arc-01.md
+    - schema-generation/arc-briefs/mourner-arc-01.md
+    - schema-generation/arc-briefs/examiner-arc-01.md
+    - schema-generation/scene-specs/custodian-scene-01.md
+    - schema-generation/scene-specs/custodian-scene-02.md
+    - schema-generation/scene-specs/custodian-scene-03.md
+    - schema-generation/scene-specs/mourner-scene-01.md
+    - schema-generation/scene-specs/mourner-scene-02.md
+    - schema-generation/scene-specs/mourner-scene-03.md
+    - schema-generation/scene-specs/examiner-scene-01.md
+    - schema-generation/scene-specs/examiner-scene-02.md
+    - schema-generation/scene-specs/examiner-scene-03.md
+    - schema-generation/artifact-specs/intake-discrepancy-01.md
+    - schema-generation/artifact-specs/visitation-letter-01.md
+    - schema-generation/artifact-specs/threshold-chart-01.md
+    - schema-generation/validation-reports/hospice-annex-v01-planning-parity-01.md
+  scope_constraints:
+    - "Compile claimant profiles before route planning."
+    - "Keep route ids stable and claimant-specific."
+    - "Preserve a three-scene plus one-artifact package for each claimant route."
+    - "Defer contamination-route execution unless a planning dependency makes it unavoidable."
+    - "Do not require prose or Astro build parity for this milestone."
+    - "Fail validation instead of relaxing route differentiation to force parity."
+  route_differentiation_requirements:
+    - "Each route package must differ on ontology."
+    - "Each route package must differ on evidence family."
+    - "Each route package must differ on contradiction shape."
+    - "Each route package must differ on speech texture."
+    - "Each route package must differ on environmental drift."
+    - "Each route package must differ on accusation consequence direction."
+    - "Each route artifact must pressure interpretation differently."
+  notes:
+    - "Operational scope now lives here rather than in engine/docs/first-spike-freeze.md."
+    - "The current milestone proves planning-system breadth, not reader build completeness."
+    - "Milestone scope does not override the current execution phase write gate."
+
+open_questions:
+  - "What exact patient identity or absence most sharply drives the impossible release?"
+  - "How visibly should the deeper metaphysical layer surface in v0.1?"
+  - "How harsh should contamination feel once the hidden route becomes executable?"
+  - "Should retraction stay planning-only until post-parity prose work begins?"
+  - "Whether later prose generation should keep the shared three-beat route scaffold or vary scene count by claimant."
+
+authorial_intent:
+  summary: >
+    This work uses AI as a constrained execution medium for a nonlinear literary form
+    whose scale, recursive variation, and ontological branching would be difficult to
+    build manually. The artistic act lies in designing the laws, pressures, state
+    logic, and symbolic recurrence that generate the work, not in outsourcing all
+    judgment to the model.
+
+scene_length_policy:
+  measurement: words
+  soft_min: 500
+  soft_max: 1100
+  hard_max: 3000
+  notes:
+    - "Scenes should usually read like roughly 3 to 4 manuscript-style pages."
+    - "Exceptionally dramatic scenes may exceed the soft max but must not exceed the hard max."

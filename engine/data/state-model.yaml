@@ -1,0 +1,40 @@
+version: 0.1
+
+surface_container: hospice_annex
+dominant_regime: neutral
+
+accused_claimant: null
+prior_accusations: []
+
+indecision_count: 0
+retraction_count: 0
+contamination: 0
+
+claimants_seen: []
+artifacts_seen: []
+
+world_scars: []
+hidden_route_unlocked: false
+
+rules:
+  accusation:
+    effects:
+      - set_dominant_regime_to_accused
+      - add_prior_accusation
+      - increase_world_scar
+  retraction:
+    effects:
+      - clear_accused_claimant
+      - increase_retraction_count
+      - increase_contamination
+      - add_world_scar
+  indecision:
+    effects:
+      - increase_indecision_count
+      - if_indecision_count_gte_3_then_increase_contamination
+  hidden_route:
+    trigger:
+      all_of:
+        - seen_all_claimants
+        - no_stable_commitment
+        - contamination_gte: 3
