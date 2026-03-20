@@ -189,6 +189,25 @@ Required contents:
 - required remediation or human decision if blocked
 - milestone scope confirmation when the report is used to accept a planning milestone
 
+Canonical validation report paths for current milestone chain:
+
+- `schema-generation/validation-reports/hospice-annex-v01-planning-parity-01.md`
+- `schema-generation/validation-reports/hospice-annex-v01-prose-generation-01.md`
+- `schema-generation/validation-reports/hospice-annex-v01-graph-compilation-01.md`
+- `schema-generation/validation-reports/hospice-annex-v01-build-release-01.md`
+
+Milestone advancement keys off:
+
+- the required validation report for the active milestone
+- pass status in that report
+- full presence of the milestone's declared deliverables
+
+Milestone advancement does not key off:
+
+- chat approval
+- partial file presence
+- inferred readiness
+
 ## Generated Prose
 
 ### Scene MDX Frontmatter

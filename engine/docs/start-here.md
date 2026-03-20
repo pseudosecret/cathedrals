@@ -47,11 +47,13 @@ If the user says "continue" or gives a broad execution instruction, start here:
 2. resolve machine-selectable decisions from `engine/data/work-instance.yaml`
 3. treat the invoked directory as the complete project root and do not inspect parent or sibling directories
 4. check the current phase gate in `engine/data/work-instance.yaml`
-5. if the phase is `engine_revision`, mutate only `engine/` files
-6. use `engine/docs/human-decision-contract.md` only if repo policy explicitly requires human override
+5. check `milestone_control.active_milestone_id` and the corresponding `execution_milestones` record
+6. if the phase is `engine_revision`, mutate only `engine/` files even when downstream milestones are canonized
+7. use `engine/docs/human-decision-contract.md` only if repo policy explicitly requires human override
+8. treat milestone auto-advance as validation-gated readiness, not execution permission
+9. update build code only after the phase gate allows downstream work
+10. mirror execution state into Linear only after repo artifacts are current
 7. validate engine-side contract consistency using `engine/docs/validation-runbook.md`
-8. update build code only after the phase gate allows downstream work
-9. mirror execution state into Linear only after repo artifacts are current
 
 ## Do Not Guess
 
@@ -70,7 +72,9 @@ The live operational scope is controlled by `engine/data/work-instance.yaml`.
 Read these sections there instead of relying on stale summaries:
 
 - `execution_phase`
-- `execution_milestone`
+- `milestone_control`
+- `execution_milestones`
+- `milestone_transitions`
 - `generation_resolution_policy`
 - `decision_status`
 - `assumption_registry`

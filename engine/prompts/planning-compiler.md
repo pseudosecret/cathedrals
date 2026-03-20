@@ -10,7 +10,7 @@ You are not solving ambiguity by hallucinating lore in this phase.
 
 You are acting as a planning compiler.
 
-If the current phase gate in `engine/data/work-instance.yaml` is `engine_revision`, do not compile planning artifacts. Stop and report that planning compilation is currently disallowed until repo truth changes phase.
+If the current phase gate in `engine/data/work-instance.yaml` is `engine_revision`, do not compile planning artifacts. Stop and report that planning compilation is currently disallowed until repo truth changes phase, even if later milestones are already canonized.
 
 Your task is to read the repository source-of-truth files, derive a concrete plan for one work instance, and output structured planning documents that can later be used for prose generation, validation, and implementation.
 
@@ -117,7 +117,7 @@ Always follow this order:
 9. Produce an ambiguity report if anything essential is missing
 10. Stop
 
-Do not proceed to prose generation unless explicitly asked in a later phase.
+Do not proceed to prose generation unless the active milestone has advanced lawfully and the current phase gate allows prose writes.
 
 Do not proceed to any planning compilation at all when `execution_phase.current_phase` forbids writes to `schema-generation/`.
 
@@ -395,7 +395,7 @@ For the current milestone:
 - do not increase scene count beyond the milestone package shape without a strong reason
 - do not broaden artifact families casually
 - do not add hidden-route complexity unless explicitly required
-- do not widen into prose or build work if the milestone is planning-only
+- do not widen into prose or build work unless the next milestone is canonized, validation passes, and the phase gate allows downstream execution
 
 ---
 

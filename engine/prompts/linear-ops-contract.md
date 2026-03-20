@@ -49,7 +49,7 @@ Do not use Linear as the only location for:
 For narrative generation, always follow this order:
 
 1. Read canon and data files
-2. Read the current execution milestone in `engine/data/work-instance.yaml`
+2. Read `milestone_control.active_milestone_id` and the matching milestone record in `engine/data/work-instance.yaml`
 3. Compile or update claimant profiles when enabled
 4. Save claimant profiles in the repo
 5. Compile or update arc briefs for the in-scope routes
@@ -58,7 +58,7 @@ For narrative generation, always follow this order:
 8. Compile scene and artifact specs for those arcs
 9. Save scene and artifact specs in the repo
 10. Create or update Linear scene and artifact issues from those specs
-11. Generate prose only when the current milestone or the human requires it
+11. Generate prose only when the active milestone requires it and the phase gate allows it
 12. Validate prose against canon and acceptance tests before closing implementation issues
 13. Save approved prose in the repo
 14. Update Linear issue status and summary
@@ -145,7 +145,7 @@ Each DECISION issue must include:
 - acceptable answer shape
 - deadline or review moment if applicable
 
-Decision issues are for unresolved canon questions, not routine prose revision.
+Decision issues are for unresolved canon questions, milestone-scope changes, or blocked transitions, not routine prose revision.
 
 ## 11. Scene and Arc Summaries
 Arc summaries and scene summaries are derived planning artifacts.

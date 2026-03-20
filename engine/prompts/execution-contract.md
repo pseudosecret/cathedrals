@@ -49,15 +49,17 @@ The agent may not:
 
 1. Read source-of-truth files
 2. Read and obey `execution_phase.current_phase` in `engine/data/work-instance.yaml`
-3. Apply the current execution milestone and resolve machine-selectable decisions from `engine/data/work-instance.yaml`; consult the human-decision contract only for true escalation triggers
+3. Apply `milestone_control.active_milestone_id`, the matching `execution_milestones` record, and machine-selectable decisions from `engine/data/work-instance.yaml`; consult the human-decision contract only for true escalation triggers
 4. If phase is `engine_revision`, mutate only `engine/` and stop before downstream output generation
 5. Compile claimant profiles when claimant generation is enabled and the phase gate allows planning compilation
 6. Produce the planning outputs required by the current milestone in `schema-generation/` only when the phase gate allows it
-7. Stop after planning validation when the current milestone is planning-only
-8. Produce prose and artifacts from specs in `prose/` only when the current milestone or the human requires it and the phase gate allows it
+7. Advance only when the next milestone is canonized, the current milestone validation passes, and all required deliverables exist
+8. Produce prose and artifacts from specs in `prose/` only when the active milestone requires it and the phase gate allows it
 9. Validate outputs against canon and tests
 10. Compile `schema-generation/decision-graph.json` only when graph work is in scope and the phase gate allows it
 11. Render static pages only when build work is in scope and the phase gate allows it
+
+Canonized milestone transitions do not themselves authorize execution if the current phase gate is still more restrictive.
 
 ## 5. Validation Order
 

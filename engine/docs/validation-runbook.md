@@ -66,6 +66,13 @@ Fail if:
 - route packages flatten into cosmetic rewrites of one another
 - unresolved ambiguity is silently patched by invention
 
+Planning milestone advancement is allowed only if:
+
+- `milestone_control.active_milestone_id` is `planning_parity_01`
+- `schema-generation/validation-reports/hospice-annex-v01-planning-parity-01.md` exists
+- that report passes
+- all planning deliverables declared for `planning_parity_01` exist
+
 ## 3. Prose Validation
 
 Pass if each generated scene or artifact:
@@ -90,6 +97,13 @@ Fail if:
 - artifact framing and document body collapse into the same contamination behavior when the object needs separation
 - hidden cosmology is explained directly without permission
 
+Prose milestone advancement is allowed only if:
+
+- `milestone_control.active_milestone_id` is `prose_generation_01`
+- `schema-generation/validation-reports/hospice-annex-v01-prose-generation-01.md` exists
+- that report passes
+- all prose deliverables declared for `prose_generation_01` exist
+
 ## 4. Graph Validation
 
 Pass if:
@@ -107,6 +121,13 @@ Fail if:
 - any edge or node dangles
 - sibling alternatives cannot be reconstructed for the scar view
 
+Graph milestone advancement is allowed only if:
+
+- `milestone_control.active_milestone_id` is `graph_compilation_01`
+- `schema-generation/validation-reports/hospice-annex-v01-graph-compilation-01.md` exists
+- that report passes
+- all graph deliverables declared for `graph_compilation_01` exist
+
 ## 5. Build Validation
 
 Pass if:
@@ -122,6 +143,13 @@ Fail if:
 - important story truth is hardcoded only in `src/`
 - build logic requires live APIs
 - the experience depends on hover or desktop-only affordances
+
+Build milestone completion is allowed only if:
+
+- `milestone_control.active_milestone_id` is `build_release_01`
+- `schema-generation/validation-reports/hospice-annex-v01-build-release-01.md` exists
+- that report passes
+- all build deliverables declared for `build_release_01` exist
 
 ## 6. Tracking Validation
 
@@ -148,3 +176,4 @@ Require human review if:
 - the execution milestone is no longer sufficient
 - a requested downstream write conflicts with the current phase gate
 - validation failures repeat for structural reasons rather than local wording
+- milestone auto-advance semantics appear to bypass phase gating

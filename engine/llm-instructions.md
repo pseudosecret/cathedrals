@@ -188,17 +188,20 @@ For story work, always use this order unless explicitly overridden:
 3. Update or create `engine/data/work-instance.yaml` if needed.
 4. Resolve machine-selectable decisions from `engine/data/work-instance.yaml`; use `engine/docs/human-decision-contract.md` only when policy requires human override.
 5. Obey the current phase gate in `engine/data/work-instance.yaml` before touching any downstream output directory.
-6. Obey the active execution milestone in `engine/data/work-instance.yaml` unless the human explicitly changes scope.
+6. Obey `milestone_control.active_milestone_id` and the matching record in `execution_milestones` unless the human explicitly changes scope.
 7. If the phase is `engine_revision`, mutate only `engine/` files and stop before any `schema-generation/` or `prose/` writes.
 8. Compile claimant profiles into `schema-generation/claimant-profiles/` only when claimant generation is enabled and the phase gate allows it.
 9. Compile planning artifacts into `schema-generation/` only when the phase gate allows it.
 10. Stop for review if critical canon is missing or contradictory.
-11. Stop after planning validation when the current milestone is planning-only.
+11. Advance to the next canonized milestone only after validation passes and all current deliverables exist.
 12. Generate prose only from scene specs or artifact specs when the active milestone requires it and the phase gate allows it.
 13. Validate generated output.
 14. Compile `schema-generation/decision-graph.json` from planning artifacts when graph work is in scope and the phase gate allows it.
 15. Update build code in Astro as needed when build work is in scope and the phase gate allows it.
 16. Update task tracking after repo truth is current.
+
+Milestone auto-advance canonizes readiness for the next stage.
+It does not bypass the current phase gate or authorize downstream writes while the phase remains more restrictive.
 
 Do not jump from broad idea to full prose without scene or artifact specs.
 

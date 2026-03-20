@@ -573,70 +573,224 @@ planning_expectations:
     - "Work-instance ambiguity that would require new ontology invention"
     - "Current execution milestone cannot be completed without relaxing route differentiation rules"
 
-execution_milestone:
-  id: planning_parity_01
-  phase: planning
-  status: active
-  purpose: >
-    Prove that the system can compile a balanced claimant-profile artifact plus three
-    structurally parallel claimant-route planning packages before widening prose or
-    build execution.
-  scope_controller: sole_operational_scope
-  route_families_in_scope:
-    - custodian_route
-    - mourner_route
-    - examiner_route
-  route_families_deferred:
-    - contamination_route
-  route_package_shape:
-    scenes_per_route: 3
-    artifacts_per_route: 1
-    beat_sequence:
-      - invitation_or_plausibility
-      - contradiction_or_artifact_pressure
-      - threshold
-  prose_parity_required: false
-  build_parity_required: false
-  graph_parity_required: false
-  deliverables:
-    - schema-generation/work-briefs/hospice-annex-v01-work-brief.md
-    - schema-generation/claimant-profiles/hospice-annex-v01-claimant-profiles.yaml
-    - schema-generation/arc-briefs/custodian-arc-01.md
-    - schema-generation/arc-briefs/mourner-arc-01.md
-    - schema-generation/arc-briefs/examiner-arc-01.md
-    - schema-generation/scene-specs/custodian-scene-01.md
-    - schema-generation/scene-specs/custodian-scene-02.md
-    - schema-generation/scene-specs/custodian-scene-03.md
-    - schema-generation/scene-specs/mourner-scene-01.md
-    - schema-generation/scene-specs/mourner-scene-02.md
-    - schema-generation/scene-specs/mourner-scene-03.md
-    - schema-generation/scene-specs/examiner-scene-01.md
-    - schema-generation/scene-specs/examiner-scene-02.md
-    - schema-generation/scene-specs/examiner-scene-03.md
-    - schema-generation/artifact-specs/intake-discrepancy-01.md
-    - schema-generation/artifact-specs/visitation-letter-01.md
-    - schema-generation/artifact-specs/threshold-chart-01.md
-    - schema-generation/validation-reports/hospice-annex-v01-planning-parity-01.md
-  scope_constraints:
-    - "Compile claimant profiles before route planning."
-    - "Keep route ids stable and claimant-specific."
-    - "Preserve a three-scene plus one-artifact package for each claimant route."
-    - "This milestone temporarily normalizes route length for parity comparison and does not override the broader route architecture policy."
-    - "Defer contamination-route execution unless a planning dependency makes it unavoidable."
-    - "Do not require prose or Astro build parity for this milestone."
-    - "Fail validation instead of relaxing route differentiation to force parity."
-  route_differentiation_requirements:
-    - "Each route package must differ on ontology."
-    - "Each route package must differ on evidence family."
-    - "Each route package must differ on contradiction shape."
-    - "Each route package must differ on speech texture."
-    - "Each route package must differ on environmental drift."
-    - "Each route package must differ on accusation consequence direction."
-    - "Each route artifact must pressure interpretation differently."
+milestone_control:
+  active_milestone_id: planning_parity_01
+  auto_advance_enabled: true
+  auto_advance_requires_validation_pass: true
+  auto_advance_requires_all_deliverables_present: true
+  phase_transition_mode: milestone_driven
+  manual_phase_edit_required_to_begin_execution: true
   notes:
-    - "Operational scope now lives here rather than in engine/docs/first-spike-freeze.md."
-    - "The current milestone proves planning-system breadth, not reader build completeness."
-    - "Milestone scope does not override the current execution phase write gate."
+    - "Canonized milestone transitions do not authorize execution while execution_phase.current_phase remains engine_revision."
+    - "Automatic advancement canonizes the next lawful milestone only after validation success and deliverable completeness."
+    - "A human repo edit to execution_phase.current_phase is still required before the next stage begins executing."
+
+execution_milestones:
+  planning_parity_01:
+    id: planning_parity_01
+    phase: planning_compilation
+    status: active
+    purpose: >
+      Prove that the system can compile a balanced claimant-profile artifact plus
+      three structurally parallel claimant-route planning packages before widening
+      prose or build execution.
+    scope_controller: sole_operational_scope
+    route_families_in_scope:
+      - custodian_route
+      - mourner_route
+      - examiner_route
+    route_families_deferred:
+      - contamination_route
+    deliverables:
+      - schema-generation/work-briefs/hospice-annex-v01-work-brief.md
+      - schema-generation/claimant-profiles/hospice-annex-v01-claimant-profiles.yaml
+      - schema-generation/arc-briefs/custodian-arc-01.md
+      - schema-generation/arc-briefs/mourner-arc-01.md
+      - schema-generation/arc-briefs/examiner-arc-01.md
+      - schema-generation/scene-specs/custodian-scene-01.md
+      - schema-generation/scene-specs/custodian-scene-02.md
+      - schema-generation/scene-specs/custodian-scene-03.md
+      - schema-generation/scene-specs/mourner-scene-01.md
+      - schema-generation/scene-specs/mourner-scene-02.md
+      - schema-generation/scene-specs/mourner-scene-03.md
+      - schema-generation/scene-specs/examiner-scene-01.md
+      - schema-generation/scene-specs/examiner-scene-02.md
+      - schema-generation/scene-specs/examiner-scene-03.md
+      - schema-generation/artifact-specs/intake-discrepancy-01.md
+      - schema-generation/artifact-specs/visitation-letter-01.md
+      - schema-generation/artifact-specs/threshold-chart-01.md
+      - schema-generation/validation-reports/hospice-annex-v01-planning-parity-01.md
+    validation_report: schema-generation/validation-reports/hospice-annex-v01-planning-parity-01.md
+    acceptance_requirements:
+      - "The planning validation report must exist and pass."
+      - "All declared planning deliverables must exist."
+      - "Route differentiation requirements must pass without relaxed constraints."
+    scope_constraints:
+      - "Compile claimant profiles before route planning."
+      - "Keep route ids stable and claimant-specific."
+      - "Preserve a three-scene plus one-artifact package for each claimant route."
+      - "This milestone temporarily normalizes route length for parity comparison and does not override the broader route architecture policy."
+      - "Defer contamination-route execution unless a planning dependency makes it unavoidable."
+      - "Do not require prose or Astro build parity for this milestone."
+      - "Fail validation instead of relaxing route differentiation to force parity."
+    notes:
+      - "Operational scope now lives here rather than in engine/docs/first-spike-freeze.md."
+      - "This milestone remains the active milestone until planning validation passes and repo truth is explicitly advanced."
+      - "Milestone scope does not override the current execution phase write gate."
+  prose_generation_01:
+    id: prose_generation_01
+    phase: prose_generation
+    status: canonized_pending_activation
+    purpose: >
+      Generate all v0.1 prose outputs from accepted planning artifacts for the three
+      claimant routes and the ending set kept in current work-instance scope.
+    scope_controller: sole_operational_scope
+    route_families_in_scope:
+      - custodian_route
+      - mourner_route
+      - examiner_route
+    route_families_deferred:
+      - contamination_route
+    deliverables:
+      - prose/scenes/custodian-scene-01.mdx
+      - prose/scenes/custodian-scene-02.mdx
+      - prose/scenes/custodian-scene-03.mdx
+      - prose/scenes/mourner-scene-01.mdx
+      - prose/scenes/mourner-scene-02.mdx
+      - prose/scenes/mourner-scene-03.mdx
+      - prose/scenes/examiner-scene-01.mdx
+      - prose/scenes/examiner-scene-02.mdx
+      - prose/scenes/examiner-scene-03.mdx
+      - prose/artifacts/intake-discrepancy-01.mdx
+      - prose/artifacts/visitation-letter-01.mdx
+      - prose/artifacts/threshold-chart-01.mdx
+      - prose/endings/custodian-ending-01.mdx
+      - prose/endings/mourner-ending-01.mdx
+      - prose/endings/examiner-ending-01.mdx
+      - prose/endings/contamination-ending-01.mdx
+      - schema-generation/validation-reports/hospice-annex-v01-prose-generation-01.md
+    validation_report: schema-generation/validation-reports/hospice-annex-v01-prose-generation-01.md
+    acceptance_requirements:
+      - "The prose validation report must exist and pass."
+      - "All declared prose deliverables must exist."
+      - "Outputs must respect claimant separation, contamination policy, route architecture policy, and acceptance tests."
+    scope_constraints:
+      - "Generate prose only from accepted scene specs, artifact specs, and ending definitions."
+      - "Keep contamination route execution deferred unless later milestone truth changes."
+      - "Retraction may appear only within current retraction policy and must not become a standalone route family."
+    notes:
+      - "This milestone covers all v0.1 prose outputs currently canonized in work-instance scope."
+      - "Contamination ending prose remains in scope because contamination_ending is still listed in ending_model.allowed_endings."
+      - "Activation still requires a human repo edit to execution_phase.current_phase."
+  graph_compilation_01:
+    id: graph_compilation_01
+    phase: graph_or_build
+    status: canonized_pending_activation
+    purpose: >
+      Compile the full structural graph and path-trace artifact for the accepted v0.1
+      planning and prose set.
+    scope_controller: sole_operational_scope
+    route_families_in_scope:
+      - custodian_route
+      - mourner_route
+      - examiner_route
+      - contamination_route
+    route_families_deferred: []
+    deliverables:
+      - schema-generation/decision-graph.json
+      - schema-generation/validation-reports/hospice-annex-v01-graph-compilation-01.md
+    validation_report: schema-generation/validation-reports/hospice-annex-v01-graph-compilation-01.md
+    acceptance_requirements:
+      - "The graph validation report must exist and pass."
+      - "The decision graph must be derived from planning artifacts rather than guessed from prose."
+      - "Stable node, edge, ending, sibling-group, and state-effect data must support ending path reconstruction."
+    scope_constraints:
+      - "Compile graph structure from accepted planning outputs."
+      - "Do not treat prose alone as the source of route structure."
+    notes:
+      - "This milestone canonizes graph compilation as a separate stage before build release."
+      - "Activation still requires a human repo edit to execution_phase.current_phase."
+  build_release_01:
+    id: build_release_01
+    phase: graph_or_build
+    status: canonized_pending_activation
+    purpose: >
+      Implement the full polished static Astro reader for the accepted executable
+      slice, including ending path rendering and reader-state behavior.
+    scope_controller: sole_operational_scope
+    route_families_in_scope:
+      - custodian_route
+      - mourner_route
+      - examiner_route
+      - contamination_route
+    route_families_deferred: []
+    deliverables:
+      - src/pages/index.astro
+      - src/pages/scenes/[sceneId].astro
+      - src/pages/artifacts/[artifactId].astro
+      - src/pages/endings/[endingId].astro
+      - src/layouts/ReaderLayout.astro
+      - src/components/ChoiceList.astro
+      - src/components/ArtifactPreview.astro
+      - src/components/DecisionGraph.astro
+      - src/lib/content-loader.ts
+      - src/lib/path-trace.ts
+      - src/lib/reader-state.ts
+      - schema-generation/validation-reports/hospice-annex-v01-build-release-01.md
+    validation_report: schema-generation/validation-reports/hospice-annex-v01-build-release-01.md
+    acceptance_requirements:
+      - "The build validation report must exist and pass."
+      - "The static site must render the accepted executable slice from repo-managed prose and graph outputs."
+      - "Ending path rendering, reader state behavior, mobile readability, theme support, and polished UX must pass validation."
+      - "No important story truth may live only in src."
+    scope_constraints:
+      - "Use graph and prose outputs as canonical runtime inputs."
+      - "Keep the experience static and client-side for reader state."
+      - "Include full site polish rather than a minimal rendering pass."
+    notes:
+      - "This milestone is the final v0.1 build-release target."
+      - "Activation still requires a human repo edit to execution_phase.current_phase."
+
+milestone_transitions:
+  - from: planning_parity_01
+    to: prose_generation_01
+    trigger: planning_validation_pass
+    requires_validation_report: schema-generation/validation-reports/hospice-annex-v01-planning-parity-01.md
+    requires_all_deliverables_present: true
+    set_phase_to: prose_generation
+    transition_authorized_only_when_current_phase_allows_next_stage: true
+    notes:
+      - "Automatic advancement canonizes prose_generation_01 as the next lawful milestone after successful planning validation."
+      - "This transition does not itself authorize execution while execution_phase.current_phase remains engine_revision."
+  - from: prose_generation_01
+    to: graph_compilation_01
+    trigger: prose_validation_pass
+    requires_validation_report: schema-generation/validation-reports/hospice-annex-v01-prose-generation-01.md
+    requires_all_deliverables_present: true
+    set_phase_to: graph_or_build
+    transition_authorized_only_when_current_phase_allows_next_stage: true
+    notes:
+      - "Automatic advancement canonizes graph_compilation_01 as the next lawful milestone after successful prose validation."
+      - "This transition does not itself authorize execution while current phase gating remains more restrictive."
+  - from: graph_compilation_01
+    to: build_release_01
+    trigger: graph_validation_pass
+    requires_validation_report: schema-generation/validation-reports/hospice-annex-v01-graph-compilation-01.md
+    requires_all_deliverables_present: true
+    set_phase_to: graph_or_build
+    transition_authorized_only_when_current_phase_allows_next_stage: true
+    notes:
+      - "Automatic advancement canonizes build_release_01 as the final executable milestone after successful graph validation."
+  - from: build_release_01
+    to: complete
+    trigger: build_validation_pass
+    requires_validation_report: schema-generation/validation-reports/hospice-annex-v01-build-release-01.md
+    requires_all_deliverables_present: true
+    set_phase_to: graph_or_build
+    transition_authorized_only_when_current_phase_allows_next_stage: true
+    notes:
+      - "Successful build validation marks the milestone chain complete."
+      - "Completion does not retroactively authorize any earlier skipped execution."
 
 decision_status:
   resolved_by_policy:

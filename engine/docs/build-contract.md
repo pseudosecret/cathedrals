@@ -181,3 +181,9 @@ Disallowed debug controls:
 ## Build Completion Condition
 
 Build work is not complete until the site can render the current accepted executable slice from repo-managed prose and graph files without hand-authored story structure in `src/`.
+
+For the current milestone chain, build milestone acceptance also requires:
+
+- `schema-generation/validation-reports/hospice-annex-v01-build-release-01.md`
+- all build deliverables declared in `execution_milestones.build_release_01`
+- milestone readiness derived from validation and declared deliverables rather than chat-only approval

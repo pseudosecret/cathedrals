@@ -48,6 +48,15 @@ If `execution_phase.current_phase` is `engine_revision`:
 
 Only proceed into downstream phases after repo truth changes the phase gate explicitly.
 
+Also read:
+
+- `milestone_control.active_milestone_id`
+- the matching milestone entry in `execution_milestones`
+- any matching transition rule in `milestone_transitions`
+
+Milestone canonization defines what the next lawful stage is after validation.
+It does not by itself authorize execution while the current phase gate remains more restrictive.
+
 ## 3. Machine Resolution Pass
 
 Before asking anything, exhaust repo truth first.
@@ -87,16 +96,17 @@ Generate prose only from accepted planning artifacts.
 
 Do this only when the current phase gate allows prose generation.
 
-If the current execution milestone is planning-only:
+If the active milestone is not a prose milestone:
 
-- stop after planning validation
-- do not widen into prose by default
+- stop after completing and validating the current milestone
+- advance only if the next milestone is canonized and validation passes
 
-If the human explicitly advances into prose generation:
+If the next milestone is canonized but the current phase remains `engine_revision` or `planning_compilation`:
 
-- generate only the prose outputs required by the updated milestone
+- do not begin prose generation
+- wait for repo truth to explicitly change `execution_phase.current_phase`
 
-Do not generate mourner, examiner, or contamination route prose unless the human expands scope.
+Generate only the prose outputs declared by the active prose milestone.
 
 ## 6. Validation
 
@@ -116,6 +126,11 @@ Do not silently carry known failures forward.
 Compile `schema-generation/decision-graph.json` from planning artifacts, not from prose.
 
 Do this only when the current phase gate allows graph compilation.
+
+If graph compilation is the canonized next milestone but the current phase gate still forbids it:
+
+- treat the milestone as ready but not yet executable
+- do not write graph outputs until repo truth changes phase
 
 The graph must be able to represent:
 
@@ -161,6 +176,7 @@ Unless the human explicitly changes the milestone in repo truth:
 - stay on `hospice-annex-v01`
 - treat `engine/data/work-instance.yaml` as the only operational scope controller
 - honor `execution_phase.current_phase` before touching any downstream output directory
+- treat `milestone_control` and `execution_milestones` as the canonical progression chain
 - while phase is `engine_revision`, mutate only `engine/`
 - resolve patient identity, metaphysical visibility, contamination scaling, route-length variation, and retraction scope from work-instance policy rather than operator preference
 - compile balanced claimant profiles before route planning
