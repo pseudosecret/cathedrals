@@ -7,8 +7,9 @@ This file defines the compiled claimant-profile artifact for a specific work ins
 It is not new canon.
 It is a structural artifact derived from:
 
-- `engine/data/claimants.yaml`
 - `engine/data/work-instance.yaml`
+- the file named by `claimants.roster_source_path` in `engine/data/work-instance.yaml`, if present
+- otherwise `engine/data/claimants.yaml`
 - the work seed and balancing rules
 
 Use this file to preserve dynamic claimant instantiation without allowing claimant identity to drift into new archetypes.
@@ -24,9 +25,10 @@ Write compiled claimant profiles to:
 ```yaml
 version: 0.1
 work_id: WORK_ID_HERE
+roster_source_path: CLAIMANT_ROSTER_PATH_HERE
 generation:
-  mode: instantiation_only
-  semantic_drift: expression_only
+  mode: mixed_authoring
+  semantic_drift: mode_governed
   balancing_mode: hybrid
   variation_level: high
   seed: SEED_HERE
@@ -34,6 +36,8 @@ generation:
     - CLAIMANT_1
     - CLAIMANT_2
     - CLAIMANT_3
+    - CLAIMANT_4
+    - CLAIMANT_5
   hard_constraint_summary:
     passed: true
     notes:
@@ -47,13 +51,28 @@ generation:
       - AXIS_3
 profiles:
   - claimant_id: CLAIMANT_1
+    definition_mode: locked | bounded_variation | slot_generated
     route_identity: ROUTE_ID_HERE
+    source_summary:
+      surface_persona: SURFACE_PERSONA_SUMMARY_HERE
+      claimant_law_basis: WORK_SPECIFIC_ROSTER | GLOBAL_LIBRARY
     fixed_archetype_summary:
       genre_ontology: ONTOLOGY_HERE
       role_pressure: ROLE_PRESSURE_HERE
       primary_truth_style_family: TRUTH_STYLE_HERE
       primary_evidence_family: EVIDENCE_FAMILY_HERE
       voice_family: VOICE_FAMILY_HERE
+    variation_policy_summary:
+      selection_rule: SELECTION_RULE_HERE
+      allowed_expression_fields:
+        - FIELD_1
+        - FIELD_2
+    slot_spec_summary:
+      used: true | false
+      contrast_targets:
+        - CLAIMANT_ID_HERE
+      grounding_constraints:
+        - CONSTRAINT_1
     selected_expression:
       primary_evidence_subtype: SUBTYPE_HERE
       secondary_evidence_affinities:
@@ -100,9 +119,11 @@ profiles:
 
 ## Rules
 
-- Preserve canonical claimant identity.
-- Drift only in expression.
-- Never change ontology, role pressure, route identity, or forbidden traits.
+- Preserve canonical claimant identity according to the claimant's `definition_mode`.
+- Locked claimants must reproduce authored source exactly.
+- Bounded-variation claimants may drift only in fields explicitly allowed by their `variation_policy`.
+- Slot-generated claimants must be derived deterministically from `slot_spec` plus seed and the other active claimants.
+- Never change route identity or forbidden traits without explicit source-truth revision.
 - Reject any active claimant set that violates hard no-cross constraints.
 - Score only valid claimant sets.
 - Prefer the highest-separated valid set, not the most novel set.
@@ -111,7 +132,9 @@ profiles:
 ## What This Artifact Must Make Clear
 
 - what is fixed by archetype law
+- which authoring mode governed each claimant
 - what was selected as expressive drift
+- what was generated from slot_spec, if applicable
 - what text-surface contamination behavior was selected for this work instance
 - why the set passed balancing
 - how each claimant remains different from the others

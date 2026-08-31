@@ -46,8 +46,10 @@ A route passes only if:
 
 A claimant-profile set passes only if:
 
-- each active claimant preserves its archetype identity
-- expression drifts without changing ontology, role pressure, or forbidden traits
+- each active claimant preserves its authored identity according to its `definition_mode`
+- locked claimants reproduce their authored source exactly
+- bounded-variation claimants drift only within their `variation_policy`
+- slot-generated claimants obey their `slot_spec` and grounding constraints deterministically
 - every active claimant pair remains distinct on the hard separation axes
 - the winning set reads as meaningfully different in prose pressure, not just in metadata
 - the same seed reproduces the same compiled claimant-profile artifact
@@ -96,5 +98,10 @@ Reject the build if:
 - claimant-focused prose stays sentence-neutral despite declared contamination pressure
 - default scene pages expose route/build/debug metadata as part of the primary reading surface
 - choice actions are presented so ambiguously that adjacent options read as one cluster
+- a long scene forces the reader to scroll back upward to a side rail just to reach the primary next action
 - artifact navigation implies the wrong continuation path or misroutes the reader between scenes
 - endings mainly repeat evidence instead of converting it into consequence
+- the build looks like a generic template with story text dropped into it
+- page chrome, decorative effects, or component clutter compete with the prose instead of framing it
+- route presentation flattens claimant pressure into one neutral visual shell
+- endings feel like ordinary recap pages instead of consequence surfaces

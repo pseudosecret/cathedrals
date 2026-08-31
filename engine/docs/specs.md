@@ -32,6 +32,8 @@ Normal reader-facing pages must not expose build patterning, route metadata, gra
 
 Scene pages should read as authored pages, not as tool output.
 By default, route identifiers, beat names, claimant labels, and similar process metadata belong to implementation or debug layers, not the normal reader view.
+Page composition should feel authored, with a clear focal hierarchy, visible breathing room, and enough restraint that the prose can dominate without the interface turning bland.
+A merely functional reader shell is insufficient if it looks like a generic starter template with story text dropped into it.
 
 ## 5. Navigation Rules
 
@@ -41,6 +43,8 @@ By default, route identifiers, beat names, claimant labels, and similar process 
 - Choices must be visually separate enough that each option reads as its own action.
 - The default interaction pattern should make each playable option read like a full button or equivalent strong action surface, not a cluster of adjacent links.
 - A consistent back action should be present in normal reading flow.
+- High-pressure choices should feel consequential through spacing, hierarchy, and copy treatment rather than decorative noise alone.
+- After a long scene, the reader should meet the primary decision block at the bottom of the narrative flow rather than needing to scroll back to a sidebar action area.
 
 ## 6. State Representation
 
@@ -64,6 +68,7 @@ Artifacts are not decorative. Each artifact must do at least one of:
 - pressure accusation or indecision
 
 Default artifact behavior should be inline and expandable inside the reading flow when the artifact does not divert the reader onto a different track.
+On wide scene layouts, supporting artifact context may remain visible in a right-side rail, but that rail is secondary to the prose column and must not displace the primary decision block.
 
 The default artifact pattern is:
 
@@ -82,6 +87,7 @@ Standalone artifact pages remain lawful when the artifact truly needs a separate
 - Any visual distortion must not destroy legibility.
 - Important clues cannot depend on sound, animation, or hidden gestures.
 - Theme switching may be visually minimal, but it should use stable, legible day/night iconography rather than ad hoc instructional wording.
+- Typography, spacing, and color must still retain character in both themes rather than collapsing into a neutral utility look.
 
 ## 10. Hidden Route Rules
 
@@ -95,6 +101,8 @@ The hidden route is unlocked by thematically meaningful reader behavior, not arb
 - No UI novelty that weakens the reading experience
 - No reader-facing labels that make the work sound like a build artifact
 - No default page chrome that competes with the prose more than the choices do
+- No generic SaaS, dashboard, or marketing-page visual language pasted over the story
+- No decorative pileup of cards, pills, frosted panels, or gradients that flatten the work into trend-chasing sameness
 
 ## 12. Ending Path View
 
@@ -111,5 +119,6 @@ Requirements:
 - The feature must use client-side state only to determine the taken path.
 - The feature must not require server-side processing or live API calls.
 - The default visual treatment should be static, interesting, and diagram-like, but must not depend on Mermaid specifically.
+- The ending page should feel ceremonial and consequential rather than like a neutral recap screen.
 - On mobile, the view may collapse into a stacked or simplified path-trace layout.
 - Debug detail may be hidden behind a subtle debug affordance in production.

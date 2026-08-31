@@ -55,7 +55,8 @@ Also read:
 - any matching transition rule in `milestone_transitions`
 
 Milestone canonization defines what the next lawful stage is after validation.
-It does not by itself authorize execution while the current phase gate remains more restrictive.
+If the current phase is `engine_revision`, it does not authorize exit without a human repo edit.
+If the current phase is already downstream and transition criteria pass, the agent should update repo truth and continue automatically.
 
 ## 3. Machine Resolution Pass
 
@@ -82,9 +83,9 @@ Required outputs:
 
 - one work brief
 - one claimant-profile artifact when claimant generation is enabled
-- one arc brief per claimant route in scope
-- three scene specs per claimant route in scope
-- one artifact spec per claimant route in scope
+- one arc brief per in-scope claimant or route family that requires planning
+- scene specs in the count required by the active milestone and branch topology
+- artifact specs in the count required by the active milestone
 - one validation report when parity checks are part of the current milestone
 
 Use the output paths and schema rules in `engine/docs/content-schema-contract.md`.
@@ -101,10 +102,17 @@ If the active milestone is not a prose milestone:
 - stop after completing and validating the current milestone
 - advance only if the next milestone is canonized and validation passes
 
-If the next milestone is canonized but the current phase remains `engine_revision` or `planning_compilation`:
+If the next milestone is canonized and the current phase is `engine_revision`:
 
 - do not begin prose generation
-- wait for repo truth to explicitly change `execution_phase.current_phase`
+- wait for a human repo truth change to `execution_phase.current_phase`
+
+If the next milestone is canonized and the current phase is already downstream:
+
+- update `milestone_control.active_milestone_id`
+- update `execution_phase.current_phase` to the transition target
+- append the transition to `execution_history`
+- continue automatically
 
 Generate only the prose outputs declared by the active prose milestone.
 
@@ -127,10 +135,16 @@ Compile `schema-generation/decision-graph.json` from planning artifacts, not fro
 
 Do this only when the current phase gate allows graph compilation.
 
-If graph compilation is the canonized next milestone but the current phase gate still forbids it:
+If graph compilation is the canonized next milestone and the current phase is `engine_revision`:
 
-- treat the milestone as ready but not yet executable
+- treat the milestone as blocked pending human phase change
 - do not write graph outputs until repo truth changes phase
+
+If graph compilation is the canonized next milestone and the current phase is already downstream:
+
+- update repo truth to the graph milestone and `graph_or_build`
+- append the transition to `execution_history`
+- proceed
 
 The graph must be able to represent:
 
@@ -152,6 +166,9 @@ The build layer must:
 - read graph structure from `schema-generation/decision-graph.json`
 - keep state client-side only
 - keep the reader experience static
+- include an explicit aesthetic pass for hierarchy, typography, spacing, route distinction, and ending-page consequence
+- confirm that long scene pages keep the primary decision block beneath the prose while any artifact rail remains secondary
+- be visually inspected in a browser or screenshots before it is declared done
 
 Use `engine/docs/build-contract.md` as the source for route structure, reader-state shape, and debug gating.
 
@@ -180,6 +197,6 @@ Unless the human explicitly changes the milestone in repo truth:
 - while phase is `engine_revision`, mutate only `engine/`
 - resolve patient identity, metaphysical visibility, contamination scaling, route-length variation, and retraction scope from work-instance policy rather than operator preference
 - compile balanced claimant profiles before route planning
-- keep route packages at three scenes plus one artifact each for `custodian_route`, `mourner_route`, and `examiner_route`
+- derive claimant route packages from the work-specific roster and the active milestone instead of assuming three-scene parity
 - keep contamination deferred as a planning-side dependency only
 - keep retraction preserved in canon but outside the current milestone outputs

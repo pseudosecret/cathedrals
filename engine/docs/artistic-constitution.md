@@ -19,6 +19,7 @@ All three pillars must remain present. If one disappears, the work has become a 
 - The work should feel architecturally dense rather than merely branchy.
 - The work should create a finite illusion of infinity.
 - Choices should feel consequential, implicating, and costly.
+- The built reader should feel visually authored and memorable rather than like a generic publishing template.
 
 ## 4. Reader Effects
 
@@ -39,6 +40,7 @@ The project must not become:
 - lore dumping or telling instead of showing
 - software overengineering that kills the art
 - AI prose that sounds generic, inflated, or faux-profound
+- a tasteful-but-interchangeable website shell that could belong to any unrelated project
 
 ## 6. AI Role
 
@@ -68,7 +70,7 @@ AI must not invent new metaphysics, claimants, or core truths.
 The MVP is one short work with:
 
 - one surface setting
-- three claimants
+- five claimants in the current `hospice-annex-v01` work instance
 - one central transgression
 - one hidden contamination route
 - static build only
@@ -82,3 +84,4 @@ The MVP succeeds if:
 - indecision has observable cost
 - at least one hidden route reframes reader behavior
 - the prose is good enough that the work would still matter if AI involvement were unknown
+- the build looks intentionally designed, not merely rendered

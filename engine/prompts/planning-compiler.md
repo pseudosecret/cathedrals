@@ -41,6 +41,9 @@ Always read and obey these files first, if present:
 - `engine/docs/artistic-constitution.md`
 - `engine/docs/specs.md`
 - `engine/docs/repo-contract.md`
+- `engine/data/work-instance.yaml`
+- the file named by `claimants.roster_source_path` in `engine/data/work-instance.yaml`, if present
+- `engine/docs/branching-architecture-contract.md`
 - `engine/docs/human-decision-contract.md` as escalation-only guidance
 - `engine/docs/content-schema-contract.md`
 - `engine/docs/validation-runbook.md`
@@ -51,7 +54,6 @@ Always read and obey these files first, if present:
 - `engine/data/state-model.yaml`
 - `engine/data/claimants.yaml`
 - `engine/data/threshold-geomancy.yaml`
-- `engine/data/work-instance.yaml`
 - `engine/prompts/execution-contract.md`
 - `engine/prompts/linear-ops-contract.md`
 - `engine/llm-instructions.md`
@@ -109,7 +111,7 @@ Always follow this order:
 1. Read all source-of-truth files
 2. Extract work-instance constraints
 3. Compile a work brief
-4. Compile claimant profiles for the active claimant set when claimant generation is enabled
+4. Compile claimant profiles for the active claimant set when claimant generation is enabled, honoring each claimant's `definition_mode`
 5. Compile arc briefs
 6. Compile scene specs for each arc
 7. Compile artifact specs where required
@@ -118,6 +120,8 @@ Always follow this order:
 10. Stop
 
 Do not proceed to prose generation unless the active milestone has advanced lawfully and the current phase gate allows prose writes.
+If the current phase is `engine_revision`, the agent may not leave that phase without a human repo edit.
+If the current phase is already downstream, successful validation authorizes the agent to update repo truth and continue automatically.
 
 Do not proceed to any planning compilation at all when `execution_phase.current_phase` forbids writes to `schema-generation/`.
 
@@ -135,6 +139,9 @@ The work brief file in `schema-generation/work-briefs/` must contain:
 - apparent reader role
 - actual reader role
 - active claimants
+- introduction sequence summary
+- opening choice hub summary
+- branch topology summary
 - primary route families
 - special route families
 - artifact families
@@ -173,6 +180,11 @@ Each arc brief must include:
 - `artifact_intersections`
 - `state_pressures`
 - `decision_points`
+- `branch_role`
+- `opening_hub_relation`
+- `reconvergence_targets`
+- `major_decisions`
+- `redirect_outcomes`
 - `threshold_geomancy_usage`
 - `validation_notes`
 
@@ -220,7 +232,7 @@ The compiler must:
 - stop with an ambiguity or validation report if no valid set survives
 
 Do not treat claimant profiles as new canon.
-They are compiled structural artifacts derived from claimant law and work-instance settings.
+They are compiled structural artifacts derived from claimant law, work-instance settings, and any work-specific claimant roster selected by `claimants.roster_source_path`.
 
 ---
 
@@ -237,6 +249,10 @@ Each scene spec must include:
 - `scene_type`
 - `beat_role`
 - `claimant` if applicable
+- `reader_perspective_mode`
+- `branch_depth`
+- `branch_role`
+- `reconvergence_behavior`
 - `current_state_inputs`
 - `threshold_figure_current`
 - `threshold_figure_next` if applicable
@@ -248,6 +264,11 @@ Each scene spec must include:
 - `artifact_reference` if applicable
 - `environmental_drift`
 - `decision_options`
+- `live_option_count`
+- `decision_group_id` when the scene presents choices
+- `major_decision` when applicable
+- `hesitation_surface`
+- `reconsideration_outcomes`
 - `state_delta`
 - `termination_risk`
 - `validation_checks`
@@ -342,6 +363,10 @@ This means:
 - every ending must have a stable `ending_id`
 - every route must be graph-exportable
 - every scene with choices must identify sibling alternatives clearly
+- every choice set must preserve live-option cardinality
+- the opening choice hub must be exportable as one exact three-option sibling group
+- reconvergent nodes must preserve multiple inbound edges explicitly
+- redirective endings must identify their new-beginning target explicitly
 - every edge that changes canonical reader state should preserve `state_effects`
 
 Remember:
@@ -368,8 +393,12 @@ Planning must assume:
 - prose and artifact files should remain readable and editable as `.mdx`
 - normal reader pages should not expose build/debug/process framing
 - scene reading flow defaults to title, prose, then choices
+- the work begins with a reader-perspective introduction before the first choice hub
+- the first hub presents exactly three options
 - choices should later render as distinct full-button actions or equivalent clear action surfaces
-- a consistent back action should be supportable in normal reading flow
+- any meaningful choice must present at least two live options, with four as soft max and five as hard max
+- major commitments should support a hesitation/reconsideration surface before final commit
+- if the top navigation control resets progress rather than restoring prior page state, it must be labeled `start_over`
 - inline expandable artifacts are the default unless the artifact truly diverts route context
 - ending path views should use opened/closed language in reader-facing mode and should not depend on Mermaid specifically
 
@@ -392,9 +421,9 @@ If `engine/data/work-instance.yaml` defines an execution milestone, obey it stri
 For the current milestone:
 - do not expand route count beyond the listed in-scope route families
 - do not add extra claimants
-- do not increase scene count beyond the milestone package shape without a strong reason
 - do not broaden artifact families casually
 - do not add hidden-route complexity unless explicitly required
+- do not default back to the earlier three-scene claimant parity package when the branching architecture policy requires a deeper introduction-and-tree model
 - do not widen into prose or build work unless the next milestone is canonized, validation passes, and the phase gate allows downstream execution
 
 ---
@@ -409,6 +438,11 @@ Before finalizing planning outputs, check:
 - Do claimant routes remain distinct?
 - Does each artifact matter?
 - Are decision points meaningful?
+- Does the introduction sequence earn the first hub dramatically?
+- Does the opening hub present exactly three lawful live options?
+- Does every meaningful decision obey the 2-to-5 live-option rule?
+- Do major commitments include hesitation/reconsideration surfaces?
+- Does reconvergence preserve branch consequence instead of erasing it?
 - Are early endings legal under current rules?
 - Is threshold geomancy used lawfully?
 - Does the plan satisfy the defined execution milestone cleanly?
@@ -468,13 +502,14 @@ Good planning reads like a sharp blueprint, not a trailer voiceover.
 
 If the work-instance defines an active execution milestone, prioritize it.
 
-For the current default milestone, assume the goal is to produce:
-- one work brief
-- one claimant-profile artifact
-- three claimant arc briefs
-- nine scene specs
-- three artifact specs
-- one cross-route planning validation report
+For a future branching-planning milestone, do not assume the older nine-scene parity package by default.
+Derive the required planning artifact count from the active milestone plus:
+
+- the introduction sequence requirements
+- the opening hub requirement
+- the branch-topology requirement
+- the decision-cardinality requirement
+- the hesitation-surface requirement
 
 Do not widen into prose, graph, or build work unless explicitly asked.
 

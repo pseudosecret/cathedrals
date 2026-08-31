@@ -14,6 +14,23 @@ This document defines how Astro should consume repo truth and render the current
 - graph-driven ending-path behavior
 - no reader-visible build or debug framing in default mode
 
+## Aesthetic Quality Bar
+
+The build must not stop at functional competence.
+It should look intentionally art-directed enough that a human reader feels the work has a visual point of view.
+
+Requirements:
+
+- favor one or two strong visual ideas per page type over many weak decorative gestures
+- make hierarchy obvious at a glance: title, prose body, artifacts, and choices should each have a distinct visual role
+- keep the prose as the dominant reading surface while letting surrounding chrome frame pressure and consequence
+- use typography with visible character and rhythm rather than default utilitarian stacks unless canon justifies plainness
+- use color, texture, and contrast deliberately; avoid muddy low-contrast haze and avoid generic gradient wallpaper
+- let route-sensitive accents or atmosphere sharpen claimant pressure without turning every route into a separate app
+- prefer restraint over clutter; avoid gratuitous badges, pills, glass panels, or card piles that cheapen the reading surface
+- treat ending pages as ceremonial consequence surfaces, not generic summary screens
+- if the build is technically correct but visually generic, continue iterating
+
 ## Canonical Inputs
 
 The build layer reads from:
@@ -43,10 +60,18 @@ Do not embed story text directly in routes when it belongs in `prose/`.
 Default reading flow should privilege:
 
 1. title
-2. prose
-3. choices
+2. reader-perspective introduction
+3. prose
+4. choices
 
 Artifact routes remain lawful, but the default artifact behavior should be inline expansion inside scene flow unless the artifact diverts to a distinct track or requires a separate reading surface.
+
+The executable structure should assume:
+
+- a 3 to 5 page introduction before the first live choice hub
+- an exact three-option first hub
+- post-hub branch splintering and selective reconvergence
+- variable terminal depth rather than uniform shallow claimant ladders
 
 ## Reader State
 
@@ -82,10 +107,29 @@ Playable choices must render as clearly separate action surfaces.
 Requirements:
 
 - default scene choices render as full-width buttons, stacked buttons, or another equally unambiguous action layout
+- every meaningful decision presents at least two live options
+- the opening hub presents exactly three live options
+- four live options is the soft maximum and five is the hard maximum
 - playable choices must not read as a single row of adjacent inline links
+- a single continuation button must not be framed as a decision
 - closed or reserved sibling options must not be rendered as equivalent live choices during normal scene reading
-- a consistent back action must be available in normal reader flow
+- if the top control resets progress instead of restoring prior page state, label it `start_over`
+- do not present fake back-navigation language when the system is actually resetting
 - any reader-facing choice labels should remain short and legible on mobile
+- major decisions should support a hesitation/reconsideration surface before final commitment when the graph marks them as such
+- on wide scene layouts, the primary decision block should sit below the scene prose rather than being stranded in a distant side rail
+- the reader should not have to scroll back upward through a long scene merely to reach the primary next action after finishing the current scene text
+
+## Hesitation and Reflection Rendering
+
+Major decision surfaces may include a brief reflective interval before commitment.
+
+Requirements:
+
+- hesitation copy should let the reader feel dread, anxiety, or projected consequence
+- the hesitation surface must still move story state or path pressure
+- hesitation and reconsideration must remain distinct from global reset
+- if hesitation opens a mutated path, that path must come from graph/state data rather than ad hoc runtime logic
 
 ## Artifact Rendering
 
@@ -98,6 +142,7 @@ Requirements:
 - activating the artifact should expand it in place into a larger readable container by default
 - artifact navigation must not strand the reader on the wrong scene or present misleading return destinations
 - standalone artifact pages are reserved for artifacts that genuinely divert the route or require a separate reading surface
+- on wide layouts, persistent artifact context may live in a secondary right rail so long as the prose remains centered and the decision block stays in the primary reading column
 
 ## Ending Path Rendering
 
@@ -111,6 +156,7 @@ Rendering rules:
 
 - show the taken path as the primary spine
 - show closed sibling options at each taken decision point
+- preserve reconvergence legibility when two earlier branches lead into the same later scene
 - in normal mode, use reader-facing opened/closed language and avoid implementation labels such as `decision scar`, `mode`, or similar debug framing
 - in debug mode, destination scene or ending titles may also appear
 - the default visual treatment should be static, diagram-like, and visually authored without depending on Mermaid
@@ -128,6 +174,7 @@ Reserved edges:
 - are not linked as playable destinations unless the current milestone makes them playable
 - may be labeled for debug or reflection purposes
 - may remain internally named `reserved` for structural export, but normal reader language should prefer `closed`
+- do not satisfy the minimum live-option rule for a decision set
 
 ## Graph-Driven State Effects
 
@@ -162,6 +209,7 @@ The first implementation must satisfy:
 - light mode and dark mode from the start
 - sufficient contrast in both themes
 - a minimal visual theme control that uses stable day/night iconography rather than text-only toggle phrasing
+- enough retained visual identity in both themes that neither mode feels like an unstyled fallback
 
 ## Debug Gating
 
@@ -181,9 +229,10 @@ Disallowed debug controls:
 ## Build Completion Condition
 
 Build work is not complete until the site can render the current accepted executable slice from repo-managed prose and graph files without hand-authored story structure in `src/`.
+It is also not complete if the result remains visually interchangeable with a generic content template.
 
-For the current milestone chain, build milestone acceptance also requires:
+For the current branching-focused milestone chain, build milestone acceptance also requires:
 
-- `schema-generation/validation-reports/hospice-annex-v01-build-release-01.md`
-- all build deliverables declared in `execution_milestones.build_release_01`
+- `schema-generation/validation-reports/hospice-annex-v01-branching-build-02.md`
+- all build deliverables declared in `execution_milestones.branching_build_02`
 - milestone readiness derived from validation and declared deliverables rather than chat-only approval

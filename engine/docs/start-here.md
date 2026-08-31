@@ -16,13 +16,15 @@ Read these files in order:
 3. `engine/docs/specs.md`
 4. `engine/docs/repo-contract.md`
 5. `engine/data/work-instance.yaml`
-6. `engine/docs/human-decision-contract.md`
-7. `engine/docs/content-schema-contract.md`
-8. `engine/docs/validation-runbook.md`
-9. `engine/docs/build-contract.md`
-10. `engine/prompts/execution-contract.md`
-11. `engine/prompts/planning-compiler.md`
-12. `engine/prompts/linear-ops-contract.md`
+6. `engine/data/claimant-rosters/hospice-annex-v01.yaml`
+7. `engine/docs/branching-architecture-contract.md`
+8. `engine/docs/human-decision-contract.md`
+9. `engine/docs/content-schema-contract.md`
+10. `engine/docs/validation-runbook.md`
+11. `engine/docs/build-contract.md`
+12. `engine/prompts/execution-contract.md`
+13. `engine/prompts/planning-compiler.md`
+14. `engine/prompts/linear-ops-contract.md`
 
 If any lower file conflicts with a higher file, the higher file wins.
 
@@ -50,10 +52,11 @@ If the user says "continue" or gives a broad execution instruction, start here:
 5. check `milestone_control.active_milestone_id` and the corresponding `execution_milestones` record
 6. if the phase is `engine_revision`, mutate only `engine/` files even when downstream milestones are canonized
 7. use `engine/docs/human-decision-contract.md` only if repo policy explicitly requires human override
-8. treat milestone auto-advance as validation-gated readiness, not execution permission
-9. update build code only after the phase gate allows downstream work
-10. mirror execution state into Linear only after repo artifacts are current
-7. validate engine-side contract consistency using `engine/docs/validation-runbook.md`
+8. if phase is `engine_revision`, treat milestone auto-advance as blocked pending human repo truth change
+9. if phase is already downstream and transition criteria pass, update repo truth and continue automatically
+10. update build code only after the phase gate allows downstream work
+11. mirror execution state into Linear only after repo artifacts are current
+12. validate engine-side contract consistency using `engine/docs/validation-runbook.md`
 
 ## Do Not Guess
 
@@ -75,6 +78,7 @@ Read these sections there instead of relying on stale summaries:
 - `milestone_control`
 - `execution_milestones`
 - `milestone_transitions`
+- `branching_experience_model`
 - `generation_resolution_policy`
 - `decision_status`
 - `assumption_registry`
@@ -82,5 +86,5 @@ Read these sections there instead of relying on stale summaries:
 Project-wide guardrails remain:
 
 - work id is `hospice-annex-v01`
-- current claimant roster is `custodian`, `mourner`, `examiner`
+- current claimant roster is `operative`, `haunter`, `curator`, `witness`, `contrast_slot`
 - parent/sibling directory inspection remains forbidden unless the human explicitly authorizes it

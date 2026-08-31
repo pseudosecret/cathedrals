@@ -7,6 +7,9 @@ The source of truth is:
 - engine/docs/artistic-constitution.md
 - engine/docs/specs.md
 - engine/docs/repo-contract.md
+- engine/data/work-instance.yaml if present
+- the file named by `claimants.roster_source_path` in `engine/data/work-instance.yaml`, if present
+- engine/docs/branching-architecture-contract.md if present
 - engine/docs/human-decision-contract.md if present, as escalation-only guidance
 - engine/docs/content-schema-contract.md if present
 - engine/docs/build-contract.md if present
@@ -18,7 +21,6 @@ The source of truth is:
 - engine/data/state-model.yaml
 - engine/data/claimants.yaml
 - engine/data/threshold-geomancy.yaml if present
-- engine/data/work-instance.yaml if present
 
 ## 2. Allowed Actions
 
@@ -53,13 +55,14 @@ The agent may not:
 4. If phase is `engine_revision`, mutate only `engine/` and stop before downstream output generation
 5. Compile claimant profiles when claimant generation is enabled and the phase gate allows planning compilation
 6. Produce the planning outputs required by the current milestone in `schema-generation/` only when the phase gate allows it
-7. Advance only when the next milestone is canonized, the current milestone validation passes, and all required deliverables exist
+7. Advance only when the next milestone is canonized, the current milestone validation passes, all required deliverables exist, and no stop condition is active
 8. Produce prose and artifacts from specs in `prose/` only when the active milestone requires it and the phase gate allows it
 9. Validate outputs against canon and tests
 10. Compile `schema-generation/decision-graph.json` only when graph work is in scope and the phase gate allows it
 11. Render static pages only when build work is in scope and the phase gate allows it
 
-Canonized milestone transitions do not themselves authorize execution if the current phase gate is still more restrictive.
+If the current phase is `engine_revision`, canonized milestone transitions do not authorize exit without a human repo edit.
+If the current phase is already downstream, passed validation authorizes the agent to update `milestone_control.active_milestone_id`, `execution_phase.current_phase`, and `execution_history`, then continue automatically.
 
 ## 5. Validation Order
 
@@ -67,12 +70,18 @@ Validate:
 
 - claimant-profile integrity
 - claimant-profile separation
+- introduction sequence integrity
+- opening hub integrity
+- decision cardinality
+- hesitation surface integrity
 - ontology consistency
 - claimant consistency
 - scene function
 - style compliance
 - mobile readability assumptions
 - route differentiation
+- build-surface hierarchy and restraint when build work is in scope
+- route-sensitive visual differentiation when build work is in scope
 
 ## 6. Stop Conditions
 
@@ -83,6 +92,7 @@ The agent must stop and flag for human review if:
 - a route collapses into cosmetic variation
 - no valid claimant-profile set satisfies both hard constraints and expressive separation
 - the build requires a new world rule not already present
+- the build remains technically functional but so visually generic that it weakens the art
 - the requested action would violate the current phase gate
 
 ## 7. Graph and Path Trace Implementation
@@ -91,6 +101,8 @@ The agent must stop and flag for human review if:
 - every branch or decision option must have a stable edge_id
 - every ending must have a stable ending_id
 - every compiled route must be graph-exportable into decision-graph.json
+- every meaningful decision set must preserve 2 to 5 live options
+- the opening hub must preserve exactly 3 live options
 - ending-page decision visuals must be derivable from the full graph plus the reader's recorded path
 - the rendered ending-page view must show the taken path as the primary spine and rejected sibling options at each decision point
 - in debug mode, rejected sibling options may also display their destination scene titles

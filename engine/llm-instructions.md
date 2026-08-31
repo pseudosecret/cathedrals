@@ -76,13 +76,14 @@ When determining what is true, use this order:
 10. `engine/data/claimants.yaml`
 11. `engine/data/threshold-geomancy.yaml` if present
 12. `engine/data/work-instance.yaml` if present
-13. `engine/docs/human-decision-contract.md` if present, for escalation-only guidance
-14. `engine/docs/content-schema-contract.md` if present
-15. `engine/docs/build-contract.md` if present
-16. `engine/docs/validation-runbook.md` if present
-17. files in `schema-generation/`
-18. files in `prose/`
-19. task trackers such as Linear
+13. `engine/docs/branching-architecture-contract.md` if present
+14. `engine/docs/human-decision-contract.md` if present, for escalation-only guidance
+15. `engine/docs/content-schema-contract.md` if present
+16. `engine/docs/build-contract.md` if present
+17. `engine/docs/validation-runbook.md` if present
+18. files in `schema-generation/`
+19. files in `prose/`
+20. task trackers such as Linear
 
 If two sources conflict, the higher source wins.
 
@@ -102,6 +103,7 @@ When executing without prior chat context, also read:
 
 - `engine/docs/start-here.md`
 - `engine/docs/repo-contract.md`
+- `engine/docs/branching-architecture-contract.md`
 - `engine/docs/human-decision-contract.md`
 - `engine/docs/content-schema-contract.md`
 - `engine/docs/build-contract.md`
@@ -116,6 +118,7 @@ They make repository mechanics, defaults, and phase boundaries explicit.
 - Do not invent new claimants unless explicitly instructed.
 - Do not resolve the central transgression unless the current planning layer allows it.
 - Do not flatten the work into a normal branching story.
+- Do not fake choice with single-option progression buttons.
 - Do not treat atmosphere as a substitute for dramatic function.
 - Do not let route differences become merely cosmetic.
 - Do not dump lore instead of dramatizing it.
@@ -200,8 +203,8 @@ For story work, always use this order unless explicitly overridden:
 15. Update build code in Astro as needed when build work is in scope and the phase gate allows it.
 16. Update task tracking after repo truth is current.
 
-Milestone auto-advance canonizes readiness for the next stage.
-It does not bypass the current phase gate or authorize downstream writes while the phase remains more restrictive.
+If the current phase is `engine_revision`, milestone auto-advance does not authorize exit without a human repo edit.
+If the current phase is already downstream, passed milestone validation authorizes the agent to update repo truth and continue into the next lawful stage.
 
 Do not jump from broad idea to full prose without scene or artifact specs.
 
@@ -213,6 +216,7 @@ Before generating substantial prose, ensure there is a concrete work instance de
 - working title
 - surface container
 - central transgression
+- branch architecture rules for introduction, opening hub, and decision topology
 - active claimants
 - route families or arcs
 - artifact families

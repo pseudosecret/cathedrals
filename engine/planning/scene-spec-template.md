@@ -47,9 +47,34 @@ A good scene spec should let a later generation pass write the scene without inv
 - **scene_title_working:** `SCENE_TITLE_HERE`
 - **status:** `planned | ready | blocked | revised`
 - **priority:** `first_spike | core | secondary`
-- **scene_type:** `interview | exploration | artifact_encounter | threshold | accusation | residue | transition | other`
+- **scene_type:** `introduction | reflection | hesitation | interview | exploration | artifact_encounter | threshold | accusation | residue | reconvergence | transition | other`
 - **claimant:** `CLAIMANT_ID_HERE | none`
 - **route_context:** `ROUTE_CONTEXT_HERE`
+- **reader_perspective_mode:** `reader_close | second_person_close | mixed | none`
+- **branch_depth:** `DEPTH_HERE`
+- **branch_role:** `introduction | opening_hub | splinter | reconvergence | hesitation | redirective | terminal | mixed`
+
+## Branch Topology Role
+
+### Opening Hub Relation
+
+How does this scene relate to the first exact three-option hub?
+
+Examples:
+
+- pre-hub introduction scene
+- the opening hub scene itself
+- immediate consequence of opening option 1
+- later reconvergent scene shared by branches 2 and 3
+- redirective new beginning after an ending
+
+`WRITE_OPENING_HUB_RELATION_HERE`
+
+### Reconvergence Behavior
+
+If this scene is shared or nearly shared across branches, how must prior branch history still matter here?
+
+`WRITE_RECONVERGENCE_BEHAVIOR_HERE | none`
 
 ---
 
@@ -445,6 +470,43 @@ Examples:
 
 WRITE_DECISION_PURPOSE_HERE | none
 
+### Live Option Count
+
+If this scene contains a live decision, how many playable options are present?
+
+Rules:
+
+- minimum 2
+- soft maximum 4
+- hard maximum 5
+- reserved or closed siblings do not count toward the live-option minimum
+
+WRITE_LIVE_OPTION_COUNT_HERE | none
+
+### Decision Group Id
+
+Use one stable sibling-group id when this scene presents a choice set.
+
+`WRITE_DECISION_GROUP_ID_HERE | none`
+
+### Major Decision
+
+Is this an accusation, branch lock, irreversible threshold crossing, or another major commitment?
+
+true | false
+
+### Hesitation Surface
+
+If the decision is major, describe the required reflection/hesitation surface before commitment.
+
+Include:
+
+- what dread or projected outcome the reader should feel
+- what changes if the reader hesitates
+- how hesitation differs from global reset
+
+`WRITE_HESITATION_SURFACE_HERE | none`
+
 ### Decision Options
 
 List the options at the level of structural intent, not polished final prose.
@@ -457,6 +519,7 @@ decision_options:
     label_working: OPTION_LABEL_HERE
     outcome_summary: WHAT_THIS_OPTION_DOES
     target_scene_id: TARGET_SCENE_ID_HERE | none
+    redirect_target_scene_id: TARGET_SCENE_ID_HERE | none
     state_effects:
       - EFFECT_1
       - EFFECT_2
@@ -464,6 +527,7 @@ decision_options:
     label_working: OPTION_LABEL_HERE
     outcome_summary: WHAT_THIS_OPTION_DOES
     target_scene_id: TARGET_SCENE_ID_HERE | none
+    redirect_target_scene_id: TARGET_SCENE_ID_HERE | none
     state_effects:
       - EFFECT_1
       - EFFECT_2
@@ -492,6 +556,18 @@ Examples:
 - refer to it as a closed option in reader-facing language
 
 WRITE_CLOSED_OPTION_HANDLING_HERE
+
+### Reconsideration Outcomes
+
+If hesitation is available, what outcomes can lawful reconsideration create?
+
+Examples:
+
+- mutate the prior framing and reopen the current branch
+- redirect into a parallel branch with different pressure
+- add contamination and defer commitment
+
+`WRITE_RECONSIDERATION_OUTCOMES_HERE | none`
 
 ## State Delta
 
@@ -742,7 +818,7 @@ Use this section to give the next pass a sharp handoff.
 
 Examples:
 
-- keep the custodian’s language exacting and procedural
+- keep the route's language specific to its claimant pressure rather than generic mood
 - the contradiction should be visible before it is interpreted
 - do not explain why the release is impossible
 - the scene should end with narrowed options, not a reveal speech

@@ -12,18 +12,19 @@ When determining what is true, use this order:
 2. engine/docs/specs.md
 3. engine/docs/repo-contract.md
 4. engine/data/work-instance.yaml
-5. engine/docs/human-decision-contract.md, if present, as escalation-only guidance
-6. engine/docs/content-schema-contract.md, if present
-7. engine/canon/ontology.md
-8. engine/canon/arc-grammar.md
-9. engine/canon/style-rules.md
-10. engine/canon/acceptance-tests.md
-11. engine/data/state-model.yaml
-12. engine/data/claimants.yaml
-13. engine/data/threshold-geomancy.yaml, if present
-14. compiled planning artifacts in `schema-generation/`
-15. generated content files in `prose/`
-16. Linear issue descriptions and comments
+5. the file named by `claimants.roster_source_path` in `engine/data/work-instance.yaml`, if present
+6. engine/docs/human-decision-contract.md, if present, as escalation-only guidance
+7. engine/docs/content-schema-contract.md, if present
+8. engine/canon/ontology.md
+9. engine/canon/arc-grammar.md
+10. engine/canon/style-rules.md
+11. engine/canon/acceptance-tests.md
+12. engine/data/state-model.yaml
+13. engine/data/claimants.yaml
+14. engine/data/threshold-geomancy.yaml, if present
+15. compiled planning artifacts in `schema-generation/`
+16. generated content files in `prose/`
+17. Linear issue descriptions and comments
 
 If Linear conflicts with repo files, repo files win.
 

@@ -11,6 +11,7 @@ It is not a mood board.
 It must define:
 
 - what this arc does
+- where it sits in the branching tree
 - how it differs from other arcs
 - what beats it must contain
 - what state pressures it applies
@@ -46,10 +47,11 @@ This file should be easy for:
 
 - **work_id:** `WORK_ID_HERE`
 - **arc_id:** `ARC_ID_HERE`
-- **route_type:** `claimant_route | contamination_route | neutral_route | other`
+- **route_type:** `introduction_route | claimant_route | contamination_route | neutral_route | other`
 - **claimant:** `CLAIMANT_ID_HERE | none`
 - **status:** `planned | ready | blocked | revised`
 - **priority:** `first_spike | core | secondary`
+- **branch_role:** `introduction | opening_hub | splinter | reconvergence | redirective | terminal | mixed`
 
 ---
 
@@ -149,6 +151,19 @@ Examples:
 
 ## Arc Entry and Exit
 
+### Opening Hub Relation
+
+How does this arc relate to the first exact three-option hub?
+
+Examples:
+
+- contains the introduction and terminates at the opening hub
+- begins as one branch from the opening hub
+- reconverges with another post-hub branch
+- serves as a redirective new beginning after an ending
+
+`WRITE_OPENING_HUB_RELATION_HERE`
+
 ### Entry Conditions
 
 What must already be true for this arc to begin?
@@ -204,6 +219,27 @@ Examples:
 - world scar
 
 WRITE_RESULT_OF_EXIT_HERE
+
+### Reconvergence Targets
+
+If this arc may merge into another branch or shared scene, name that target and explain what prior state must remain meaningful.
+
+```yaml
+reconvergence_targets:
+  - target_arc_or_scene: TARGET_HERE
+    preserved_consequence: CONSEQUENCE_HERE
+```
+
+### Redirect Outcomes
+
+If this arc can end by sending the reader into a new beginning elsewhere, describe that redirect.
+
+```yaml
+redirect_outcomes:
+  - ending_id: ENDING_ID_HERE
+    target_scene_or_arc: TARGET_HERE
+    redirect_reason: REASON_HERE
+```
 
 ## Beat Grammar
 
