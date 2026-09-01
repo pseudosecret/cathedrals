@@ -2,93 +2,76 @@
 
 ## Rule
 
-Validation decides whether an immutable generation lives or dies. It never becomes a
-creative revision loop.
+Validation decides whether an immutable autonomous run lives or dies. It never becomes
+a creative revision loop.
 
 ## 1. Preflight
 
-Pass only if:
+Pass only when one instruction authorizes a generation branch, the generation brief
+is frozen, engine/prompt/schema hashes and seeds are recorded, every selected model can
+fit its planned context/output, total derived scope budgets fit cumulative limits, topology
+capacity and geomancy are deterministic, and preparation authored no fiction.
 
-- the current operation explicitly authorizes a generation test
-- the target is a generation branch or release, not `main`
-- engine commit and configuration hashes are recorded
-- the selected model's documented maximum output meets the configured minimum
-- the budget formula passes with its safety reserve
-- the topology and geomancy inputs were derived deterministically
-- no claimant identity, incident fact, scene event, artifact, or ending was selected
-  during preparation
+## 2. Forward-Run Audit
 
-Failure stops before any creative transaction.
+Validate every protocol record and ledger entry. Confirm strict sequences and hash
+chains; frozen manifest/brief/engine inputs; dependency order; atomic unique commits;
+no overwrites; no candidate selection; and complete step metadata. Recompute hashes
+from raw and committed files.
 
-## 2. Transaction Audit
+For `READY_TO_PLAY`, require:
 
-Pass only if:
+```text
+human_intervention_count = 0
+committed_rewrite_count = 0
+committed_regeneration_count = 0
+backtrack_count = 0
+creative_step_count >= 1
+```
 
-- one creative request was made
-- one complete creative response was received
-- no earlier generated plan or profile was used as a later creative prompt
-- no scene, artifact, ending, or replacement passage came from another creative call
-- provenance records `creative_transaction_count: 1`
+Technical retries must be identical except for attempt/audit fields and must have no
+prior creative output. A malformed response is terminal, not retryable.
 
-## 3. Mechanical Validation
+## 3. Mechanical and Continuity Validation
 
-Run every check in the mechanical section of `engine/canon/acceptance-tests.md`.
-At minimum validate:
+Run every mechanical check in `engine/canon/acceptance-tests.md`, including protocol,
+IDs, cross-references, scope/packet bounds, graph reachability, choices, splitting,
+reconvergence, redirects, hesitation, state effects, variants, formal compositions,
+safe MDX, projection bytes, memory provenance, resource totals, and complete static
+compilation.
 
-- JSON parsing and JSON Schema
-- unique IDs and complete cross-references
-- exactly five unique technical claimant slots
-- scene, artifact, and ending count bounds
-- graph reachability, decision cardinalities, reconvergence, redirects, and state effects
-- exact three-option opening hub after three to five introduction surfaces
-- downstream splitting and unequal permissible depths
-- consequential hesitation for major decisions
-- formal-composition anchors
-- word and output budgets
-- safe MDX subset and deterministic projection
-- Astro static compilation
+Check suspected contradictions against original immutable passages. Preserve lawful
+incompatible evidence or perspectival contradiction. If a true mechanical
+impossibility prevents completing the frozen graph without changing prior canon,
+return `FAILED_GENERATION`.
 
-Emit `PASS` or `FAIL` with concrete machine-readable failures.
+Serialization repair is lawful only before commit and only when creative bytes and
+facts remain unchanged. Never complete truncated or malformed creative output by
+inference.
 
-Serialization repair is allowed only when all literary strings and creative facts are
-byte-identical. Never complete truncated JSON by inference.
+## 4. Whole-Work Artistic Acceptance
 
-## 4. Artistic Acceptance
+After all creative steps end, a configured non-authorial evaluator reads the complete
+immutable work and returns `PASS` or `FAIL GENERATION` with concrete reasons. Assess
+claimant differentiation, route distinction, prose quality, dramatic scene function,
+detail, artifact force, thematic coherence, formal composition, redundancy, generic
+AI habits, and ending consequence. Do not emit edits or feed findings into a repair
+call.
 
-Evaluate the complete projected work against engine canon. A human or non-creative
-evaluator transaction may judge the work, but its only authority is a verdict and
-reasons. It may not author replacement content, and its result may not be fed into a
-repair call for the same generation.
+## 5. Static Build and Barrier
 
-Return exactly one result:
+Project all required content, compile Astro, validate every route/state behavior, and
+verify the complete build uses only deterministic client-side state. Confirm every
+presented choice points to prebuilt content or behavior and no runtime model/API is
+needed.
 
-- `PASS`
-- `FAIL GENERATION`
+Only a complete mechanical pass, artistic pass, and build pass may finalize
+`READY_TO_PLAY` with `playable: true`. Every failure finalizes `FAILED_GENERATION`
+with `playable: false`; partial content remains quarantined under the retention policy.
 
-Assess claimant differentiation, route distinction, prose quality, dramatic scene
-function, concrete detail, artifact force, thematic coherence, formal composition,
-redundancy, generic AI habits, and ending consequence.
+## 6. Accepted Hashes
 
-## 5. Failure Handling
-
-On any post-transaction failure:
-
-- mark the generation rejected
-- preserve failure evidence and provenance if useful
-- do not edit generated literary files or fictional facts
-- do not ask a model to repair, continue, rewrite, or fill gaps
-- do not publish the failed work
-
-A later attempt must use a new generation ID and exactly one new creative transaction.
-
-## 6. Acceptance and Hashes
-
-After both validation categories pass:
-
-- hash the raw bundle, graph, literary files, and verdicts
-- record hashes in the generation manifest
-- fail publication if any accepted literary hash changes
-- visually inspect mobile, light, dark, artifact, choice, and ending surfaces
-
-Visual engine defects may be fixed without changing generated content. Rebuild and
-rehash engine artifacts as needed, but preserve literary hashes.
+Finalization records the ledger head, every committed creative record, memory event
+stream, projections, decision graph, validation verdicts, and build hash. Any later
+literary or generated-fact hash mismatch invalidates publication. Engine presentation
+defects may be fixed in a separate engine revision without changing generated content.

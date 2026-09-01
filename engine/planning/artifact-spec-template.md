@@ -1,8 +1,8 @@
 # Generated Artifact Record Shape
 
-Artifact specification and complete artifact text are authored together in the sole
-creative transaction. No exact artifact type, title, clue, object, or evidence family
-is selected before generation.
+Artifact specification and complete artifact text are authored together in one
+forward literary packet. No exact artifact type, title, clue, object, or evidence
+family is selected before generation.
 
 ```json
 {

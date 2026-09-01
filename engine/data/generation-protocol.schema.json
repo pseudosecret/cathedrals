@@ -1,0 +1,1348 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cathedrals.local/schemas/generation-protocol-v2.json",
+  "title": "Cathedrals append-only generation protocol",
+  "oneOf": [
+    { "$ref": "#/$defs/runManifest" },
+    { "$ref": "#/$defs/genesis" },
+    { "$ref": "#/$defs/architecture" },
+    { "$ref": "#/$defs/creativePacket" },
+    { "$ref": "#/$defs/indexBatch" },
+    { "$ref": "#/$defs/memoryEvent" },
+    { "$ref": "#/$defs/ledgerEntry" },
+    { "$ref": "#/$defs/finalization" }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "maxLength": 96,
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 12000
+    },
+    "stringList": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/nonEmptyString" }
+    },
+    "idList": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/id" }
+    },
+    "modelConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["purpose", "provider", "model", "parameters"],
+      "properties": {
+        "purpose": { "enum": ["creative", "analysis_or_index", "artistic_acceptance"] },
+        "provider": { "$ref": "#/$defs/nonEmptyString" },
+        "model": { "$ref": "#/$defs/nonEmptyString" },
+        "parameters": { "type": "object" }
+      }
+    },
+    "generationBrief": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project_name",
+        "genre_flavor",
+        "possible_scene_count",
+        "requested_story_format",
+        "story_format",
+        "mutable",
+        "generation_id",
+        "generation_timestamp",
+        "lm_studio_base_url",
+        "model",
+        "engine_commit",
+        "generation_seed"
+      ],
+      "properties": {
+        "project_name": { "$ref": "#/$defs/nonEmptyString" },
+        "genre_flavor": { "$ref": "#/$defs/nonEmptyString" },
+        "possible_scene_count": { "type": "integer", "minimum": 1 },
+        "requested_story_format": { "enum": ["web", "visualnovel"] },
+        "story_format": { "const": "web" },
+        "mutable": { "const": false },
+        "generation_id": { "$ref": "#/$defs/id" },
+        "generation_timestamp": { "$ref": "#/$defs/timestamp" },
+        "lm_studio_base_url": { "type": "string", "pattern": "^https?://" },
+        "model": { "$ref": "#/$defs/nonEmptyString" },
+        "engine_commit": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
+        "generation_seed": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "runManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type",
+        "protocol_version",
+        "generation_id",
+        "created_at",
+        "generation_brief",
+        "generation_brief_hash",
+        "engine_snapshot",
+        "generation_run",
+        "scope",
+        "budgets",
+        "traversal",
+        "models",
+        "retention_policy",
+        "complete_work_barrier"
+      ],
+      "properties": {
+        "record_type": { "const": "run_manifest" },
+        "protocol_version": { "const": "2.0" },
+        "generation_id": { "$ref": "#/$defs/id" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "generation_brief": { "$ref": "#/$defs/generationBrief" },
+        "generation_brief_hash": { "$ref": "#/$defs/hash" },
+        "engine_snapshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "work_id",
+            "engine_commit_sha",
+            "engine_config_hashes",
+            "work_seed",
+            "structural_seed",
+            "geomancy_seed"
+          ],
+          "properties": {
+            "work_id": { "const": "hospice-annex-v01" },
+            "engine_commit_sha": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
+            "engine_config_hashes": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": { "$ref": "#/$defs/hash" }
+            },
+            "work_seed": { "$ref": "#/$defs/nonEmptyString" },
+            "structural_seed": { "$ref": "#/$defs/nonEmptyString" },
+            "geomancy_seed": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        },
+        "generation_run": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "human_creative_interventions_required",
+            "committed_creative_rewrites_allowed",
+            "committed_creative_regeneration_allowed",
+            "backward_canon_mutation_allowed",
+            "candidate_cherry_picking_allowed",
+            "append_only",
+            "causally_forward"
+          ],
+          "properties": {
+            "human_creative_interventions_required": { "const": 0 },
+            "committed_creative_rewrites_allowed": { "const": false },
+            "committed_creative_regeneration_allowed": { "const": false },
+            "backward_canon_mutation_allowed": { "const": false },
+            "candidate_cherry_picking_allowed": { "const": false },
+            "append_only": { "const": true },
+            "causally_forward": { "const": true }
+          }
+        },
+        "scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "possible_scene_count",
+            "scene_floor",
+            "artifact_target",
+            "artifact_hard_max",
+            "ending_target",
+            "ending_hard_max",
+            "formal_composition_target",
+            "branch_count_pressure",
+            "reconvergence_pressure",
+            "literary_packet_target",
+            "profile_guidance"
+          ],
+          "properties": {
+            "possible_scene_count": { "type": "integer", "minimum": 1 },
+            "scene_floor": { "type": "integer", "minimum": 1 },
+            "artifact_target": { "type": "integer", "minimum": 1 },
+            "artifact_hard_max": { "type": "integer", "minimum": 1 },
+            "ending_target": { "type": "integer", "minimum": 1 },
+            "ending_hard_max": { "type": "integer", "minimum": 1 },
+            "formal_composition_target": { "type": "integer", "minimum": 2 },
+            "branch_count_pressure": { "type": "integer", "minimum": 3 },
+            "reconvergence_pressure": { "type": "integer", "minimum": 1 },
+            "literary_packet_target": { "type": "integer", "minimum": 1 },
+            "profile_guidance": { "enum": ["pilot", "standard", "large", "cathedral"] }
+          }
+        },
+        "budgets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_prepared_context_tokens",
+            "max_creative_packet_output_tokens",
+            "max_analysis_output_tokens",
+            "context_safety_reserve_tokens",
+            "max_creative_step_count",
+            "max_analysis_or_index_step_count",
+            "max_total_literary_words",
+            "max_cumulative_input_tokens",
+            "max_cumulative_output_tokens",
+            "max_memory_records",
+            "max_retrieved_source_tokens"
+          ],
+          "properties": {
+            "max_prepared_context_tokens": { "type": "integer", "minimum": 1 },
+            "max_creative_packet_output_tokens": { "type": "integer", "minimum": 1 },
+            "max_analysis_output_tokens": { "type": "integer", "minimum": 1 },
+            "context_safety_reserve_tokens": { "type": "integer", "minimum": 0 },
+            "max_creative_step_count": { "type": "integer", "minimum": 1 },
+            "max_analysis_or_index_step_count": { "type": "integer", "minimum": 0 },
+            "max_total_literary_words": { "type": "integer", "minimum": 1 },
+            "max_cumulative_input_tokens": { "type": "integer", "minimum": 1 },
+            "max_cumulative_output_tokens": { "type": "integer", "minimum": 1 },
+            "max_memory_records": { "type": "integer", "minimum": 1 },
+            "max_retrieved_source_tokens": { "type": "integer", "minimum": 0 },
+            "max_run_cost": { "type": "number", "minimum": 0 },
+            "cost_currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+          }
+        },
+        "traversal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["strategy", "seed", "mutable_after_architecture_commit"],
+          "properties": {
+            "strategy": {
+              "enum": [
+                "dependency_topological",
+                "breadth_first_thresholds",
+                "branch_then_reconvergence",
+                "alternating_branch_families"
+              ]
+            },
+            "seed": { "$ref": "#/$defs/nonEmptyString" },
+            "mutable_after_architecture_commit": { "const": false }
+          }
+        },
+        "models": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/modelConfig" }
+        },
+        "retention_policy": { "enum": ["preserve_failed", "discard_failed_after_audit_record"] },
+        "complete_work_barrier": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["partial_play_allowed", "runtime_generation_allowed", "playable_status"],
+          "properties": {
+            "partial_play_allowed": { "const": false },
+            "runtime_generation_allowed": { "const": false },
+            "playable_status": { "const": "READY_TO_PLAY" }
+          }
+        }
+      }
+    },
+    "workCanon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "work_id",
+        "generated_title",
+        "premise",
+        "central_incident",
+        "chronology",
+        "claimant_relationships",
+        "generated_motifs",
+        "environmental_mutation_law",
+        "principal_tensions"
+      ],
+      "properties": {
+        "work_id": { "const": "hospice-annex-v01" },
+        "generated_title": { "$ref": "#/$defs/nonEmptyString" },
+        "premise": { "$ref": "#/$defs/nonEmptyString" },
+        "central_incident": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["event", "subjects", "circumstances", "culpability", "competing_interpretations"],
+          "properties": {
+            "event": { "$ref": "#/$defs/nonEmptyString" },
+            "subjects": { "$ref": "#/$defs/idList" },
+            "circumstances": { "$ref": "#/$defs/nonEmptyString" },
+            "culpability": { "$ref": "#/$defs/nonEmptyString" },
+            "competing_interpretations": { "$ref": "#/$defs/stringList" }
+          }
+        },
+        "chronology": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["event_id", "relative_order", "event", "certainty"],
+            "properties": {
+              "event_id": { "$ref": "#/$defs/id" },
+              "relative_order": { "type": "integer", "minimum": 1 },
+              "event": { "$ref": "#/$defs/nonEmptyString" },
+              "certainty": { "enum": ["established", "contested", "incompatible"] }
+            }
+          }
+        },
+        "claimant_relationships": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["claimant_ids", "relationship", "dramatic_pressure"],
+            "properties": {
+              "claimant_ids": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/id" } },
+              "relationship": { "$ref": "#/$defs/nonEmptyString" },
+              "dramatic_pressure": { "$ref": "#/$defs/nonEmptyString" }
+            }
+          }
+        },
+        "generated_motifs": { "$ref": "#/$defs/stringList" },
+        "environmental_mutation_law": { "$ref": "#/$defs/nonEmptyString" },
+        "principal_tensions": { "$ref": "#/$defs/stringList" }
+      }
+    },
+    "claimant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claimant_id",
+        "technical_slot_id",
+        "name",
+        "incident_role",
+        "annex_relationship",
+        "personality",
+        "epistemic_regime",
+        "relationship_to_responsibility",
+        "evidence_logic",
+        "emotional_pressure",
+        "rhetorical_behavior",
+        "diction",
+        "cadence",
+        "contradiction_mode",
+        "artifact_affinity",
+        "environmental_pressure",
+        "literary_effect",
+        "accusation_consequence",
+        "retraction_consequence",
+        "differentiation_notes"
+      ],
+      "properties": {
+        "claimant_id": { "$ref": "#/$defs/id" },
+        "technical_slot_id": {
+          "enum": [
+            "claimant_slot_01",
+            "claimant_slot_02",
+            "claimant_slot_03",
+            "claimant_slot_04",
+            "claimant_slot_05"
+          ]
+        },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "incident_role": { "$ref": "#/$defs/nonEmptyString" },
+        "annex_relationship": { "$ref": "#/$defs/nonEmptyString" },
+        "occupation": { "type": ["string", "null"] },
+        "personality": { "$ref": "#/$defs/nonEmptyString" },
+        "epistemic_regime": { "$ref": "#/$defs/nonEmptyString" },
+        "relationship_to_responsibility": { "$ref": "#/$defs/nonEmptyString" },
+        "evidence_logic": { "$ref": "#/$defs/nonEmptyString" },
+        "emotional_pressure": { "$ref": "#/$defs/nonEmptyString" },
+        "rhetorical_behavior": { "$ref": "#/$defs/nonEmptyString" },
+        "diction": { "$ref": "#/$defs/nonEmptyString" },
+        "cadence": { "$ref": "#/$defs/nonEmptyString" },
+        "contradiction_mode": { "$ref": "#/$defs/nonEmptyString" },
+        "artifact_affinity": { "$ref": "#/$defs/nonEmptyString" },
+        "environmental_pressure": { "$ref": "#/$defs/nonEmptyString" },
+        "literary_effect": { "$ref": "#/$defs/nonEmptyString" },
+        "accusation_consequence": { "$ref": "#/$defs/nonEmptyString" },
+        "retraction_consequence": { "$ref": "#/$defs/nonEmptyString" },
+        "differentiation_notes": { "$ref": "#/$defs/stringList" }
+      }
+    },
+    "character": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["character_id", "name", "role", "relationships", "dramatic_function"],
+      "properties": {
+        "character_id": { "$ref": "#/$defs/id" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "role": { "$ref": "#/$defs/nonEmptyString" },
+        "relationships": { "$ref": "#/$defs/stringList" },
+        "dramatic_function": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_type", "artifact_id", "source_locator"],
+      "properties": {
+        "artifact_type": {
+          "enum": ["genesis", "architecture", "scene", "artifact", "ending", "formal_composition"]
+        },
+        "artifact_id": { "$ref": "#/$defs/id" },
+        "source_locator": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "hashedSourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_type",
+        "artifact_id",
+        "source_locator",
+        "source_commit_id",
+        "source_hash"
+      ],
+      "properties": {
+        "artifact_type": {
+          "enum": ["genesis", "architecture", "scene", "artifact", "ending", "formal_composition"]
+        },
+        "artifact_id": { "$ref": "#/$defs/id" },
+        "source_locator": { "$ref": "#/$defs/nonEmptyString" },
+        "source_commit_id": { "$ref": "#/$defs/id" },
+        "source_hash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "memoryObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "memory_id",
+        "memory_class",
+        "memory_kind",
+        "action",
+        "proposition",
+        "status",
+        "sources"
+      ],
+      "properties": {
+        "memory_id": { "$ref": "#/$defs/id" },
+        "memory_class": { "enum": ["canonical_state", "narrative_working"] },
+        "memory_kind": {
+          "enum": [
+            "character",
+            "chronology",
+            "object",
+            "location",
+            "relationship",
+            "character_knowledge",
+            "world_state",
+            "irreversible_event",
+            "unresolved_thread",
+            "promise",
+            "callback",
+            "motif",
+            "question",
+            "branch_residue",
+            "foreshadowing",
+            "thematic_pressure",
+            "intentional_contradiction"
+          ]
+        },
+        "action": { "enum": ["establish", "update_status", "correct_index"] },
+        "proposition": { "$ref": "#/$defs/nonEmptyString" },
+        "status": {
+          "enum": [
+            "established",
+            "contested",
+            "intentionally_unresolved",
+            "open",
+            "fulfilled",
+            "foreclosed",
+            "answered",
+            "superseded_index_only"
+          ]
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/sourceRef" }
+        },
+        "supersedes_memory_id": {
+          "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }]
+        },
+        "branch_scope_ids": { "$ref": "#/$defs/idList" }
+      }
+    },
+    "genesis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type",
+        "protocol_version",
+        "generation_id",
+        "commit_id",
+        "story_format",
+        "format_composition_law",
+        "work_canon",
+        "claimants",
+        "characters",
+        "memory_delta"
+      ],
+      "properties": {
+        "record_type": { "const": "genesis" },
+        "protocol_version": { "const": "2.0" },
+        "generation_id": { "$ref": "#/$defs/id" },
+        "commit_id": { "$ref": "#/$defs/id" },
+        "story_format": { "const": "web" },
+        "format_composition_law": { "$ref": "#/$defs/nonEmptyString" },
+        "work_canon": { "$ref": "#/$defs/workCanon" },
+        "claimants": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/claimant" }
+        },
+        "characters": {
+          "type": "array",
+          "maxItems": 40,
+          "items": { "$ref": "#/$defs/character" }
+        },
+        "memory_delta": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/memoryObservation" }
+        }
+      }
+    },
+    "arc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "arc_id",
+        "purpose",
+        "branch_role",
+        "required_beats",
+        "claimant_pressures",
+        "entry_conditions",
+        "exit_conditions",
+        "state_pressure",
+        "hard_obligation_ids"
+      ],
+      "properties": {
+        "arc_id": { "$ref": "#/$defs/id" },
+        "purpose": { "$ref": "#/$defs/nonEmptyString" },
+        "branch_role": {
+          "enum": ["introduction", "splinter", "reconvergence", "redirective", "contamination", "mixed"]
+        },
+        "required_beats": { "$ref": "#/$defs/stringList" },
+        "claimant_pressures": { "$ref": "#/$defs/idList" },
+        "entry_conditions": { "$ref": "#/$defs/stringList" },
+        "exit_conditions": { "$ref": "#/$defs/stringList" },
+        "state_pressure": { "$ref": "#/$defs/nonEmptyString" },
+        "hard_obligation_ids": { "$ref": "#/$defs/idList" }
+      }
+    },
+    "stateKey": {
+      "enum": [
+        "accused_claimant_id",
+        "dominant_regime_id",
+        "contamination",
+        "indecision_count",
+        "retraction_count",
+        "claimants_seen",
+        "artifacts_seen",
+        "world_scars",
+        "hidden_route_unlocked"
+      ]
+    },
+    "stateConditions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "operator", "value"],
+        "properties": {
+          "key": { "$ref": "#/$defs/stateKey" },
+          "operator": { "enum": ["equals", "not_equals", "gte", "lte", "contains", "not_contains"] },
+          "value": {}
+        }
+      }
+    },
+    "stateEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "key", "value"],
+      "properties": {
+        "operation": { "enum": ["set", "increment", "add", "remove"] },
+        "key": { "$ref": "#/$defs/stateKey" },
+        "value": {}
+      }
+    },
+    "architectureNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "node_type", "purpose", "hard_obligation_ids", "generation_dependency_ids"],
+      "properties": {
+        "node_id": { "$ref": "#/$defs/id" },
+        "node_type": { "enum": ["introduction", "branch_family", "threshold", "reconvergence", "ending_family"] },
+        "purpose": { "$ref": "#/$defs/nonEmptyString" },
+        "hard_obligation_ids": { "$ref": "#/$defs/idList" },
+        "generation_dependency_ids": { "$ref": "#/$defs/idList" }
+      }
+    },
+    "architectureEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["edge_id", "from_node_id", "to_node_id", "relation", "hard_obligation_ids"],
+      "properties": {
+        "edge_id": { "$ref": "#/$defs/id" },
+        "from_node_id": { "$ref": "#/$defs/id" },
+        "to_node_id": { "$ref": "#/$defs/id" },
+        "relation": { "enum": ["progression", "branch", "reconvergence", "ending_pressure", "redirect_opportunity"] },
+        "hard_obligation_ids": { "$ref": "#/$defs/idList" }
+      }
+    },
+    "decisionEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "edge_id",
+        "from_content_id",
+        "to_content_id",
+        "label",
+        "kind",
+        "availability",
+        "decision_group_id",
+        "major_decision",
+        "state_conditions",
+        "state_effects"
+      ],
+      "properties": {
+        "edge_id": { "$ref": "#/$defs/id" },
+        "from_content_id": { "$ref": "#/$defs/id" },
+        "to_content_id": { "$ref": "#/$defs/id" },
+        "label": { "$ref": "#/$defs/nonEmptyString" },
+        "kind": { "enum": ["progression", "decision", "ending", "redirect"] },
+        "availability": { "enum": ["playable", "reserved"] },
+        "decision_group_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "major_decision": { "type": "boolean" },
+        "state_conditions": { "$ref": "#/$defs/stateConditions" },
+        "state_effects": { "type": "array", "items": { "$ref": "#/$defs/stateEffect" } }
+      }
+    },
+    "packetPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "packet_slot_id",
+        "packet_kind",
+        "sequence",
+        "scene_slot_ids",
+        "ending_slot_ids",
+        "artifact_count",
+        "formal_composition_count",
+        "depends_on_packet_slot_ids",
+        "branch_path_relation",
+        "hard_obligation_ids",
+        "soft_guidance"
+      ],
+      "properties": {
+        "packet_slot_id": { "$ref": "#/$defs/id" },
+        "packet_kind": { "enum": ["literary", "ending"] },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "scene_slot_ids": { "$ref": "#/$defs/idList" },
+        "ending_slot_ids": { "$ref": "#/$defs/idList" },
+        "artifact_count": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "formal_composition_count": { "type": "integer", "minimum": 0, "maximum": 4 },
+        "depends_on_packet_slot_ids": { "$ref": "#/$defs/idList" },
+        "branch_path_relation": { "$ref": "#/$defs/nonEmptyString" },
+        "hard_obligation_ids": { "$ref": "#/$defs/idList" },
+        "soft_guidance": { "$ref": "#/$defs/stringList" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "packet_kind": { "const": "literary" } } },
+          "then": {
+            "properties": {
+              "scene_slot_ids": { "minItems": 3, "maxItems": 8 },
+              "ending_slot_ids": { "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "packet_kind": { "const": "ending" } } },
+          "then": {
+            "properties": {
+              "scene_slot_ids": { "maxItems": 0 },
+              "ending_slot_ids": { "minItems": 2, "maxItems": 6 }
+            }
+          }
+        }
+      ]
+    },
+    "hardObligation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["obligation_id", "instruction", "satisfaction_evidence"],
+      "properties": {
+        "obligation_id": { "$ref": "#/$defs/id" },
+        "instruction": { "$ref": "#/$defs/nonEmptyString" },
+        "satisfaction_evidence": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "scopeCommitment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "possible_scene_count",
+        "planned_scene_count",
+        "planned_artifact_count",
+        "planned_ending_count",
+        "planned_formal_composition_count",
+        "saturation_rationale"
+      ],
+      "properties": {
+        "possible_scene_count": { "type": "integer", "minimum": 1 },
+        "planned_scene_count": { "type": "integer", "minimum": 1 },
+        "planned_artifact_count": { "type": "integer", "minimum": 1 },
+        "planned_ending_count": { "type": "integer", "minimum": 1 },
+        "planned_formal_composition_count": { "type": "integer", "minimum": 2 },
+        "saturation_rationale": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "architecture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type",
+        "protocol_version",
+        "generation_id",
+        "commit_id",
+        "genesis_commit_id",
+        "story_format",
+        "scope_commitment",
+        "hard_obligations",
+        "arcs",
+        "topology",
+        "narrative_promises",
+        "ending_families",
+        "hidden_route_opportunities",
+        "traversal_plan",
+        "memory_delta"
+      ],
+      "properties": {
+        "record_type": { "const": "architecture" },
+        "protocol_version": { "const": "2.0" },
+        "generation_id": { "$ref": "#/$defs/id" },
+        "commit_id": { "$ref": "#/$defs/id" },
+        "genesis_commit_id": { "$ref": "#/$defs/id" },
+        "story_format": { "const": "web" },
+        "scope_commitment": { "$ref": "#/$defs/scopeCommitment" },
+        "hard_obligations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/hardObligation" }
+        },
+        "arcs": { "type": "array", "minItems": 4, "maxItems": 128, "items": { "$ref": "#/$defs/arc" } },
+        "topology": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["entry_segment_id", "opening_branch_node_id", "nodes", "edges", "reconvergence_node_ids"],
+          "properties": {
+            "entry_segment_id": { "$ref": "#/$defs/id" },
+            "opening_branch_node_id": { "$ref": "#/$defs/id" },
+            "nodes": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/architectureNode" } },
+            "edges": { "type": "array", "minItems": 1, "maxItems": 1024, "items": { "$ref": "#/$defs/architectureEdge" } },
+            "reconvergence_node_ids": { "$ref": "#/$defs/idList" }
+          }
+        },
+        "narrative_promises": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["promise_id", "promise", "required_resolution_modes"],
+            "properties": {
+              "promise_id": { "$ref": "#/$defs/id" },
+              "promise": { "$ref": "#/$defs/nonEmptyString" },
+              "required_resolution_modes": { "$ref": "#/$defs/stringList" }
+            }
+          }
+        },
+        "ending_families": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ending_family_id", "purpose", "prerequisite_obligation_ids", "ending_target"],
+            "properties": {
+              "ending_family_id": { "$ref": "#/$defs/id" },
+              "purpose": { "$ref": "#/$defs/nonEmptyString" },
+              "prerequisite_obligation_ids": { "$ref": "#/$defs/idList" },
+              "ending_target": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "hidden_route_opportunities": { "$ref": "#/$defs/stringList" },
+        "traversal_plan": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/packetPlan" } },
+        "memory_delta": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/memoryObservation" } }
+      }
+    },
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "technical_slot_id",
+        "scene_id",
+        "arc_id",
+        "title",
+        "scene_type",
+        "beat_jobs",
+        "branch_depth",
+        "claimant_focus_ids",
+        "threshold_figure",
+        "threshold_resultant",
+        "state_inputs",
+        "state_effects",
+        "artifact_ids",
+        "choice_edge_ids",
+        "major_decision",
+        "hesitation_consequence",
+        "web_composition",
+        "prose_mdx"
+      ],
+      "properties": {
+        "technical_slot_id": { "$ref": "#/$defs/id" },
+        "scene_id": { "$ref": "#/$defs/id" },
+        "arc_id": { "$ref": "#/$defs/id" },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "scene_type": {
+          "enum": [
+            "introduction",
+            "hub",
+            "exploration",
+            "interview",
+            "artifact_encounter",
+            "threshold",
+            "hesitation",
+            "reconvergence",
+            "aftershock",
+            "residue"
+          ]
+        },
+        "beat_jobs": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/nonEmptyString" } },
+        "branch_depth": { "type": "integer", "minimum": 0 },
+        "claimant_focus_ids": { "$ref": "#/$defs/idList" },
+        "threshold_figure": { "type": "string", "pattern": "^[123]-[123]-[123]-[123]$" },
+        "threshold_resultant": { "type": ["string", "null"], "pattern": "^[123]-[123]-[123]-[123]$" },
+        "state_inputs": { "$ref": "#/$defs/stateConditions" },
+        "state_effects": { "type": "array", "items": { "$ref": "#/$defs/stateEffect" } },
+        "artifact_ids": { "$ref": "#/$defs/idList" },
+        "choice_edge_ids": { "$ref": "#/$defs/idList" },
+        "major_decision": { "type": "boolean" },
+        "hesitation_consequence": { "type": ["string", "null"] },
+        "variant_of_scene_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "variant_state_difference": { "type": ["string", "null"] },
+        "web_composition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["surface_mode", "artifact_behavior", "navigational_discovery"],
+          "properties": {
+            "surface_mode": { "enum": ["prose", "documentary", "threshold", "mixed"] },
+            "artifact_behavior": { "enum": ["none", "inline", "expanded", "standalone"] },
+            "navigational_discovery": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        },
+        "prose_mdx": { "type": "string", "minLength": 1, "maxLength": 16000 }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "title",
+        "artifact_type",
+        "physical_form",
+        "provenance_in_story",
+        "claimant_relevance_ids",
+        "interpretive_function",
+        "contradiction",
+        "presentation_mode",
+        "preview_excerpt",
+        "body_mdx"
+      ],
+      "properties": {
+        "artifact_id": { "$ref": "#/$defs/id" },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "artifact_type": { "$ref": "#/$defs/nonEmptyString" },
+        "physical_form": { "$ref": "#/$defs/nonEmptyString" },
+        "provenance_in_story": { "$ref": "#/$defs/nonEmptyString" },
+        "claimant_relevance_ids": { "$ref": "#/$defs/idList" },
+        "interpretive_function": { "$ref": "#/$defs/nonEmptyString" },
+        "contradiction": { "$ref": "#/$defs/nonEmptyString" },
+        "presentation_mode": { "enum": ["inline_expandable", "standalone_route"] },
+        "preview_excerpt": { "$ref": "#/$defs/nonEmptyString" },
+        "body_mdx": { "type": "string", "minLength": 1, "maxLength": 12000 }
+      }
+    },
+    "ending": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "technical_slot_id",
+        "ending_id",
+        "title",
+        "ending_type",
+        "claimant_pressure_ids",
+        "entry_conditions",
+        "state_effects",
+        "redirect_target_scene_id",
+        "prose_mdx"
+      ],
+      "properties": {
+        "technical_slot_id": { "$ref": "#/$defs/id" },
+        "ending_id": { "$ref": "#/$defs/id" },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "ending_type": { "enum": ["commitment", "foreclosure", "contamination", "release", "redirective", "other"] },
+        "claimant_pressure_ids": { "$ref": "#/$defs/idList" },
+        "entry_conditions": { "$ref": "#/$defs/stateConditions" },
+        "state_effects": { "type": "array", "items": { "$ref": "#/$defs/stateEffect" } },
+        "redirect_target_scene_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "prose_mdx": { "type": "string", "minLength": 1, "maxLength": 14000 }
+      }
+    },
+    "formalComposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["composition_id", "container_id", "form", "dramatic_function", "anchor"],
+      "properties": {
+        "composition_id": { "$ref": "#/$defs/id" },
+        "container_id": { "$ref": "#/$defs/id" },
+        "form": { "$ref": "#/$defs/nonEmptyString" },
+        "dramatic_function": { "$ref": "#/$defs/nonEmptyString" },
+        "anchor": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "creativePacket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type",
+        "protocol_version",
+        "generation_id",
+        "commit_id",
+        "architecture_commit_id",
+        "story_format",
+        "packet_slot_id",
+        "packet_kind",
+        "packet_sequence",
+        "obligations_consumed",
+        "scenes",
+        "artifacts",
+        "endings",
+        "decision_edges",
+        "formal_compositions",
+        "memory_delta"
+      ],
+      "properties": {
+        "record_type": { "const": "creative_packet" },
+        "protocol_version": { "const": "2.0" },
+        "generation_id": { "$ref": "#/$defs/id" },
+        "commit_id": { "$ref": "#/$defs/id" },
+        "architecture_commit_id": { "$ref": "#/$defs/id" },
+        "story_format": { "const": "web" },
+        "packet_slot_id": { "$ref": "#/$defs/id" },
+        "packet_kind": { "enum": ["literary", "ending"] },
+        "packet_sequence": { "type": "integer", "minimum": 1 },
+        "obligations_consumed": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+        "scenes": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/scene" } },
+        "artifacts": { "type": "array", "maxItems": 6, "items": { "$ref": "#/$defs/artifact" } },
+        "endings": { "type": "array", "maxItems": 6, "items": { "$ref": "#/$defs/ending" } },
+        "decision_edges": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/decisionEdge" } },
+        "formal_compositions": { "type": "array", "maxItems": 4, "items": { "$ref": "#/$defs/formalComposition" } },
+        "memory_delta": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/memoryObservation" } }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "packet_kind": { "const": "literary" } } },
+          "then": {
+            "properties": {
+              "scenes": { "minItems": 3 },
+              "endings": { "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "packet_kind": { "const": "ending" } } },
+          "then": {
+            "properties": {
+              "scenes": { "maxItems": 0 },
+              "endings": { "minItems": 2 }
+            }
+          }
+        }
+      ]
+    },
+    "indexBatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type",
+        "protocol_version",
+        "generation_id",
+        "index_batch_id",
+        "source_commit_ids",
+        "observations"
+      ],
+      "properties": {
+        "record_type": { "const": "index_batch" },
+        "protocol_version": { "const": "2.0" },
+        "generation_id": { "$ref": "#/$defs/id" },
+        "index_batch_id": { "$ref": "#/$defs/id" },
+        "source_commit_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+        "observations": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/memoryObservation" } }
+      }
+    },
+    "memoryEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type",
+        "protocol_version",
+        "generation_id",
+        "memory_event_sequence",
+        "origin_step_id",
+        "memory_id",
+        "memory_class",
+        "memory_kind",
+        "action",
+        "proposition",
+        "status",
+        "sources"
+      ],
+      "properties": {
+        "record_type": { "const": "memory_event" },
+        "protocol_version": { "const": "2.0" },
+        "generation_id": { "$ref": "#/$defs/id" },
+        "memory_event_sequence": { "type": "integer", "minimum": 1 },
+        "origin_step_id": { "$ref": "#/$defs/id" },
+        "memory_id": { "$ref": "#/$defs/id" },
+        "memory_class": { "enum": ["canonical_state", "narrative_working"] },
+        "memory_kind": { "$ref": "#/$defs/memoryObservation/properties/memory_kind" },
+        "action": { "$ref": "#/$defs/memoryObservation/properties/action" },
+        "proposition": { "$ref": "#/$defs/nonEmptyString" },
+        "status": { "$ref": "#/$defs/memoryObservation/properties/status" },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/hashedSourceRef" }
+        },
+        "supersedes_memory_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "branch_scope_ids": { "$ref": "#/$defs/idList" }
+      }
+    },
+    "tokenAccounting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_tokens", "output_tokens", "cost"],
+      "properties": {
+        "input_tokens": { "type": ["integer", "null"], "minimum": 0 },
+        "output_tokens": { "type": ["integer", "null"], "minimum": 0 },
+        "cost": { "type": ["number", "null"], "minimum": 0 },
+        "currency": { "type": ["string", "null"], "pattern": "^[A-Z]{3}$" }
+      }
+    },
+    "ledgerEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type",
+        "protocol_version",
+        "generation_id",
+        "ledger_sequence",
+        "planned_step_id",
+        "attempt",
+        "step_type",
+        "step_phase",
+        "previous_entry_hash",
+        "entry_hash",
+        "parent_canonical_state_hash",
+        "prompt_hash",
+        "context_hash",
+        "provider",
+        "model",
+        "parameters",
+        "seed",
+        "started_at",
+        "completed_at",
+        "output_hash",
+        "generated_artifact_ids",
+        "canonical_state_delta_ids",
+        "unresolved_thread_delta_ids",
+        "motif_delta_ids",
+        "branch_path_relation",
+        "commit_status",
+        "canonical_state_hash_after",
+        "failure_class",
+        "token_accounting"
+      ],
+      "properties": {
+        "record_type": { "const": "ledger_entry" },
+        "protocol_version": { "const": "2.0" },
+        "generation_id": { "$ref": "#/$defs/id" },
+        "ledger_sequence": { "type": "integer", "minimum": 1 },
+        "planned_step_id": { "$ref": "#/$defs/id" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "step_type": { "enum": ["creative", "analysis_or_index", "deterministic"] },
+        "step_phase": {
+          "enum": [
+            "preflight",
+            "engine_freeze",
+            "genesis",
+            "architecture",
+            "literary_packet",
+            "ending_packet",
+            "index",
+            "projection",
+            "validation",
+            "artistic_acceptance",
+            "build",
+            "build_validation",
+            "finalization"
+          ]
+        },
+        "previous_entry_hash": { "anyOf": [{ "$ref": "#/$defs/hash" }, { "type": "null" }] },
+        "entry_hash": { "$ref": "#/$defs/hash" },
+        "parent_canonical_state_hash": { "$ref": "#/$defs/hash" },
+        "prompt_hash": { "anyOf": [{ "$ref": "#/$defs/hash" }, { "type": "null" }] },
+        "context_hash": { "anyOf": [{ "$ref": "#/$defs/hash" }, { "type": "null" }] },
+        "provider": { "type": ["string", "null"] },
+        "model": { "type": ["string", "null"] },
+        "parameters": { "type": ["object", "null"] },
+        "seed": { "type": ["string", "null"] },
+        "started_at": { "$ref": "#/$defs/timestamp" },
+        "completed_at": { "$ref": "#/$defs/timestamp" },
+        "output_hash": { "anyOf": [{ "$ref": "#/$defs/hash" }, { "type": "null" }] },
+        "generated_artifact_ids": { "$ref": "#/$defs/idList" },
+        "canonical_state_delta_ids": { "$ref": "#/$defs/idList" },
+        "unresolved_thread_delta_ids": { "$ref": "#/$defs/idList" },
+        "motif_delta_ids": { "$ref": "#/$defs/idList" },
+        "branch_path_relation": { "type": ["string", "null"] },
+        "commit_status": { "enum": ["COMMITTED", "FAILED_BEFORE_COMMIT"] },
+        "canonical_state_hash_after": { "$ref": "#/$defs/hash" },
+        "failure_class": {
+          "enum": [
+            "none",
+            "transport_before_response",
+            "provider_before_creative_output",
+            "malformed_response",
+            "mechanical_validation",
+            "continuity_impossibility",
+            "budget_exhaustion",
+            "artistic_rejection",
+            "build_failure"
+          ]
+        },
+        "token_accounting": { "$ref": "#/$defs/tokenAccounting" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "step_type": { "enum": ["creative", "analysis_or_index"] }
+            }
+          },
+          "then": {
+            "properties": {
+              "prompt_hash": { "$ref": "#/$defs/hash" },
+              "context_hash": { "$ref": "#/$defs/hash" },
+              "provider": { "$ref": "#/$defs/nonEmptyString" },
+              "model": { "$ref": "#/$defs/nonEmptyString" },
+              "parameters": { "type": "object" },
+              "seed": { "$ref": "#/$defs/nonEmptyString" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "commit_status": { "const": "COMMITTED" } } },
+          "then": {
+            "properties": {
+              "output_hash": { "$ref": "#/$defs/hash" },
+              "failure_class": { "const": "none" }
+            }
+          }
+        },
+        {
+          "if": {
+            "allOf": [
+              { "properties": { "step_type": { "const": "creative" } } },
+              { "properties": { "commit_status": { "const": "COMMITTED" } } }
+            ]
+          },
+          "then": {
+            "properties": {
+              "generated_artifact_ids": { "minItems": 1 },
+              "branch_path_relation": { "$ref": "#/$defs/nonEmptyString" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "commit_status": { "const": "FAILED_BEFORE_COMMIT" } } },
+          "then": {
+            "properties": {
+              "generated_artifact_ids": { "maxItems": 0 },
+              "canonical_state_delta_ids": { "maxItems": 0 },
+              "unresolved_thread_delta_ids": { "maxItems": 0 },
+              "motif_delta_ids": { "maxItems": 0 }
+            }
+          }
+        }
+      ]
+    },
+    "validationVerdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "reasons"],
+      "properties": {
+        "result": { "enum": ["PASS", "FAIL", "NOT_RUN"] },
+        "reasons": { "$ref": "#/$defs/stringList" }
+      }
+    },
+    "artisticVerdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "reasons"],
+      "properties": {
+        "result": { "enum": ["PASS", "FAIL GENERATION", "NOT_RUN"] },
+        "reasons": { "$ref": "#/$defs/stringList" }
+      }
+    },
+    "finalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type",
+        "protocol_version",
+        "generation_id",
+        "run_status",
+        "run_manifest_hash",
+        "generation_brief_hash",
+        "completed_at",
+        "creative_step_count",
+        "analysis_or_index_step_count",
+        "human_intervention_count",
+        "committed_rewrite_count",
+        "committed_regeneration_count",
+        "backtrack_count",
+        "ledger_head_hash",
+        "committed_record_hashes",
+        "memory_event_stream_hash",
+        "token_accounting",
+        "mechanical_validation",
+        "artistic_acceptance",
+        "static_build_validation",
+        "complete_work_barrier_satisfied",
+        "playable",
+        "failure_class"
+      ],
+      "properties": {
+        "record_type": { "const": "finalization" },
+        "protocol_version": { "const": "2.0" },
+        "generation_id": { "$ref": "#/$defs/id" },
+        "run_status": { "enum": ["READY_TO_PLAY", "FAILED_GENERATION"] },
+        "run_manifest_hash": { "$ref": "#/$defs/hash" },
+        "generation_brief_hash": { "$ref": "#/$defs/hash" },
+        "completed_at": { "$ref": "#/$defs/timestamp" },
+        "creative_step_count": { "type": "integer", "minimum": 0 },
+        "analysis_or_index_step_count": { "type": "integer", "minimum": 0 },
+        "human_intervention_count": { "type": "integer", "minimum": 0 },
+        "committed_rewrite_count": { "type": "integer", "minimum": 0 },
+        "committed_regeneration_count": { "type": "integer", "minimum": 0 },
+        "backtrack_count": { "type": "integer", "minimum": 0 },
+        "ledger_head_hash": { "$ref": "#/$defs/hash" },
+        "committed_record_hashes": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/hash" }
+        },
+        "memory_event_stream_hash": { "$ref": "#/$defs/hash" },
+        "token_accounting": { "$ref": "#/$defs/tokenAccounting" },
+        "mechanical_validation": { "$ref": "#/$defs/validationVerdict" },
+        "artistic_acceptance": { "$ref": "#/$defs/artisticVerdict" },
+        "static_build_validation": { "$ref": "#/$defs/validationVerdict" },
+        "complete_work_barrier_satisfied": { "type": "boolean" },
+        "playable": { "type": "boolean" },
+        "failure_class": {
+          "enum": [
+            "none",
+            "transport_before_response",
+            "provider_before_creative_output",
+            "malformed_response",
+            "mechanical_validation",
+            "continuity_impossibility",
+            "budget_exhaustion",
+            "artistic_rejection",
+            "build_failure"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "run_status": { "const": "READY_TO_PLAY" } } },
+          "then": {
+            "properties": {
+              "creative_step_count": { "minimum": 1 },
+              "human_intervention_count": { "const": 0 },
+              "committed_rewrite_count": { "const": 0 },
+              "committed_regeneration_count": { "const": 0 },
+              "backtrack_count": { "const": 0 },
+              "mechanical_validation": { "properties": { "result": { "const": "PASS" } } },
+              "artistic_acceptance": { "properties": { "result": { "const": "PASS" } } },
+              "static_build_validation": { "properties": { "result": { "const": "PASS" } } },
+              "complete_work_barrier_satisfied": { "const": true },
+              "playable": { "const": true },
+              "failure_class": { "const": "none" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "run_status": { "const": "FAILED_GENERATION" } } },
+          "then": {
+            "properties": {
+              "complete_work_barrier_satisfied": { "const": false },
+              "playable": { "const": false },
+              "failure_class": {
+                "enum": [
+                  "transport_before_response",
+                  "provider_before_creative_output",
+                  "malformed_response",
+                  "mechanical_validation",
+                  "continuity_impossibility",
+                  "budget_exhaustion",
+                  "artistic_rejection",
+                  "build_failure"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

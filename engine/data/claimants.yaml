@@ -2,7 +2,8 @@ version: 1.0
 
 purpose: >
   Define generative law for a five-claimant set without defining any claimant.
-  Every fictional value is authored inside the same creative transaction as the work.
+  Every fictional value is authored together in the genesis creative step of the
+  autonomous generation run, then frozen as generated root canon.
 
 claimant_set:
   count_exact: 5

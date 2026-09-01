@@ -8,7 +8,8 @@ This project is a static, build-time-generated literary artwork that combines no
 
 1. Nonlinear mystery narrative
 2. Static-site artifact experience
-3. One creative model transaction followed by deterministic validation and building
+3. One autonomous, uninterrupted, append-only creative run followed by complete-work
+   validation and static building
 
 All three pillars must remain present. If one disappears, the work has become a different thing.
 
@@ -55,19 +56,21 @@ The human authors:
 - five semantically blank claimant positions
 - setting envelope, scope, budgets, threshold geomancy, and build behavior
 
-The single creative transaction authors:
+The autonomous generation run authors:
 
 - all claimant and non-claimant identities and relationships
 - the exact incident, chronology, evidence, contradictions, and culpability
 - all arcs, scenes, artifacts, choices, endings, poetry, and prose
 - the complete generated-work canon
 
-The model may instantiate but may not replace engine metaphysics or formal law. No
-earlier creative call may plan material for a later creative call.
+The model may instantiate but may not replace engine metaphysics or formal law.
+Genesis, frozen generated architecture, and forward literary packets are one causally
+continuous act. Later calls may use committed material as immutable history but may
+not rewrite or regenerate it.
 
 ## 7. MVP Boundary
 
-The MVP is one short work with:
+The instrument supports one complete work at the frozen possible-scene scope with:
 
 - one surface setting
 - five claimants in the current `hospice-annex-v01` work instance

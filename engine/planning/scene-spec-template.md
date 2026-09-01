@@ -1,7 +1,7 @@
 # Generated Scene Record Shape
 
-Scene specifications and complete scene prose are emitted together in one bundle.
-This file is not a handoff to a later prose generator.
+Scene specifications and complete scene prose are emitted together in one immutable
+literary packet. This file is not a human-authored worksheet.
 
 ```json
 {
@@ -28,7 +28,7 @@ Every scene must perform at least two real dramatic jobs and change interpretati
 pressure, state, or consequence. The first live hub occurs after three to five
 reader-perspective scene surfaces and has exactly three generated situated actions.
 Other meaningful decisions have two to five live choices. Major decisions require a
-consequential hesitation path encoded in the same bundle.
+consequential hesitation path already frozen in generated architecture.
 
 Threshold figures and resultants come from deterministic preparation. Titles, events,
 details, clues, claimant influence, choices, and prose are generated.

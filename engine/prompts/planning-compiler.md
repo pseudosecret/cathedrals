@@ -1,57 +1,46 @@
 # Deterministic Structural Preparation Contract
 
-The filename is retained for path stability. This is no longer a creative planning
-stage.
+The filename is retained for path stability. This is not a creative planning stage.
 
 ## Inputs
 
-- engine canon and work-instance scope
-- work, structural, and geomancy seeds
-- selected model's documented maximum output
+- frozen engine canon and `generation_brief`
+- frozen possible-scene scope and derived profile guidance
+- work, structural, traversal, and geomancy seeds
+- documented context/output limits for every selected model
 - generation ID and technical provenance
 
 ## Outputs
 
 Produce deterministic data only:
 
-- passing or failing budget calculation
-- abstract node and edge slots
-- three to five pre-hub scene slots
-- one exact three-option opening decision group
-- downstream split slots
-- lawful reconvergence and redirect slots
-- variable depth bounds
-- major-decision slots with required hesitation edges
-- state keys and permitted state operations
-- threshold figure assignments, resultants, and transition tendencies
-- engine/config hashes
+- per-step and cumulative budget verdicts
+- abstract node/edge slots sized from the frozen possible-scene scope
+- three to five pre-hub scene slots and one exact three-option opening group
+- downstream split, reconvergence, redirect, unequal-depth, and hidden-route capacity
+- major-decision slots with hesitation edges
+- state keys and permitted operations
+- threshold figures, resultants, transition tendencies, and ending pressure
+- engine/config/prompt/schema hashes
+- immutable run manifest
 
-Use stable synthetic IDs such as `scene_slot_01`, `decision_group_01`, and
-`edge_slot_01`. Technical IDs carry no fictional meaning.
+Use stable synthetic IDs. Technical IDs carry no fictional meaning.
 
 ## Forbidden Outputs
 
-Do not produce:
-
-- claimant profiles or archetype assignments
-- character names, roles, relationships, or voices
-- incident facts or chronology
-- arc purposes or scene events
-- artifacts, evidence, clues, or contradictions
-- reader-facing choices
-- endings, poetry, or prose
-
-If preparation starts answering what happens, it has crossed into the sole creative
-transaction and must stop.
+Do not produce claimant identities or archetypes, incident facts, relationships,
+voices, arc purposes, scene events, clues, artifacts, choices, endings, poetry, or
+prose. If preparation decides what happens, stop before starting the run.
 
 ## Budget
 
-Apply the exact formula and allowances in `engine/data/work-instance.yaml`. Fail
-before creative generation when the selected model capacity or calculated scope is
-insufficient. Never compensate with multiple creative calls.
+Apply the packet and cumulative formulae in `engine/data/work-instance.yaml`. Pass
+only when every planned step fits its model's context and output limits and the full
+derived scope fits the run's token, memory, retrieval, creative-step, and configured cost
+ceilings.
 
 ## Handoff
 
-The deterministic output is included once in the context assembled for
-`engine/prompts/single-transaction-generation.md`. It is not itself generated work
-canon and does not authorize any intermediate model call.
+The frozen output is supplied to genesis. Genesis and architecture may fill the
+abstract slots creatively. The architecture commit must freeze dependency-valid
+packet traversal before literary execution proceeds.

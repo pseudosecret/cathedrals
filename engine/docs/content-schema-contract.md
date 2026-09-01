@@ -2,10 +2,11 @@
 
 ## Authority
 
-`engine/data/generation-bundle.schema.json` is the machine-readable output contract
-for the sole creative transaction. The accepted raw bundle is generated-work canon.
-Everything under `schema-generation/` and `prose/` is a deterministic projection of
-that bundle, not an input to another creative generation stage.
+`engine/data/generation-protocol.schema.json` is the machine-readable contract for
+each record in an append-only generation run. There is no whole-work creative bundle.
+Committed genesis, architecture, and packet records collectively form generated-work
+canon. `schema-generation/` and `prose/` are deterministic projections, never later
+creative inputs except as retrieval views of their immutable sources.
 
 ## Generation-Branch Layout
 
@@ -13,148 +14,131 @@ that bundle, not an input to another creative generation stage.
 
 ```text
 generated-work/<generation-id>/
-  bundle.json
-  manifest.json
-  mechanical-validation.json
-  artistic-acceptance.json
-
-schema-generation/
-  work-canon/<work-id>.json
-  claimant-profiles/<work-id>.json
-  character-profiles/<work-id>.json
-  arc-briefs/<arc-id>.json
-  scene-specs/<scene-id>.json
-  artifact-specs/<artifact-id>.json
-  decision-graph.json
-
-prose/
-  scenes/<scene-id>.mdx
-  artifacts/<artifact-id>.mdx
-  endings/<ending-id>.mdx
+  provenance/
+    run-manifest.json
+    run-ledger.jsonl
+    committed/
+      <sequence>-<step-id>/record.json
+      <sequence>-<step-id>/raw-response.txt
+    raw/
+      <sequence>-<attempt>.json
+    memory/
+      memory-events.jsonl
+      canonical-memory.json
+      working-memory.json
+    validation/
+      mechanical.json
+      artistic.json
+      build.json
+    finalization.json
+  web/
+    public/work.json
+    public/source/<content-id>.md
+    src/
+    dist/
 ```
 
 No generated work becomes canonical content of `main`.
 
-## Bundle Boundary
+## Record Protocol
 
-The creative response must be exactly one JSON document conforming to the schema. Do
-not wrap it in prose or Markdown fences. A truncated or ambiguous response fails.
+The protocol schema validates these independent record types:
 
-The bundle contains together:
+- `run_manifest`: immutable brief, frozen engine provenance, limits, traversal
+  strategy, providers, retention law, and complete-work barrier.
+- `genesis`: generated root canon, exactly five generated claimants, significant
+  characters, and initial memory observations.
+- `architecture`: generated arcs, complete macro graph, promises, ending families,
+  hidden-route opportunities, and frozen packet traversal.
+- `creative_packet`: several related scenes or endings, associated artifacts/formal
+  compositions, and source-located memory observations.
+- `index_batch`: optional non-creative source extraction.
+- `memory_event`: source-hashed append-only canonical-state or working-memory record.
+- `ledger_entry`: hash-chained provenance for one attempted step.
+- `finalization`: counters, hashes, resource accounting, verdicts, build status, and
+  the sole terminal state.
 
-- provenance
-- exact generated work canon and chronology
-- five generated claimant profiles and their relationships
-- generated non-claimant characters
-- arc purposes and structural roles
-- scene specifications and complete scene prose
-- artifact specifications and complete artifact text
-- ending specifications and complete ending prose
-- formal-composition placement metadata
-- the complete decision graph and state effects
+Each JSON record must parse and validate before commit. Raw responses are preserved.
+Truncated, ambiguous, or creatively malformed output is not completed by inference.
 
-Stable IDs use lowercase letters, digits, and underscores. Examples such as
-`claimant_a`, `generated_claimant_id`, `scene_01`, and `artifact_01` are synthetic and
-carry no desired fictional meaning.
+## Atomic Commit and Immutability
+
+A creative commit succeeds only when the raw response is preserved, its protocol
+record validates, all locally resolvable IDs and obligations pass, its content hash is
+calculated, memory events can be source-resolved, and a ledger entry can be appended.
+The validated record is then atomically moved into `committed/` and becomes immutable.
+
+Commit directories are never overwritten. Hash validation detects filesystem
+mutation; each `entry_hash` is SHA-256 over canonicalized entry JSON with the
+`entry_hash` field omitted. The ledger's `previous_entry_hash`,
+`parent_canonical_state_hash`,
+`canonical_state_hash_after`, and committed-record hashes establish the forward
+lineage. A failed pre-commit attempt may leave audit evidence but creates no canon.
+
+## Memory Projection
+
+Creative packets emit source-located memory observations. Deterministic projection
+adds the immutable source commit and SHA-256 hash and appends normalized
+`memory_event` records to `memory-events.jsonl`. Analysis/index batches follow the
+same path and may only assert propositions supported by cited committed sources.
+
+Canonical-state kinds include characters, chronology, objects, locations,
+relationships, character knowledge, world state, and irreversible events. Working
+memory includes unresolved threads, promises, callbacks, motifs, questions, branch
+residue, foreshadowing, thematic pressure, and intentional contradictions.
+
+Status changes and index corrections are new memory events. They may supersede an
+index record, never the cited source. `retrieval-index.json` is rebuildable and has no
+canonical authority. Recursive summaries are not source evidence.
 
 ## Deterministic Projection
 
-After the bundle passes schema and cross-reference validation, a deterministic tool
-may:
+After each commit, deterministic tools may append indexes and project records for
+validation. They may copy structured fields, add mechanical frontmatter, and copy
+`prose_mdx` or `body_mdx` verbatim. They may not summarize, rephrase, reorder literary
+paragraphs, normalize punctuation, add transitions, or change graph meaning.
 
-1. preserve the raw response as `bundle.json`
-2. copy each structured record to its declared output directory
-3. add mechanical frontmatter derived only from that record
-4. copy `prose_mdx` or `body_mdx` verbatim beneath the frontmatter
-5. serialize `decision_graph` as `schema-generation/decision-graph.json`
-6. calculate file hashes and write the manifest
+Generated Markdown is data, never executable route code. Imports, exports, scripts,
+and arbitrary JSX in generated literary strings fail mechanical validation.
 
-Projection must not summarize, rephrase, reorder literary paragraphs, normalize
-punctuation, repair dialogue, add transitions, or otherwise change creative content.
+## Cross-Record Validation
 
-## MDX Projection
+JSON Schema cannot enforce the whole run. Deterministic validation must also confirm:
 
-Scene frontmatter is derived mechanically:
-
-```yaml
----
-id: scene_01
-work_id: hospice-annex-v01
-arc_id: generated_arc_id
-claimant_focus_ids:
-  - claimant_a
-artifact_ids:
-  - artifact_01
-choice_edge_ids:
-  - edge_01
-major_decision: false
-generation_id: generation_example
----
-```
-
-Artifact and ending frontmatter follow the same rule: identifiers, relationships,
-state metadata, and generation ID come from the bundle; the literary body is copied
-verbatim. Generated MDX is restricted to plain Markdown plus an engine-approved
-component allowlist. Imports, exports, scripts, and arbitrary JSX fail mechanical
-validation.
-
-## Cross-Reference Validation
-
-JSON Schema cannot enforce graph-wide identity. Deterministic validation must also
-confirm:
-
-- all IDs are unique within and across relevant namespaces
-- all technical claimant slots appear exactly once
-- every referenced claimant, character, arc, scene, artifact, ending, node, and edge exists
-- every arc's scene list agrees with scene records
-- every graph node resolves to exactly one scene or ending
-- every graph edge has existing endpoints
-- the entry scene and opening decision group exist
-- the opening group has exactly three playable options
+- generation IDs, protocol versions, sequences, hash chains, and canonical-state
+  parent hashes agree
+- the run manifest and generation brief never changed
+- engine hashes remain identical to the preflight snapshot
+- every committed creative record still matches its ledger output hash
+- all technical claimant slots appear exactly once in genesis
+- all IDs are unique and every claimant, character, arc, scene, artifact, ending,
+  composition, node, edge, packet dependency, and memory source resolves
+- architecture traversal is dependency-valid and no packet was generated out of order
+- each literary packet contains three to eight planned scenes and each ending packet
+  contains two to six prerequisite-satisfied endings
+- the complete work honors the explicit possible-scene scope and its derived count and literary-word bounds
+- all architecture nodes receive content exactly once; no unplanned candidate is kept
+- the opening group has exactly three playable options after three to five
+  reader-perspective scene surfaces
 - every other meaningful decision has two to five playable options
-- opening branches split again
-- reconvergent nodes preserve multiple inbound edges and consequential state
-- every major decision exposes a consequential hesitation path
-- redirective endings name valid new-beginning scenes
-- formal-composition anchors resolve to generated content
-- prose, artifact, and ending hard word limits are respected
-- `creative_transaction_count` equals `1`
+- opening branches split again; reconvergence preserves state; depth is unequal
+- every major decision exposes consequential hesitation
+- redirective endings resolve to prebuilt scenes
+- stateful variants differ materially and formal-composition anchors resolve
+- every important memory event cites existing immutable source evidence
+- generated MDX is safe and projection preserves literary bytes
+- counters and cumulative token, cost, retrieval, and memory budgets are within limits
+- `human_intervention_count`, `committed_rewrite_count`,
+  `committed_regeneration_count`, and `backtrack_count` are all zero
 
-## Manifest and Immutability
+## Finalization and Complete-Work Barrier
 
-`manifest.json` records the provenance required by `engine/data/work-instance.yaml`
-and a SHA-256 hash for:
+`finalization.json` records the ledger head, committed record hashes, memory stream
+hash, step counters, token/cost totals, validation verdicts, and terminal state.
+`READY_TO_PLAY` requires positive creative-step count; zero intervention, rewrite,
+regeneration, and backtrack counters; full mechanical and artistic passes; a passing
+static build; and `complete_work_barrier_satisfied: true`.
 
-- `bundle.json`
-- every projected scene, artifact, and ending file
-- the projected decision graph
-- mechanical and artistic validation results
-
-Once accepted, any literary hash mismatch invalidates the generation. Humans may
-inspect, diff, render, preserve, or reject generated prose; they may not edit it.
-
-## Validation Results
-
-Mechanical validation emits structured pass/fail details. Artistic evaluation emits:
-
-```json
-{
-  "generation_id": "generation_example",
-  "result": "PASS",
-  "reasons": []
-}
-```
-
-or:
-
-```json
-{
-  "generation_id": "generation_example",
-  "result": "FAIL GENERATION",
-  "reasons": ["Concrete reasons only"]
-}
-```
-
-Neither result may contain or trigger replacement prose. A failed generation is
-preserved or discarded as a whole; a later attempt starts a new generation ID and a
-new single creative transaction.
+`FAILED_GENERATION` always has `playable: false`. There is no partially generated but
+playable state. A later run receives a new generation ID and does not reopen the old
+canon.

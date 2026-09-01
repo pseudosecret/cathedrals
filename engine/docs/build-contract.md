@@ -2,7 +2,8 @@
 
 ## Purpose
 
-This document defines how Astro should consume repo truth and render the current accepted executable slice without moving story structure into runtime code.
+This document defines how Astro should consume repo truth and render the complete
+accepted generated work without moving story structure into runtime code.
 
 ## Build Principles
 
@@ -33,21 +34,18 @@ Requirements:
 
 ## Canonical Inputs
 
-The build layer reads from:
+The executable projects immutable committed records into:
 
-- `prose/scenes/*.mdx`
-- `prose/artifacts/*.mdx`
-- `prose/endings/*.mdx`
-- `prose/interstitials/*.mdx` when present
-- `schema-generation/decision-graph.json`
+- `generated-work/<generation-id>/web/public/work.json`
+- `generated-work/<generation-id>/web/public/source/<content-id>.md`
 
-On a generation branch these files are deterministic projections of one accepted
-generation bundle. They are readable and diffable but their literary content is
-immutable.
+The same files are built in ignored run staging before the complete-work barrier and
+published only after acceptance. They are deterministic projections of append-only
+generation records; literary source files remain readable, diffable, and immutable.
 
 The build layer does not invent route structure.
-`schema-generation/decision-graph.json` is a deterministic projection of the accepted
-bundle, not hand-authored canon.
+`work.json` carries the deterministic projection of committed generated architecture,
+not hand-authored canon.
 The build layer also does not expose route-structure language to the normal reader unless an explicit debug view is enabled.
 
 ## Route Structure
@@ -60,7 +58,8 @@ Use these route families:
 - `/endings/[endingId]`
 - optional `/interstitials/[interstitialId]`
 
-Do not embed story text directly in routes when it belongs in `prose/`.
+Do not make a route the sole source of story text; it belongs in projected work data
+and verbatim source files.
 
 Default reading flow should privilege:
 
@@ -185,7 +184,7 @@ Reserved edges:
 
 When an edge changes reader state materially, the graph export must carry that information directly.
 
-Use typed per-edge `state_effects` from the generation-bundle contract rather than
+Use typed per-edge `state_effects` from the generation-protocol contract rather than
 claimant-specific runtime conditionals.
 
 Downstream page implementations should prefer graph-driven state effects over hardcoded claimant-specific edge behavior.
@@ -229,9 +228,13 @@ Disallowed debug controls:
 
 ## Build Completion Condition
 
-Build work is not complete until the site can render the current accepted executable slice from repo-managed prose and graph files without hand-authored story structure in `src/`.
+Build work is not complete until the site can render every lawful path in the complete
+accepted work from repo-managed prose and graph files without hand-authored story
+structure in `src/`.
 It is also not complete if the result remains visually interchangeable with a generic content template.
 
 Astro compilation failure is a mechanical generation failure. Build code may be fixed
 when the defect is in the engine, but generated prose, artifacts, facts, and graph
-meaning may not be edited to make a failed generation compile.
+meaning may not be edited to make a failed generation compile. Nothing is playable
+until the complete static build passes; runtime generation and partial play are
+forbidden.

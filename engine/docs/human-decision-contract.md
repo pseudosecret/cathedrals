@@ -15,7 +15,8 @@ Creative underdetermination is not a blocker.
 - safety or legal decisions
 - a conflict or impossibility in the README constraints
 
-Record any approved engine change in repo truth before generation.
+Record any approved engine change in repo truth before generation. Freeze the user's
+initial high-level experience request before the autonomous run begins.
 
 ## Do Not Ask the Human For
 
@@ -26,10 +27,11 @@ Record any approved engine change in repo truth before generation.
 - what happens after a decision
 - endings, poetry, dialogue, or prose
 
-The single creative transaction decides those matters.
+The autonomous generation run decides those matters. Once it starts, do not ask the
+human which generated option, packet, claimant, branch, artifact, or ending to keep.
 
 ## Validation Is Not Escalation
 
 A mechanical or artistic failure rejects the generation. Do not ask the human how to
-repair the same fictional universe. A future attempt may create an entirely new
-generation after a new explicit instruction.
+repair the same fictional universe. The human may inspect the terminal result, and a
+future explicit instruction may start a new generation ID.

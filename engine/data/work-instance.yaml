@@ -1,4 +1,4 @@
-version: 1.0
+version: 2.0
 
 work:
   id: hospice-annex-v01
@@ -7,13 +7,13 @@ work:
   status: engine_revision
   generated_work_present: false
   description: >
-    A static nonlinear literary work to be generated in one creative transaction
-    inside a snowbound hospice-annex frame. Interpretation, commitment, hesitation,
-    and foreclosure alter what the annex can sustain.
+    A static nonlinear literary work to be generated in one autonomous, uninterrupted,
+    append-only run inside a snowbound hospice-annex frame. Interpretation,
+    commitment, hesitation, and foreclosure alter what the annex can sustain.
 
 execution_phase:
   current_phase: engine_revision
-  current_operation: readme_conformance_refactor
+  current_operation: executable_generator_refactor
   downstream_outputs_authoritative: false
   allowed_write_roots:
     - engine
@@ -28,26 +28,38 @@ execution_phase:
     - "Historical claims never establish current executable truth."
 
 milestone_control:
-  active_milestone_id: readme_conformance_refactor_03
+  active_milestone_id: executable_generator_refactor_05
   active_milestone:
-    id: readme_conformance_refactor_03
+    id: executable_generator_refactor_05
     phase: engine_revision
     status: completed
     purpose: >
-      Restore the README authorship boundary and replace sequential creative stages
-      with one generation-bundle transaction.
+      Add the repository-local Cathedrals executable that directly drives LM Studio,
+      immutable commits, deterministic resume, validation, and the static web build.
     completed_outputs:
       - engine/data/work-instance.yaml
       - engine/data/claimants.yaml
-      - engine/data/generation-bundle.schema.json
+      - engine/data/generation-protocol.schema.json
       - engine/docs/generation-workflow-contract.md
-      - engine/prompts/single-transaction-generation.md
+      - engine/docs/content-schema-contract.md
+      - engine/prompts/generation-genesis.md
+      - engine/prompts/generation-architecture.md
+      - engine/prompts/generation-packet.md
+      - engine/prompts/generation-ending-packet.md
+      - engine/prompts/generation-index.md
+      - engine/tests/validate-generation-protocol.py
+      - engine/formats/web.md
+      - engine/formats/visualnovel.md
+      - cathedrals
+      - .gitignore
+      - engine/tests/test_cathedrals.py
     downstream_outputs_created: false
   next_milestone:
-    id: first_readme_compliant_generation_test_04
+    id: first_interactive_autonomous_generation_test_06
     status: inactive
     activation_requires_explicit_human_instruction: true
-    creative_transaction_limit: 1
+    requested_scene_scope_required: true
+    single_initial_generation_request_required: true
   historical_record: engine/docs/first-spike-freeze.md
   historical_record_is_executable: false
 
@@ -75,7 +87,7 @@ authorship_boundary:
       - scope_and_output_budgets
       - validation_and_build_law
   generated_work_canon:
-    authority: single_creative_transaction
+    authority: one_autonomous_append_only_generation_run
     absent_before_generation: true
     must_define:
       - claimant_identities_and_relationships
@@ -154,7 +166,7 @@ claimants:
     - claimant_slot_03
     - claimant_slot_04
     - claimant_slot_05
-  authoring_mode: generated_together_in_single_creative_transaction
+  authoring_mode: generated_together_in_genesis_creative_step
   locked_fictional_claimants_allowed: false
   preassigned_slot_semantics_allowed: false
   opening_hub_is_claimant_selector: false
@@ -275,73 +287,170 @@ state_logic_profile:
     exact_manifestation_generated: true
 
 scope:
-  profile: one_transaction_32k
-  scene_count_min: 14
-  scene_count_target: 16
-  scene_count_hard_max: 16
-  artifact_count_exact: 5
-  ending_count_min: 5
-  ending_count_hard_max: 7
+  selection_law: >
+    The frozen possible_scene_count supplied by the user is the primary run-level
+    scale input. Profiles are nonbinding heuristics used only to derive budgets.
+  profiles:
+    pilot:
+      scenes: { min: 14, target: 16, hard_max: 18 }
+      artifacts: { min: 5, target: 6, hard_max: 7 }
+      endings: { min: 5, target: 6, hard_max: 7 }
+      formal_compositions: { min: 2, target: 2, hard_max: 3 }
+      literary_words: { target: 12000, hard_max: 15000 }
+      creative_steps: { target: 6, hard_max: 10 }
+      run_input_tokens_hard_max: 600000
+      run_output_tokens_hard_max: 110000
+      memory_records_hard_max: 1200
+    standard:
+      scenes: { min: 30, target: 40, hard_max: 50 }
+      artifacts: { min: 8, target: 11, hard_max: 14 }
+      endings: { min: 7, target: 9, hard_max: 10 }
+      formal_compositions: { min: 3, target: 4, hard_max: 5 }
+      literary_words: { target: 27000, hard_max: 35000 }
+      creative_steps: { target: 12, hard_max: 18 }
+      run_input_tokens_hard_max: 1200000
+      run_output_tokens_hard_max: 200000
+      memory_records_hard_max: 3000
+    large:
+      scenes: { min: 60, target: 72, hard_max: 100 }
+      artifacts: { min: 15, target: 20, hard_max: 25 }
+      endings: { min: 10, target: 14, hard_max: 18 }
+      formal_compositions: { min: 4, target: 6, hard_max: 8 }
+      literary_words: { target: 42300, hard_max: 60000 }
+      creative_steps: { target: 18, hard_max: 28 }
+      run_input_tokens_hard_max: 2000000
+      run_output_tokens_hard_max: 320000
+      memory_records_hard_max: 6000
+    cathedral:
+      scenes: { min: 100, target: 130, hard_max: 180 }
+      artifacts: { min: 25, target: 32, hard_max: 40 }
+      endings: { min: 16, target: 22, hard_max: 28 }
+      formal_compositions: { min: 6, target: 9, hard_max: 12 }
+      literary_words: { target: 80000, hard_max: 110000 }
+      creative_steps: { target: 32, hard_max: 52 }
+      run_input_tokens_hard_max: 4000000
+      run_output_tokens_hard_max: 600000
+      memory_records_hard_max: 12000
   prose_word_limits:
     scene_target: 450
     scene_hard_max: 600
     artifact_target: 250
-    artifact_hard_max: 300
-    ending_target: 300
-    ending_hard_max: 400
+    artifact_hard_max: 350
+    ending_target: 350
+    ending_hard_max: 500
+  packet_shape:
+    literary_scenes_min: 3
+    literary_scenes_max: 8
+    endings_min: 2
+    endings_max: 6
+    associated_artifacts_max: 6
   notes:
     - "Unequal branch depth is required; counts do not imply claimant-route symmetry."
-    - "Scope is deliberately smaller than the superseded 23-to-65-scene plan."
+    - "Reused locations and stateful variants count only when the state difference matters."
+    - "The large target is 42,300 literary words: 72x450 scene, 20x250 artifact, and 14x350 ending words."
+    - "The executable must not clamp an explicit scene scope to a profile hard maximum."
+
+format_selection:
+  accepted_request_values:
+    - web
+    - visualnovel
+    - visual_novel_aliases
+  active_generation_format: web
+  visualnovel_status: deferred
+  visualnovel_alias_behavior: preserve_request_but_generate_web
+  renpy_bootstrap_active: false
 
 generation_budget:
-  calculation_version: 1
-  minimum_model_output_tokens: 32768
-  safety_reserve_tokens: 4096
-  usable_output_tokens: 28672
+  calculation_version: 3
+  primary_scale_input: possible_scene_count
   words_per_token_assumption: 0.75
-  hard_max_creative_words: 13900
-  hard_max_creative_tokens: 18534
-  structured_metadata_token_allowance: 5000
-  json_serialization_token_allowance: 2000
-  estimated_hard_max_output_tokens: 25534
-  usable_headroom_tokens: 3138
-  formula: >
-    ceil(hard_max_creative_words / words_per_token_assumption) +
-    structured_metadata_token_allowance + json_serialization_token_allowance
-    <= minimum_model_output_tokens - safety_reserve_tokens
+  max_prepared_context_tokens: 49152
+  max_retrieved_source_tokens: 12288
+  max_creative_packet_literary_words: 4800
+  creative_packet_literary_tokens: 6400
+  structured_metadata_token_allowance_per_packet: 3500
+  json_serialization_token_allowance_per_packet: 1000
+  max_creative_packet_output_tokens: 10900
+  context_safety_reserve_tokens: 4096
+  minimum_model_context_window_tokens: 64148
+  minimum_model_output_tokens: 10900
+  max_analysis_output_tokens: 4096
+  max_creative_step_count: derived_per_run
+  max_analysis_or_index_step_count: derived_per_run
+  max_cumulative_input_tokens: derived_per_run
+  max_cumulative_output_tokens: derived_per_run
+  max_memory_records: derived_per_run
+  formulae:
+    creative_packet_output: >
+      ceil(max_creative_packet_literary_words / words_per_token_assumption) +
+      structured_metadata_token_allowance_per_packet +
+      json_serialization_token_allowance_per_packet
+    context_window: >
+      max_prepared_context_tokens + max_creative_packet_output_tokens +
+      context_safety_reserve_tokens <= selected_model_context_window_tokens
+    creative_steps: >
+      2 + ceil(possible_scene_count / 3) + ceil(ending_hard_max / 2)
+    memory_records: "max(1000, possible_scene_count * 45)"
   preflight_rules:
-    - "Record the selected model's documented maximum output."
-    - "Fail before generation when the model maximum is below minimum_model_output_tokens."
-    - "Fail before generation when the calculated estimate exceeds usable output tokens."
-    - "Never split creative authorship across calls to escape the budget."
+    - "Record documented context-window and maximum-output limits for each selected model."
+    - "Fail before generation if any planned step exceeds its model's context or output limit."
+    - "Fail before generation if the derived scope cannot fit cumulative token, memory, or configured cost limits."
+    - "Packet size may be reduced within the frozen architecture; committed content may not be regenerated."
 
-generation_transaction:
-  creative_transaction_count_required: 1
-  output_contract: engine/data/generation-bundle.schema.json
-  prompt_contract: engine/prompts/single-transaction-generation.md
-  package_format: application_json
-  must_generate_together:
-    - work_canon
-    - claimant_profiles
-    - characters
-    - arcs
-    - scenes_and_prose
-    - artifacts_and_contents
-    - endings_and_prose
-    - decision_graph
+generation_run:
+  definition: >
+    One autonomous generation run begins from frozen engine inputs and a frozen
+    generation brief, then progresses causally forward until completion or failure
+    without human creative steering or mutation of committed creative artifacts.
+  human_creative_interventions_required: 0
+  committed_creative_rewrites_allowed: false
+  committed_creative_regeneration_allowed: false
+  backward_canon_mutation_allowed: false
+  candidate_cherry_picking_allowed: false
+  append_only: true
+  causally_forward: true
+  creative_step_count_may_exceed_one: true
+  protocol_contract: engine/data/generation-protocol.schema.json
+  ledger_format: jsonl
+  traversal_strategy: dependency_topological
+  traversal_frozen_before_literary_packets: true
+  phases:
+    - genesis
+    - macroarchitecture
+    - forward_literary_packets
+    - endings_and_residue
+    - validation_and_static_build
+  freeze_levels:
+    engine_canon: before_run
+    generation_brief: before_run
+    generated_root_canon: genesis_commit
+    generated_architecture: architecture_commit
+    creative_artifacts: containing_packet_commit
   forbidden_patterns:
-    - claimant_call_then_arc_call
-    - plan_call_then_prose_call
-    - scene_by_scene_calls
+    - human_creative_steering_after_start
+    - creative_candidate_sampling_and_selection
     - critique_then_rewrite
-    - model_generated_material_used_as_later_creative_prompt
+    - regenerate_committed_artifact
+    - silently_retcon_committed_fact
+    - discard_valid_output_for_artistic_weakness
+    - generate_during_play
 
-post_processing:
-  deterministic_only: true
-  allowed:
-    - parse_bundle
-    - validate_schema_ids_references_graph_and_state
-    - split_bundle_into_repo_files
+run_processing:
+  creative_steps_may:
+    - author_genesis
+    - author_frozen_macroarchitecture
+    - author_forward_literary_packets
+    - author_prerequisite_satisfied_ending_packets
+  analysis_or_index_steps_may:
+    - extract_source_grounded_facts
+    - update_retrieval_indexes
+    - classify_motifs
+    - check_continuity
+    - retrieve_relevant_immutable_passages
+  deterministic_steps_may:
+    - validate_protocol_records_ids_references_graph_and_state
+    - append_ledger_and_memory_events
+    - project_committed_records_into_repo_files
     - create_frontmatter
     - serialize_json_and_mdx_without_literary_change
     - hash_generated_files
@@ -357,6 +466,15 @@ validation:
     failed_generation_may_be_replaced_by_fresh_generation: true
   acceptance_source: engine/canon/acceptance-tests.md
 
+complete_work_barrier:
+  partial_play_allowed: false
+  interleaved_generation_and_play_allowed: false
+  runtime_branch_completion_allowed: false
+  playable_only_when_status: READY_TO_PLAY
+  terminal_statuses:
+    - READY_TO_PLAY
+    - FAILED_GENERATION
+
 generated_output_integrity:
   prose_is:
     - readable
@@ -370,17 +488,32 @@ generated_output_integrity:
 provenance:
   required_fields:
     - generation_id
+    - run_status
     - work_seed
     - engine_commit_sha
     - engine_config_hashes
-    - provider
-    - model
-    - generation_parameters
+    - frozen_generation_brief_hash
+    - step_specific_provider_model_and_parameters
+    - prompt_and_context_hashes
+    - step_output_hashes
+    - seeds
     - threshold_geomancy_seed_and_config_hash
     - structural_generation_seed_and_config_hash
-    - generation_timestamp_utc
-    - creative_transaction_count
-  compliance_rule: "creative_transaction_count must equal 1"
+    - timestamps
+    - token_and_cost_accounting_when_available
+    - creative_step_count
+    - analysis_or_index_step_count
+    - human_intervention_count
+    - committed_rewrite_count
+    - committed_regeneration_count
+    - backtrack_count
+    - ledger_head_hash
+  compliance_rules:
+    - "human_intervention_count must equal 0"
+    - "committed_rewrite_count must equal 0"
+    - "committed_regeneration_count must equal 0"
+    - "backtrack_count must equal 0"
+    - "creative_step_count may be greater than one"
 
 build_target:
   framework: astro

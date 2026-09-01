@@ -6,52 +6,75 @@ Read `engine/data/work-instance.yaml` first. While its phase is `engine_revision
 mutate only `engine/`. Do not generate work canon, planning artifacts, prose, a graph,
 or Astro story pages.
 
-## First Generation Test
+## End-User Run
 
-Run the following steps only after one explicit human instruction activates the test.
+From a clean repository, run:
 
-1. Create a generation branch; never place a generated work on `main`.
-2. Verify the working tree and engine commit SHA.
-3. Select one model whose documented maximum output is at least the configured minimum.
-4. Choose the work, structural, and geomancy seeds.
-5. Calculate the output budget and stop before generation if it fails.
-6. Deterministically create the abstract branch skeleton, state envelope, and
+```bash
+./cathedrals
+```
+
+The executable asks only for project name, free-text genre/flavor, possible scene
+scope, and story format. Visual-novel aliases are currently recorded but resolve to
+the active web format. Model selection, when needed, is operational. After the brief
+freezes, the executable asks no creative questions.
+
+It then owns this sequence:
+
+1. Create a generation branch and new generation ID; never generate on `main`.
+2. Verify the clean engine snapshot and record its commit/config hashes.
+3. Freeze the initial experience request as `generation_brief.mutable: false`.
+4. Derive resource budgets from the explicit possible-scene scope; profile labels are
+   guidance and never clamp the requested scope.
+5. Verify documented model context/output limits; calculate per-step and cumulative
+   token, literary-word, memory, retrieval, and configured cost budgets.
+6. Deterministically prepare abstract topology/state capacity and all relevant
    threshold-geomancy assignments.
-7. Hash the engine inputs and assemble the context specified by
-   `engine/prompts/single-transaction-generation.md`.
-8. Make exactly one creative model call and preserve its raw response.
-9. Do not make another creative call for that generation ID.
-10. Parse and schema-validate the complete bundle.
-11. If validation fails, mark the generation failed; repair only purely
-    mechanical serialization when literary bytes and creative facts do not change.
-12. Deterministically project the valid bundle into `schema-generation/` and `prose/`.
-13. Run cross-reference, graph, MDX, and Astro compile checks.
-14. Hash all generated literary files.
-15. Perform artistic acceptance and return only `PASS` or `FAIL GENERATION` with reasons.
-16. On `PASS`, inspect and publish the static Astro site under the build contract.
-17. On any generation failure, do not improve the work. End that generation instance.
+7. Write the immutable run manifest, initialize counters, and start the ledger.
+8. Make the genesis call, preserve raw output, validate it, and atomically commit it.
+9. Make and commit architecture; freeze its graph meaning and packet traversal.
+10. Assemble selective contexts and execute each literary packet in frozen dependency
+    order. Append memory and ledger records after every step.
+11. Run optional source-grounded indexing only when packet-emitted deltas are
+    insufficient.
+12. Generate endings only after their prerequisite histories commit.
+13. Deterministically project all committed content and validate protocol, hashes,
+    graph, state, counts, MDX, memory provenance, and budgets.
+14. Perform whole-work artistic acceptance without a repair prompt.
+15. Compile and validate the complete static Astro site.
+16. Write `finalization.json`: `READY_TO_PLAY` only after every barrier passes;
+    otherwise `FAILED_GENERATION` with `playable: false`.
 
-## Provenance
+Do not pause for creative approval. A valid but ugly packet commits. A run either
+completes or dies.
 
-The accepted manifest records all fields listed in
-`engine/data/work-instance.yaml#provenance`, including
-`creative_transaction_count: 1`. Missing provenance is a mechanical failure.
+The runner talks directly to LM Studio. It does not invoke Pi, Codex, CrewAI, or an
+agent framework. Interrupted runs are detected under `.cathedrals/runs/`; resuming
+reuses the frozen model, prompt hashes, seeds, ledger, and committed records.
 
-## Tracking
+## Provenance and Counters
 
-Repo truth comes first. External trackers may mirror a generation ID and its phase,
-validation verdicts, and build status, but may not contain unique fiction or authorize
-additional creative calls.
+Every attempted step records generation ID, ledger sequence, planned step and attempt,
+type/phase, parent hashes, prompt/context hashes, provider/model/parameters/seed,
+timestamps, output hash, generated IDs, state/thread/motif deltas, branch relation,
+commit status, failure class, and token/cost accounting.
+
+`READY_TO_PLAY` requires zero human interventions, committed rewrites, committed
+regenerations, and backtracks. `creative_step_count` may exceed one.
+
+## Lawful Retry
+
+Retry only a transport failure or provider failure before creative output. Keep the
+same planned step, prompt, context, parameters, and seed; increment only attempt and
+audit data. Malformed output, artistic disappointment, or continuity trouble is not a
+retry condition.
 
 ## Stop Conditions
 
-Stop before the creative call for:
+Stop before creative generation for engine conflict, mutable/missing brief, failing
+preflight, missing deterministic inputs, insufficient model limits, candidate-
+selection logic, or forbidden phase writes. During the run, stop as
+`FAILED_GENERATION` for malformed creative output, exhausted frozen resources,
+unresolvable continuity, mechanical failure, artistic rejection, or build failure.
 
-- engine-canon conflict
-- failing output-budget preflight
-- missing deterministic geomancy or topology input
-- a selected model with insufficient documented output capacity
-- an instruction that would require more than one creative transaction
-- a requested write forbidden by the current phase gate
-
-Do not stop for ordinary fictional choices. They belong to generation.
+Do not stop for ordinary fictional choices. They belong to autonomous generation.

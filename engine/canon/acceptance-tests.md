@@ -1,145 +1,149 @@
 # Acceptance Tests
 
-Every accepted work must pass mechanical validation and artistic acceptance. A failure
-kills that generation. Nothing in this file authorizes creative repair.
+Every accepted work must pass mechanical validation and whole-work artistic
+acceptance. Failure kills the generation. Nothing here authorizes creative repair.
 
-## README Conformance
+## Authorship Boundary
 
-### Authorship
+Before generation, all answers must be `No`:
 
-1. Can the human know the five fictional claimant identities before generation? **No.**
-2. Can the human know their exact roles, voices, or evidence modes before generation? **No.**
-3. Can the human know the exact central incident before generation? **No, beyond its event-class envelope.**
-4. Can the human know what happens scene by scene? **No.**
-5. Can the human know exactly which artifacts will exist? **No.**
-6. Can the human know exactly what the endings depict? **No.**
+1. Can the human know the five fictional claimant identities?
+2. Can the human know their exact roles, relationships, voices, or evidence modes?
+3. Can the human know the exact central incident beyond its event-class envelope?
+4. Can the human know what happens scene by scene?
+5. Can the human know which exact artifacts, formal compositions, or endings exist?
 
-### Artistic Identity
+Pass only when exactly five semantically blank slots were instantiated together in
+genesis and no fictional claimant menu, archetype, name, occupation, evidence family,
+genre, contradiction mode, or consequence existed in engine canon.
 
-7. Is the work recognizably Cathedrals rather than generic AI fiction? **Yes.**
-8. Are the hospice annex, judgment mechanics, thematic pressure, branching grammar,
-   threshold geomancy, and compositional law strongly authored? **Yes.**
-9. Are all five generated claimant forces substantially differentiated? **Yes.**
+## Autonomous Run and Irreversibility
 
-### One Creative Transaction
+Pass only when:
 
-10. How many creative model transactions produced the work? **Exactly 1.**
-11. Was generated creative material used as the prompt for another creative stage? **No.**
-12. Was any scene authored in a later independent creative pass? **No.**
-13. Was any generated prose creatively rewritten by a human or model? **No.**
+- one frozen initial `generation_brief` initiated the entire run
+- the brief was never mutated and no human creative input entered after start
+- `creative_step_count >= 1`; multiple creative calls are lawful
+- genesis, architecture, and packet dependencies proceeded causally forward
+- every valid creative response was committed without candidate scoring or selection
+- no committed creative artifact or fact was rewritten, regenerated, replaced,
+  silently retconned, or removed
+- later calls used earlier material only as immutable evidence and causal history
+- `human_intervention_count = 0`
+- `committed_rewrite_count = 0`
+- `committed_regeneration_count = 0`
+- `backtrack_count = 0`
 
-### Failure Behavior
+Any wrong condition is a conformance failure.
 
-14. Can a bad work be rejected? **Yes.**
-15. Can that same generated work be creatively repaired? **No.**
-16. Can an entirely fresh generation be attempted later? **Yes.**
+## Ledger and Protocol Validation
 
-### Runtime
+Fail for any of the following:
 
-17. Does the final experience require AI? **No.**
-18. Is the final reader artifact static? **Yes.**
+- a run record fails `engine/data/generation-protocol.schema.json`
+- ledger sequences or SHA-256 links are missing, duplicated, reordered, or invalid
+- a committed-record hash differs from its ledger output hash
+- a canonical-state parent hash does not equal the preceding committed state hash
+- the frozen engine snapshot, brief, explicit scene scope, model parameters, seeds, or traversal
+  law changes during the run
+- step-specific provider/model, prompt/context hashes, timestamps, output hashes,
+  artifact IDs, deltas, branch relation, commit status, or token/cost fields are absent
+- a failed attempt is hidden or a technical retry changes prompt, context, parameters,
+  or seed
+- a valid creative result is discarded in favor of another candidate
+- derived scope, packet, cumulative token/cost, retrieval, or memory bounds are exceeded
 
-Any wrong answer is a conformance failure.
+## Content and Graph Validation
 
-## Mechanical Validation
+Fail when:
 
-Fail the generation for any of the following:
-
-- the response is not one complete JSON document
-- the bundle fails `engine/data/generation-bundle.schema.json`
-- `creative_transaction_count` is not `1`
-- IDs are duplicated or references dangle
+- IDs duplicate or references dangle
 - claimant slots are missing, repeated, or not exactly five
-- graph nodes, edges, entry, or redirects are invalid
-- the opening hub does not have exactly three playable edges
-- another meaningful decision has fewer than two or more than five playable edges
-- an opening branch does not split again
-- required reconvergence loses inbound state
+- any architecture node lacks exactly one committed reader-facing output
+- packet traversal violates frozen dependencies
+- literary/ending packet sizes or whole-work derived scope bounds fail
+- the opening hub lacks exactly three playable situated actions after three to five
+  reader-perspective scenes, or acts as a claimant menu
+- another meaningful decision has fewer than two or more than five playable actions
+- opening branches do not split again
+- reconvergence erases consequential inbound state
+- branch depth is uniformly shallow without dramatic cause
 - a major irreversible decision lacks consequential hesitation
-- required scenes, artifacts, endings, formal compositions, or prose bodies are absent
-- the response exceeds the declared scope or was produced without a passing budget preflight
-- generated MDX uses executable imports, exports, scripts, or unapproved components
-- frontmatter, serialization, or Astro compilation fails
-- accepted literary hashes do not match the generated files
+- redirective endings point anywhere except prebuilt content
+- a stateful variant is cosmetic
+- formal-composition anchors or required source evidence are absent
+- generated MDX is unsafe or deterministic projection changes literary bytes
+- graph/state/frontmatter/static Astro compilation fails
 
-Pure serialization repair is lawful only when the literary strings and creative facts
-remain byte-for-byte unchanged. Otherwise fail the generation.
+## Narrative Memory Validation
+
+Pass only when canonical generated state and narrative working memory remain distinct;
+important records identify immutable source type, artifact ID, locator, source commit,
+and source hash; original sources remain retrievable; and an index correction appends
+a superseding record rather than changing source truth. If memory and prose conflict,
+validation and context assembly must prefer prose.
+
+Fail recursive summary chains that no longer resolve to original evidence, retrieval
+that invents a fact, or an analysis/index call that writes replacement fiction.
 
 ## Claimant-Set Acceptance
 
-Pass only if:
+Pass only if every pair is substantially different on the axes in
+`engine/data/claimants.yaml`; at least one claimant pressures truth materially or
+institutionally; at least one pressures it relationally or experientially; at least
+one way of knowing is initially difficult for the others to assimilate; and influence
+emerges unevenly rather than as five symmetrical routes.
 
-- all five identities, incident roles, voices, evidence logics, contradiction modes,
-  environmental pressures, and consequences were generated in the single transaction
-- each pair is substantially different on the axes in `engine/data/claimants.yaml`
-- at least one claimant pressures truth materially or institutionally
-- at least one pressures truth relationally or experientially
-- at least one way of knowing is initially difficult for the others to assimilate
-- influence emerges unevenly through the work rather than as five symmetrical routes
-
-Fail if any claimant is a renamed prewritten archetype, an assigned difference role, or
+Fail a renamed prewritten archetype, assigned difference role, or claimant
 interchangeable with another after surface adjectives are removed.
 
-## Scene and Route Acceptance
+## Scene, Artifact, and Ending Acceptance
 
-A scene passes only if it:
+Each scene must perform at least two dramatic jobs, contain memorable concrete
+detail, change interpretation/pressure/state/consequence, and preserve relevant
+claimant pressure. Each artifact must plausibly exist, alter interpretation, carry a
+clue/contradiction/omission/pressure point, remain readable, and behave as evidence.
 
-- performs at least two dramatic jobs
-- contains at least one memorable concrete detail
-- changes knowledge, pressure, state, interpretation, or consequence
-- makes clues alter interpretation
-- presents clear actions when it contains a decision
-- preserves the generated claimant pressure appropriate to its focus
+The work must preserve downstream splitting, meaningful reconvergence, unequal depth,
+stateful hesitation, contamination, `start_over` semantics, and endings that transform
+or foreclose rather than recap. Every choice and hidden path must already exist before
+play.
 
-The work passes only if:
+## Failure Behavior
 
-- three to five reader-perspective scene surfaces precede the first live hub
-- the first live hub offers exactly three situated actions and is not a claimant menu
-- downstream branches split again, terminate at unequal depths, or reconverge meaningfully
-- earlier path state survives reconvergence
-- hesitation creates residue rather than undo
-- `start_over` remains distinct from in-story reconsideration
-- endings convert interpretation into consequence; redirective endings are graph-explicit
+- Transport or provider failure before creative output may retry identically.
+- Malformed creative output fails the run; do not infer or regenerate it.
+- Artistically weak but mechanically valid output commits and remains history.
+- Contradiction may remain when it is diegetically lawful.
+- Unresolvable mechanical continuity failure ends the run without retcon.
+- Whole-work artistic acceptance returns only `PASS` or `FAIL GENERATION` with
+  concrete reasons and no replacement text.
+- A new attempt uses a new generation ID.
 
-## Artifact Acceptance
+## Complete-Work and Runtime Acceptance
 
-Each artifact must:
+`READY_TO_PLAY` requires complete generated canon, all planned content and state
+variants, decision graph, projections, mechanical pass, artistic pass, static Astro
+build, build validation, hashes, and complete-work barrier. A failed or incomplete
+run has `playable: false` and terminal state `FAILED_GENERATION`.
 
-- plausibly exist as a material or documentary object
-- support, complicate, or bias interpretation
-- contain a legible clue, contradiction, omission, or pressure point
-- remain readable on mobile
-- behave as evidence rather than decoration or disguised exposition
+The final experience is static, client-state-only, and AI-free. It never generates a
+chapter, branch, ending, or revision during play and never waits for player feedback
+or a model response.
 
 ## Artistic Acceptance
 
-Evaluate the complete immutable generation, then return only `PASS` or
-`FAIL GENERATION` with reasons. Fail for:
-
-- generic ominous prose, faux profundity, lore dumping, or therapist-speak
-- arbitrary abstraction or stock AI uncanny-language habits
-- exposition-vending characters or interchangeable voices
-- adjective-only stylistic differentiation
-- unreadable experimental prose
-- atmospheric but inert scenes
-- cosmetic branching or inconsequential choices
-- meaningless artifacts
-- redundant routes, evidence logic, scenes, or endings
-- weak concrete detail or incoherent thematic development
-- endings that recap instead of foreclose, transform, condemn, release, or redirect
-
-Artistic findings are verdicts, not revision instructions.
+Evaluate the complete immutable work after creative generation. Return only `PASS` or
+`FAIL GENERATION` with reasons. Fail generic ominous prose, faux profundity, lore
+dumping, therapist-speak, arbitrary abstraction, interchangeable voices, adjective-
+only differentiation, inert scenes, cosmetic branching, meaningless artifacts,
+redundancy, weak concrete detail, incoherent thematic development, or endings that
+merely recap. Findings are verdicts, not revision instructions.
 
 ## Build Acceptance
 
-The accepted bundle must compile into an Astro static site with:
-
-- prose-dominant, intentionally art-directed reading surfaces
-- strong hierarchy and restrained route-sensitive visual pressure
-- mobile readability and accessible interactions
-- light and dark treatments with sufficient contrast
-- clear choices and meaningful artifact presentation
-- ceremonial endings and a legible taken-path visualization
-- client-side state only and no live AI or server dependency
-
-Fail a visually generic build that resembles text dropped into a template.
+The accepted run must compile into an Astro static site with prose-dominant,
+intentionally art-directed surfaces; mobile readability; accessible interaction;
+light/dark contrast; clear choices; meaningful artifact presentation; ceremonial
+endings; path visualization; client-side state only; and no runtime AI or server
+dependency. Fail a generic template treatment.

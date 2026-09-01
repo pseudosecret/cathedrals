@@ -104,6 +104,7 @@ Threshold figures may also influence:
 - unresolved or contaminated arc termination
 
 Figure assignments, resultants, scene-slot counts, and transition tendencies are
-deterministic preparation. The single creative transaction authors what happens in
-those slots. Figure names and example images are symbolic labels, never claimant
-identities, required props, or required prose.
+deterministic preparation. The generated architecture and forward packets author what
+happens in those slots. Figure names and example images are symbolic labels, never
+claimant identities, required props, or required prose. Later packets do not rewrite
+earlier work to improve geomantic fit.

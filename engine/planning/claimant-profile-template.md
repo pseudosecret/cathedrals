@@ -1,8 +1,8 @@
 # Generated Claimant Profile Shape
 
 This is a documentation view of the `claimants` records in
-`engine/data/generation-bundle.schema.json`. It is not a pre-generation worksheet and
-must never be completed in a separate call.
+`engine/data/generation-protocol.schema.json`. It is not a pre-generation worksheet;
+all five records are authored together in the genesis step.
 
 ```json
 {
@@ -30,6 +30,6 @@ must never be completed in a separate call.
 }
 ```
 
-All five records are generated simultaneously with the complete work. The technical
-slot carries no theme, role, voice, evidence family, or route identity. Reject the
-entire generation if the set fails `engine/data/claimants.yaml`.
+All five records are generated simultaneously and freeze with generated root canon.
+The technical slot carries no theme, role, voice, evidence family, or route identity.
+Reject the entire generation if the set fails `engine/data/claimants.yaml`.

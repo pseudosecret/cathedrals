@@ -4,8 +4,8 @@
 
 This document turns the desired branching feel of the work into explicit structural law.
 
-Use it during deterministic preparation, the single creative transaction, validation,
-and building.
+Use it during deterministic preparation, generated architecture, forward packets,
+validation, and building.
 Its role is to prevent the system from collapsing into three shallow claimant spines with cosmetic variation.
 
 ## Core Model
@@ -118,9 +118,9 @@ Rules:
 - do not label a reset control as `back` or `return` when it does not restore the prior page state
 - hesitation inside the story is not the same as global reset and must remain distinct in wording and state effects
 
-## Generation-Bundle Implications
+## Generation-Protocol Implications
 
-The single generated bundle must explicitly encode:
+The committed architecture and packet records must collectively encode:
 
 - which scenes belong to the introduction sequence
 - which scene or hub is the first exact three-option decision
@@ -130,8 +130,9 @@ The single generated bundle must explicitly encode:
 - which endings are terminal and which are redirective
 
 Deterministic preparation may fix abstract slots, edge cardinalities, branch depths,
-reconvergence capacity, and state laws. It must not decide the actual choices, events,
-branch purposes, claimant influence, revelations, or endings.
+reconvergence capacity, and state laws. Generated architecture freezes actual branch
+purposes, choices, promises, and ending families; later literary packets instantiate
+their assigned content without revising the architecture.
 
 ## Graph Implications
 

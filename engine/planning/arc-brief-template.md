@@ -1,7 +1,7 @@
 # Generated Arc Record Shape
 
-Arc records are authored inside the same creative response as their scenes and prose.
-They are never planning prompts for a later model call.
+Arc records are authored in generated architecture, then freeze as obligations for
+later literary packets. They are not human-authored planning worksheets.
 
 ```json
 {
@@ -17,7 +17,7 @@ They are never planning prompts for a later model call.
 }
 ```
 
-The bundle must collectively preserve the full fractal grammar. Individual arcs may
-be unequal, may mix claimant pressures, and may reconverge. Do not create one arc per
-technical claimant slot by default. Deterministic preparation may supply branch slots
-and cardinalities, but the creative transaction decides arc purposes and events.
+The run must collectively preserve the full fractal grammar. Individual arcs may be
+unequal, mix claimant pressures, and reconverge. Do not create one arc per technical
+claimant slot. Deterministic preparation may supply slots and cardinalities; generated
+architecture decides arc purposes, and packets fulfill them without revision.

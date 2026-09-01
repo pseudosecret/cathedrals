@@ -4,9 +4,9 @@ usage_boundary:
   figure_names_are_claimant_identities: false
   object_actions_are_required_fictional_objects: false
   rules:
-    - "Assign figures and compute resultants before the creative transaction."
+    - "Assign figures and compute resultants for every planned slot before the autonomous creative run."
     - "Treat names, archetypes, and object-actions as symbolic readings, not required plot, character, artifact, or diction values."
-    - "Do not reinterpret figures through a later creative model call after generation."
+    - "Supply only the frozen relevant assignments to each forward packet; never reinterpret committed prose to improve fit."
 dot_values:
   1:
     label: manifest

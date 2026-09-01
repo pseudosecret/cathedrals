@@ -6,37 +6,38 @@ content.
 ## Trackable Units
 
 - engine revision
-- deterministic preflight
-- one creative transaction by generation ID
-- mechanical validation verdict
-- artistic acceptance verdict
-- static build and publication status
+- frozen-brief preflight
+- autonomous generation run by generation ID
+- committed genesis, architecture, and packet sequence numbers
+- analysis/index step count
+- mechanical, artistic, and static-build verdicts
+- terminal state
 
-Do not create separate claimant, arc, scene, artifact, critique, or rewrite tasks that
-imply sequential creative authorship.
+Never create human-assigned claimant, arc, scene, artifact, ending, critique, or
+rewrite tasks during a live run.
 
 ## Ordering
 
 1. update repo truth
-2. complete the relevant local action
-3. record its generation ID, commit, hashes, and verdict in the tracker
+2. complete and append the local ledger action
+3. mirror only generation ID, sequence, hashes, counts, verdict, and status
 
-If tracker state conflicts with the repo or accepted manifest, the repo and manifest
-win. Never store unique fictional facts, generated prose, or repair instructions only
-in tracker issues.
+Repo commits, immutable generated records, and the ledger win every conflict. Never
+store unique fiction, prose, or repair instructions only in a tracker.
 
 ## Statuses
 
 Use only statuses equivalent to:
 
-- engine_revision
-- preflight
-- generating_once
-- mechanical_validation
-- artistic_acceptance
-- accepted
-- rejected
-- built
+- `engine_revision`
+- `preflight`
+- `generating_genesis`
+- `generating_architecture`
+- `generating_forward`
+- `mechanical_validation`
+- `artistic_acceptance`
+- `static_build_validation`
+- `READY_TO_PLAY`
+- `FAILED_GENERATION`
 
-`rejected` is terminal for a generation ID. A fresh attempt receives a new ID; it does
-not reopen the failed work for creative repair.
+`FAILED_GENERATION` is terminal for its generation ID.

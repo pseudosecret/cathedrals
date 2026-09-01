@@ -51,8 +51,8 @@ A merely functional reader shell is insufficient if it looks like a generic star
 
 Because the final build is static, route/state must be represented through prebuilt page variants, URL structure, local client-side state, or both. State must be minimal and inspectable by the system even if the reader does not fully understand it.
 
-All route structure and reader-facing content come from one accepted generation bundle
-and deterministic projections. Runtime code may not invent story structure.
+All route structure and reader-facing content come from accepted immutable generation
+records and deterministic projections. Runtime code may not invent story structure.
 
 ## 7. Mobile / Responsive Constraints
 
@@ -133,3 +133,14 @@ Requirements:
 - The build must verify accepted hashes before publication.
 - Engine defects may be fixed in engine code; generated prose and fictional facts may
   not be edited to make a build pass.
+
+## 14. Generation / Play Separation
+
+- One frozen experience request initiates complete autonomous generation.
+- The work is unavailable to ordinary play until generated canon, all lawful paths,
+  state variants, endings, validation, artistic acceptance, and static build pass.
+- No player action, feedback, or traversal may trigger creative generation.
+- Every presented alternative preexists play, including hidden, redirective,
+  reconvergent, and contamination paths.
+- Terminal state is `READY_TO_PLAY` or `FAILED_GENERATION`; there is no partial-play
+  state.

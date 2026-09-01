@@ -15,14 +15,17 @@
 11. `engine/canon/acceptance-tests.md`
 12. `engine/data/state-model.yaml`
 13. `engine/data/threshold-geomancy.yaml`
-14. `engine/docs/generation-workflow-contract.md`
-15. `engine/docs/content-schema-contract.md`
-16. `engine/docs/validation-runbook.md`
-17. `engine/docs/build-contract.md`
-18. `engine/prompts/single-transaction-generation.md`
+14. `engine/data/generation-protocol.schema.json`
+15. `engine/docs/generation-workflow-contract.md`
+16. `engine/docs/content-schema-contract.md`
+17. `engine/docs/validation-runbook.md`
+18. `engine/docs/build-contract.md`
+19. `engine/prompts/planning-compiler.md`
+20. phase-specific prompts under `engine/prompts/generation-*.md`
 
-The root README governs the artistic experiment. Implementation contracts cannot
-quietly redefine it.
+The root README governs the experiment. Engine law records the explicit operational
+interpretation of `one pass`; its remaining literal tension is documented rather than
+hidden.
 
 ## Current Truth
 
@@ -30,22 +33,24 @@ quietly redefine it.
 - phase: `engine_revision`
 - generated work present: no
 - claimant positions: five semantically blank slots
-- creative transaction count per generation: exactly one
+- generation: one autonomous append-only run; multiple creative steps allowed
+- generation entry point: root `./cathedrals`
+- scale input: user-supplied `possible_scene_count`; profiles are budget guidance
 - renderer: static Astro with client-side state only
-- stale historical outputs: noncanonical and absent
+- visual-novel request aliases: accepted but currently resolved to web
+- play barrier: complete `READY_TO_PLAY` build only
 
-Read the live values from `engine/data/work-instance.yaml`; this summary is only an
-entrypoint.
+Read live values from `engine/data/work-instance.yaml`; this is only an entrypoint.
 
 ## If Asked to Continue
 
-Do not generate fiction from a vague continuation request. Report that the engine is
-ready for an explicit generation-test instruction and identify the configured model
-output minimum. A generation test must create a generation branch, pass deterministic
-budget preparation, and make exactly one creative call.
+Do not generate fiction from a vague continuation request. A future operator starts a
+run explicitly with `./cathedrals`; `surprise me` is a sufficient genre/flavor request.
+The executable freezes the request and preflights packet and total-run budgets before
+starting.
 
 ## Never Infer
 
-Do not infer claimant identities, the exact incident, evidence, scene events,
-artifacts, choices, or endings from examples, historical records, geomancy figure
-names, or prior generations.
+Do not infer claimant identities, exact incident, evidence, scene events, artifacts,
+choices, or endings from examples, historical records, geomancy names, prior
+generations, profile labels, or packet slots.

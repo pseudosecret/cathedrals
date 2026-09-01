@@ -1,0 +1,2496 @@
+#!/usr/bin/env python3
+"""Cathedrals' direct, append-only LM Studio generation harness."""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import datetime as dt
+import hashlib
+import json
+import math
+import os
+import platform
+import re
+import secrets
+import shutil
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+ENGINE = ROOT / "engine"
+PROTOCOL_PATH = ENGINE / "data/generation-protocol.schema.json"
+RUNTIME_ROOT = ROOT / ".cathedrals"
+RUNS_ROOT = RUNTIME_ROOT / "runs"
+DEFAULT_LM_STUDIO_URL = "http://127.0.0.1:1234"
+NODE_VERSION = "22.23.2"
+ASTRO_VERSION = "7.2.9"
+NODE_MINIMUM = (22, 12, 0)
+TERMINAL_STATES = {"READY_TO_PLAY", "FAILED_GENERATION"}
+FORMAT_ALIASES = {
+    "web": "web",
+    "visualnovel": "visualnovel",
+    "visual novel": "visualnovel",
+    "visual-novel": "visualnovel",
+    "vn": "visualnovel",
+}
+RECORD_DEFS = {
+    "run_manifest": "runManifest",
+    "genesis": "genesis",
+    "architecture": "architecture",
+    "creative_packet": "creativePacket",
+    "index_batch": "indexBatch",
+    "memory_event": "memoryEvent",
+    "ledger_entry": "ledgerEntry",
+    "finalization": "finalization",
+}
+ENGINE_CONTEXT_FILES = (
+    "llm-instructions.md",
+    "canon/ontology.md",
+    "canon/arc-grammar.md",
+    "canon/style-rules.md",
+    "data/claimants.yaml",
+    "data/state-model.yaml",
+    "data/work-instance.yaml",
+    "docs/artistic-constitution.md",
+    "docs/branching-architecture-contract.md",
+    "docs/generation-workflow-contract.md",
+    "formats/web.md",
+)
+
+
+class CathedralsError(Exception):
+    def __init__(self, stage: str, reason: str, failure_class: str = "mechanical_validation"):
+        super().__init__(reason)
+        self.stage = stage
+        self.reason = reason
+        self.failure_class = failure_class
+
+
+class SchemaError(CathedralsError):
+    def __init__(self, reason: str):
+        super().__init__("Structured record validation", reason, "malformed_response")
+
+
+class IntegrityError(CathedralsError):
+    def __init__(self, reason: str):
+        super().__init__("Append-only integrity", reason, "mechanical_validation")
+
+
+@dataclass(frozen=True)
+class FrozenInputs:
+    project_name: str = "Cathedrals"
+    genre_flavor: str = "existential mystery"
+    possible_scene_count: int = 150
+    requested_story_format: str = "web"
+    story_format: str = "web"
+    mutable: bool = False
+
+
+def utc_now() -> str:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def canonical_json(value) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+    slug = slug[:48] or "cathedrals"
+    return slug if slug[0].isalpha() else f"cathedrals_{slug}"
+
+
+def write_atomic(path: Path, data: bytes, *, mode: int = 0o644, exclusive: bool = False) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if exclusive and path.exists():
+        raise IntegrityError(f"Refusing to overwrite {path}")
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as handle:
+        temporary = Path(handle.name)
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, mode)
+    if exclusive and path.exists():
+        temporary.unlink()
+        raise IntegrityError(f"Refusing to overwrite {path}")
+    os.replace(temporary, path)
+
+
+def write_json(path: Path, value, *, mode: int = 0o644, exclusive: bool = False) -> None:
+    write_atomic(path, canonical_json(value), mode=mode, exclusive=exclusive)
+
+
+def read_json(path: Path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def make_read_only(path: Path) -> None:
+    os.chmod(path, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+
+
+def _resolve_pointer(document, pointer: str):
+    value = document
+    for part in pointer.removeprefix("#/").split("/"):
+        value = value[part.replace("~1", "/").replace("~0", "~")]
+    return value
+
+
+def _matches_type(value, expected: str) -> bool:
+    return {
+        "object": isinstance(value, dict),
+        "array": isinstance(value, list),
+        "string": isinstance(value, str),
+        "integer": isinstance(value, int) and not isinstance(value, bool),
+        "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+        "boolean": isinstance(value, bool),
+        "null": value is None,
+    }[expected]
+
+
+def validate_json_schema(value, schema, root=None, path: str = "$") -> None:
+    """Validate the JSON-Schema subset used by the repository protocol."""
+    root = root or schema
+    if "$ref" in schema:
+        validate_json_schema(value, _resolve_pointer(root, schema["$ref"]), root, path)
+    for branch in schema.get("allOf", []):
+        validate_json_schema(value, branch, root, path)
+    if "anyOf" in schema:
+        if not any(_schema_matches(value, branch, root, path) for branch in schema["anyOf"]):
+            raise SchemaError(f"{path} does not match any allowed schema")
+    if "oneOf" in schema:
+        matches = sum(_schema_matches(value, branch, root, path) for branch in schema["oneOf"])
+        if matches != 1:
+            raise SchemaError(f"{path} must match exactly one record schema; matched {matches}")
+    if "if" in schema:
+        branch = schema.get("then") if _schema_matches(value, schema["if"], root, path) else schema.get("else")
+        if branch:
+            validate_json_schema(value, branch, root, path)
+    expected = schema.get("type")
+    if expected:
+        types = expected if isinstance(expected, list) else [expected]
+        if not any(_matches_type(value, item) for item in types):
+            raise SchemaError(f"{path} must be {' or '.join(types)}")
+    if "const" in schema and value != schema["const"]:
+        raise SchemaError(f"{path} must equal {schema['const']!r}")
+    if "enum" in schema and value not in schema["enum"]:
+        raise SchemaError(f"{path} must be one of {schema['enum']!r}")
+    if isinstance(value, dict):
+        required = schema.get("required", [])
+        missing = [key for key in required if key not in value]
+        if missing:
+            raise SchemaError(f"{path} is missing required fields: {', '.join(missing)}")
+        properties = schema.get("properties", {})
+        for key, child in value.items():
+            if key in properties:
+                validate_json_schema(child, properties[key], root, f"{path}.{key}")
+            elif schema.get("additionalProperties") is False:
+                raise SchemaError(f"{path}.{key} is not allowed")
+            elif isinstance(schema.get("additionalProperties"), dict):
+                validate_json_schema(child, schema["additionalProperties"], root, f"{path}.{key}")
+        if len(value) < schema.get("minProperties", 0):
+            raise SchemaError(f"{path} has too few properties")
+    if isinstance(value, list):
+        if len(value) < schema.get("minItems", 0):
+            raise SchemaError(f"{path} has too few items")
+        if "maxItems" in schema and len(value) > schema["maxItems"]:
+            raise SchemaError(f"{path} has too many items")
+        if "items" in schema:
+            for index, child in enumerate(value):
+                validate_json_schema(child, schema["items"], root, f"{path}[{index}]")
+        if schema.get("uniqueItems") and len({json.dumps(item, sort_keys=True) for item in value}) != len(value):
+            raise SchemaError(f"{path} contains duplicate items")
+    if isinstance(value, str):
+        if len(value) < schema.get("minLength", 0):
+            raise SchemaError(f"{path} is empty")
+        if "maxLength" in schema and len(value) > schema["maxLength"]:
+            raise SchemaError(f"{path} is too long")
+        if "pattern" in schema and not re.search(schema["pattern"], value):
+            raise SchemaError(f"{path} does not match {schema['pattern']}")
+        if schema.get("format") == "date-time":
+            try:
+                dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError as error:
+                raise SchemaError(f"{path} is not an ISO date-time") from error
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            raise SchemaError(f"{path} is below its minimum")
+        if "maximum" in schema and value > schema["maximum"]:
+            raise SchemaError(f"{path} is above its maximum")
+
+
+def _schema_matches(value, schema, root, path: str) -> bool:
+    try:
+        validate_json_schema(value, schema, root, path)
+        return True
+    except SchemaError:
+        return False
+
+
+def load_protocol():
+    return read_json(PROTOCOL_PATH)
+
+
+def record_schema(record_type: str, protocol=None):
+    protocol = protocol or load_protocol()
+    definition_name = RECORD_DEFS[record_type]
+    needed = {definition_name}
+    queue = [definition_name]
+    while queue:
+        definition = protocol["$defs"][queue.pop()]
+        for node in _walk(definition):
+            ref = node.get("$ref") if isinstance(node, dict) else None
+            if ref and ref.startswith("#/$defs/"):
+                name = ref.split("/")[2]
+                if name not in needed:
+                    needed.add(name)
+                    queue.append(name)
+    schema = dict(protocol["$defs"][definition_name])
+    schema["$defs"] = {name: protocol["$defs"][name] for name in sorted(needed)}
+    return schema
+
+
+def _walk(value):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _walk(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk(child)
+
+
+def parse_scene_count(value: str) -> int:
+    try:
+        count = int(value.strip())
+    except ValueError as error:
+        raise ValueError("enter a positive whole number") from error
+    if count <= 0:
+        raise ValueError("enter a positive whole number")
+    return count
+
+
+def normalize_requested_format(value: str) -> str:
+    normalized = re.sub(r"\s+", " ", value.strip().lower())
+    if normalized not in FORMAT_ALIASES:
+        raise ValueError("enter web or visualnovel")
+    return FORMAT_ALIASES[normalized]
+
+
+def collect_inputs(input_fn=input, output_fn=print) -> FrozenInputs:
+    output_fn("Cathedrals\n")
+    project_name = input_fn('Name of project (default "Cathedrals"):\n').strip() or "Cathedrals"
+    genre = input_fn('Genre/flavor of story (default "existential mystery"):\n').strip() or "existential mystery"
+    while True:
+        raw_count = input_fn('Possible number of scenes (default "150"):\n').strip() or "150"
+        try:
+            scene_count = parse_scene_count(raw_count)
+            break
+        except ValueError as error:
+            output_fn(f"Invalid scene count: {error}.")
+    while True:
+        try:
+            requested_format = normalize_requested_format(input_fn("Story format (web/visualnovel):\n"))
+            break
+        except ValueError as error:
+            output_fn(f"Invalid story format: {error}.")
+    if requested_format == "visualnovel":
+        output_fn("Visual-novel output is not active yet; this run will use web.")
+    return FrozenInputs(project_name, genre, scene_count, requested_format, "web", False)
+
+
+def derive_scope(possible_scene_count: int) -> dict:
+    count = possible_scene_count
+    profile = "pilot" if count <= 18 else "standard" if count <= 50 else "large" if count <= 100 else "cathedral"
+    artifact_target = max(5, round(count / 6))
+    artifact_max = max(artifact_target, math.ceil(count / 5))
+    ending_target = max(5, round(count / 9))
+    ending_max = max(ending_target, math.ceil(count / 7))
+    formal_target = max(2, round(count / 25))
+    packet_target = max(1, math.ceil(count / 6))
+    max_creative_steps = 2 + math.ceil(count / 3) + math.ceil(ending_max / 2)
+    max_analysis_steps = max(4, math.ceil(count / 3) + math.ceil(ending_max / 2) + 2)
+    return {
+        "scope": {
+            "possible_scene_count": count,
+            "scene_floor": min(count, max(8, math.ceil(count * 0.6))),
+            "artifact_target": artifact_target,
+            "artifact_hard_max": artifact_max,
+            "ending_target": ending_target,
+            "ending_hard_max": ending_max,
+            "formal_composition_target": formal_target,
+            "branch_count_pressure": max(3, round(math.sqrt(count))),
+            "reconvergence_pressure": max(1, round(count / 20)),
+            "literary_packet_target": packet_target,
+            "profile_guidance": profile,
+        },
+        "budgets": {
+            "max_prepared_context_tokens": 49152,
+            "max_creative_packet_output_tokens": 10900,
+            "max_analysis_output_tokens": 4096,
+            "context_safety_reserve_tokens": 4096,
+            "max_creative_step_count": max_creative_steps,
+            "max_analysis_or_index_step_count": max_analysis_steps,
+            "max_total_literary_words": count * 600 + artifact_max * 350 + ending_max * 500,
+            "max_cumulative_input_tokens": (max_creative_steps + max_analysis_steps) * 49152,
+            "max_cumulative_output_tokens": max_creative_steps * 10900 + max_analysis_steps * 4096,
+            "max_memory_records": max(1000, count * 45),
+            "max_retrieved_source_tokens": 12288,
+        },
+    }
+
+
+def configured_lm_studio_url(environ=None) -> str:
+    environ = environ or os.environ
+    return environ.get("CATHEDRALS_LM_STUDIO_URL", DEFAULT_LM_STUDIO_URL).rstrip("/")
+
+
+def api_url(base_url: str, path: str) -> str:
+    if base_url.endswith("/v1") and path.startswith("/v1/"):
+        path = path[3:]
+    return base_url.rstrip("/") + path
+
+
+def http_json(method: str, url: str, payload=None, timeout: float = 30.0):
+    body = canonical_json(payload) if payload is not None else None
+    request = urllib.request.Request(url, data=body, method=method)
+    request.add_header("Accept", "application/json")
+    if body is not None:
+        request.add_header("Content-Type", "application/json")
+    api_key = os.environ.get("CATHEDRALS_LM_STUDIO_API_KEY")
+    if api_key:
+        request.add_header("Authorization", f"Bearer {api_key}")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", "replace").strip()
+        raise CathedralsError("LM Studio API", f"HTTP {error.code}: {detail or error.reason}", "provider_before_creative_output") from error
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
+        raise CathedralsError("LM Studio preflight", str(error), "transport_before_response") from error
+
+
+def usable_model_ids(payload) -> list[str]:
+    models = payload.get("data", []) if isinstance(payload, dict) else []
+    usable = []
+    for model in models:
+        identifier = model.get("id") if isinstance(model, dict) else None
+        kind = str(model.get("type", "")).lower() if isinstance(model, dict) else ""
+        if not identifier or kind in {"embedding", "embeddings"} or "embed" in identifier.lower():
+            continue
+        usable.append(identifier)
+    return sorted(set(usable))
+
+
+def choose_model(models: list[str], override=None, input_fn=input, output_fn=print) -> str:
+    if override:
+        if override not in models:
+            raise CathedralsError("LM Studio preflight", f"CATHEDRALS_MODEL={override!r} is not visible to LM Studio.")
+        return override
+    if not models:
+        raise CathedralsError("LM Studio preflight", "No usable LLM model is visible. Load one in LM Studio.")
+    if len(models) == 1:
+        return models[0]
+    output_fn("Available LM Studio models:")
+    for index, model in enumerate(models, 1):
+        output_fn(f"  {index}. {model}")
+    while True:
+        raw = input_fn(f"Select model [1-{len(models)}]: ").strip()
+        if raw.isdigit() and 1 <= int(raw) <= len(models):
+            return models[int(raw) - 1]
+        output_fn("Invalid model selection.")
+
+
+def lm_studio_preflight(base_url: str, model_override=None, input_fn=input, output_fn=print, transport=http_json):
+    try:
+        payload = transport("GET", api_url(base_url, "/v1/models"), timeout=10.0)
+    except CathedralsError as error:
+        raise CathedralsError(
+            "LM Studio preflight",
+            f"LM Studio was not reachable at {base_url}.\n\n"
+            "Open LM Studio on Windows, load a model, and start the Local Server.\n"
+            "Then run ./cathedrals again.",
+            error.failure_class,
+        ) from error
+    return choose_model(usable_model_ids(payload), model_override, input_fn, output_fn)
+
+
+def run_command(args, *, cwd=ROOT, env=None, capture=True) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [str(item) for item in args],
+        cwd=cwd,
+        env=env,
+        text=True,
+        capture_output=capture,
+        check=False,
+    )
+
+
+def git(*args, check=True) -> str:
+    result = run_command(["git", *args])
+    if check and result.returncode:
+        raise CathedralsError("Git preflight", result.stderr.strip() or result.stdout.strip())
+    return result.stdout.strip()
+
+
+def verify_repo_safe() -> None:
+    top = Path(git("rev-parse", "--show-toplevel")).resolve()
+    if top != ROOT:
+        raise CathedralsError("Git preflight", "Run ./cathedrals from this repository root.")
+    if git("status", "--porcelain"):
+        raise CathedralsError(
+            "Git preflight",
+            "The repository has uncommitted changes. Commit or stash them before starting a new generation.",
+        )
+
+
+def ensure_runtime_layout() -> None:
+    for path in (
+        RUNTIME_ROOT / "toolchains/node",
+        RUNTIME_ROOT / "cache/npm",
+        RUNTIME_ROOT / "logs",
+        RUNS_ROOT,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+
+
+def engine_hashes() -> dict[str, str]:
+    paths = [ROOT / relative for relative in git("ls-files", "engine", "cathedrals").splitlines()]
+    return {str(path.relative_to(ROOT)): sha256_file(path) for path in sorted(paths)}
+
+
+def verify_engine_freeze(run_dir: Path) -> None:
+    frozen = read_json(run_dir / "run-manifest.json")["engine_snapshot"]
+    if git("rev-parse", "HEAD") != frozen["engine_commit_sha"]:
+        raise IntegrityError("The generation branch HEAD changed after engine freeze")
+    if engine_hashes() != frozen["engine_config_hashes"]:
+        raise IntegrityError("Engine canon or the executable changed after generation began")
+
+
+def generation_id(project_name: str, timestamp: str | None = None) -> str:
+    stamp = (timestamp or dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S")).replace("-", "_")
+    return f"{slugify(project_name)}_{stamp}_{secrets.token_hex(3)}"
+
+
+def create_generation_branch(identifier: str) -> str:
+    branch = f"generation/{identifier}"
+    if git("show-ref", "--verify", f"refs/heads/{branch}", check=False):
+        raise CathedralsError("Git preflight", f"Generation branch already exists: {branch}")
+    git("switch", "-c", branch)
+    return branch
+
+
+def current_branch() -> str:
+    return git("branch", "--show-current")
+
+
+def active_format_contract(requested_format: str) -> Path:
+    normalize_requested_format(requested_format)
+    return ENGINE / "formats/web.md"
+
+
+def renderer_for(requested_format: str) -> str:
+    active_format_contract(requested_format)
+    return "astro"
+
+
+def initial_run_state(identifier: str, branch: str, brief_hash: str, manifest_hash: str, model: str) -> dict:
+    return {
+        "generation_id": identifier,
+        "branch": branch,
+        "status": "RUNNING",
+        "stage": "ENGINE_FROZEN",
+        "brief_hash": brief_hash,
+        "manifest_hash": manifest_hash,
+        "ledger_sequence": 0,
+        "canonical_state_hash": manifest_hash,
+        "creative_step_count": 0,
+        "analysis_or_index_step_count": 0,
+        "human_intervention_count": 0,
+        "committed_rewrite_count": 0,
+        "committed_regeneration_count": 0,
+        "backtrack_count": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost": None,
+        "model": model,
+        "started_at": utc_now(),
+        "resume_declined": False,
+    }
+
+
+def state_path(run_dir: Path) -> Path:
+    return run_dir / "state/run-state.json"
+
+
+def load_state(run_dir: Path) -> dict:
+    return read_json(state_path(run_dir))
+
+
+def save_state(run_dir: Path, state: dict) -> None:
+    write_json(state_path(run_dir), state)
+
+
+def ledger_entries(run_dir: Path) -> list[dict]:
+    path = run_dir / "ledger.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def compute_entry_hash(entry: dict) -> str:
+    payload = dict(entry)
+    payload.pop("entry_hash", None)
+    return sha256_bytes(canonical_json(payload))
+
+
+def append_ledger_entry(run_dir: Path, entry: dict) -> None:
+    protocol = load_protocol()
+    validate_json_schema(entry, protocol["$defs"]["ledgerEntry"], protocol)
+    entries = ledger_entries(run_dir)
+    expected_sequence = len(entries) + 1
+    expected_previous = entries[-1]["entry_hash"] if entries else None
+    if entry["ledger_sequence"] != expected_sequence or entry["previous_entry_hash"] != expected_previous:
+        raise IntegrityError("Ledger sequence or previous-entry hash is invalid")
+    if compute_entry_hash(entry) != entry["entry_hash"]:
+        raise IntegrityError("Ledger entry hash is invalid")
+    path = run_dir / "ledger.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("ab") as handle:
+        handle.write(canonical_json(entry))
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def new_ledger_entry(
+    run_dir: Path,
+    *,
+    planned_step_id: str,
+    attempt: int,
+    step_type: str,
+    step_phase: str,
+    parent_state_hash: str,
+    prompt_hash: str | None,
+    context_hash: str | None,
+    provider: str | None,
+    model: str | None,
+    parameters: dict | None,
+    seed: str | None,
+    started_at: str,
+    output_hash: str | None,
+    generated_ids: list[str],
+    canonical_delta_ids: list[str],
+    unresolved_ids: list[str],
+    motif_ids: list[str],
+    branch_relation: str | None,
+    commit_status: str,
+    state_hash_after: str,
+    failure_class: str,
+    usage: dict | None = None,
+) -> dict:
+    entries = ledger_entries(run_dir)
+    usage = usage or {}
+    entry = {
+        "record_type": "ledger_entry",
+        "protocol_version": "2.0",
+        "generation_id": load_state(run_dir)["generation_id"],
+        "ledger_sequence": len(entries) + 1,
+        "planned_step_id": planned_step_id,
+        "attempt": attempt,
+        "step_type": step_type,
+        "step_phase": step_phase,
+        "previous_entry_hash": entries[-1]["entry_hash"] if entries else None,
+        "entry_hash": "0" * 64,
+        "parent_canonical_state_hash": parent_state_hash,
+        "prompt_hash": prompt_hash,
+        "context_hash": context_hash,
+        "provider": provider,
+        "model": model,
+        "parameters": parameters,
+        "seed": seed,
+        "started_at": started_at,
+        "completed_at": utc_now(),
+        "output_hash": output_hash,
+        "generated_artifact_ids": sorted(set(generated_ids)),
+        "canonical_state_delta_ids": sorted(set(canonical_delta_ids)),
+        "unresolved_thread_delta_ids": sorted(set(unresolved_ids)),
+        "motif_delta_ids": sorted(set(motif_ids)),
+        "branch_path_relation": branch_relation,
+        "commit_status": commit_status,
+        "canonical_state_hash_after": state_hash_after,
+        "failure_class": failure_class,
+        "token_accounting": {
+            "input_tokens": usage.get("prompt_tokens"),
+            "output_tokens": usage.get("completion_tokens"),
+            "cost": usage.get("cost"),
+            "currency": usage.get("currency"),
+        },
+    }
+    entry["entry_hash"] = compute_entry_hash(entry)
+    return entry
+
+
+def append_deterministic_step(run_dir: Path, step_id: str, phase: str, output_hash: str) -> None:
+    if step_is_committed(run_dir, step_id):
+        return
+    state = load_state(run_dir)
+    entry = new_ledger_entry(
+        run_dir,
+        planned_step_id=step_id,
+        attempt=1,
+        step_type="deterministic",
+        step_phase=phase,
+        parent_state_hash=state["canonical_state_hash"],
+        prompt_hash=None,
+        context_hash=None,
+        provider=None,
+        model=None,
+        parameters=None,
+        seed=None,
+        started_at=utc_now(),
+        output_hash=output_hash,
+        generated_ids=[],
+        canonical_delta_ids=[],
+        unresolved_ids=[],
+        motif_ids=[],
+        branch_relation=None,
+        commit_status="COMMITTED",
+        state_hash_after=state["canonical_state_hash"],
+        failure_class="none",
+    )
+    append_ledger_entry(run_dir, entry)
+    state["ledger_sequence"] = entry["ledger_sequence"]
+    save_state(run_dir, state)
+
+
+def create_run(frozen: FrozenInputs, base_url: str, model: str, output_fn=print) -> Path:
+    verify_repo_safe()
+    identifier = generation_id(frozen.project_name)
+    branch = create_generation_branch(identifier)
+    ensure_runtime_layout()
+    run_dir = RUNS_ROOT / identifier
+    for child in ("raw", "committed", "memory", "state", "logs", "validation", ".staging"):
+        (run_dir / child).mkdir(parents=True, exist_ok=False)
+    timestamp = utc_now()
+    seed = secrets.token_hex(16)
+    commit = git("rev-parse", "HEAD")
+    brief = dataclasses.asdict(frozen) | {
+        "generation_id": identifier,
+        "generation_timestamp": timestamp,
+        "lm_studio_base_url": base_url,
+        "model": model,
+        "engine_commit": commit,
+        "generation_seed": seed,
+    }
+    brief_hash = sha256_bytes(canonical_json(brief))
+    derived = derive_scope(frozen.possible_scene_count)
+    manifest = {
+        "record_type": "run_manifest",
+        "protocol_version": "2.0",
+        "generation_id": identifier,
+        "created_at": timestamp,
+        "generation_brief": brief,
+        "generation_brief_hash": brief_hash,
+        "engine_snapshot": {
+            "work_id": "hospice-annex-v01",
+            "engine_commit_sha": commit,
+            "engine_config_hashes": engine_hashes(),
+            "work_seed": seed,
+            "structural_seed": sha256_bytes(f"structure:{seed}".encode()),
+            "geomancy_seed": sha256_bytes(f"geomancy:{seed}".encode()),
+        },
+        "generation_run": {
+            "human_creative_interventions_required": 0,
+            "committed_creative_rewrites_allowed": False,
+            "committed_creative_regeneration_allowed": False,
+            "backward_canon_mutation_allowed": False,
+            "candidate_cherry_picking_allowed": False,
+            "append_only": True,
+            "causally_forward": True,
+        },
+        "scope": derived["scope"],
+        "budgets": derived["budgets"],
+        "traversal": {
+            "strategy": "dependency_topological",
+            "seed": sha256_bytes(f"traversal:{seed}".encode()),
+            "mutable_after_architecture_commit": False,
+        },
+        "models": [
+            {"purpose": purpose, "provider": "LM Studio", "model": model, "parameters": {"structured_output": True}}
+            for purpose in ("creative", "analysis_or_index", "artistic_acceptance")
+        ],
+        "retention_policy": "preserve_failed",
+        "complete_work_barrier": {
+            "partial_play_allowed": False,
+            "runtime_generation_allowed": False,
+            "playable_status": "READY_TO_PLAY",
+        },
+    }
+    protocol = load_protocol()
+    validate_json_schema(manifest, protocol["$defs"]["runManifest"], protocol)
+    manifest_hash = sha256_bytes(canonical_json(manifest))
+    write_json(run_dir / "generation-brief.json", brief, mode=0o444, exclusive=True)
+    write_json(run_dir / "run-manifest.json", manifest, mode=0o444, exclusive=True)
+    frozen_context = run_dir / "state/frozen-engine-context.txt"
+    write_atomic(frozen_context, engine_context().encode(), mode=0o444, exclusive=True)
+    run_state = initial_run_state(identifier, branch, brief_hash, manifest_hash, model)
+    run_state["frozen_engine_context_hash"] = sha256_file(frozen_context)
+    save_state(run_dir, run_state)
+    append_deterministic_step(run_dir, "preflight", "preflight", brief_hash)
+    append_deterministic_step(run_dir, "engine_freeze", "engine_freeze", manifest_hash)
+    output_fn(f"Generation: {identifier}")
+    output_fn("Format: web")
+    output_fn(f"Model: {model}")
+    output_fn(f"Requested scope: up to {frozen.possible_scene_count} scenes\n")
+    output_fn(
+        f"Derived safeguards: up to {derived['budgets']['max_creative_step_count']} creative steps, "
+        f"{derived['budgets']['max_total_literary_words']:,} literary words, and "
+        f"{derived['budgets']['max_cumulative_output_tokens']:,} cumulative output tokens.\n"
+    )
+    return run_dir
+
+
+def incomplete_runs() -> list[Path]:
+    if not RUNS_ROOT.exists():
+        return []
+    candidates = []
+    for run_dir in RUNS_ROOT.iterdir():
+        path = state_path(run_dir)
+        if not path.exists():
+            continue
+        state = read_json(path)
+        if state.get("status") not in TERMINAL_STATES and not state.get("resume_declined"):
+            candidates.append(run_dir)
+    return sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def choose_resume(input_fn=input, output_fn=print) -> Path | None:
+    candidates = incomplete_runs()
+    if not candidates:
+        return None
+    run_dir = candidates[0]
+    output_fn(f"Incomplete generation detected:\n{run_dir.name}\n")
+    answer = input_fn("Resume it? [Y/n] ").strip().lower()
+    if answer in {"", "y", "yes"}:
+        return run_dir
+    state = load_state(run_dir)
+    state["resume_declined"] = True
+    save_state(run_dir, state)
+    return None
+
+
+def generated_ids(record: dict) -> list[str]:
+    ids = [record.get("commit_id"), record.get("index_batch_id")]
+    if record.get("record_type") == "genesis":
+        ids += [record["work_canon"]["work_id"]]
+        ids += [item["event_id"] for item in record["work_canon"]["chronology"]]
+        ids += [item["claimant_id"] for item in record["claimants"]]
+        ids += [item["character_id"] for item in record["characters"]]
+    if record.get("record_type") == "architecture":
+        ids += [item["arc_id"] for item in record["arcs"]]
+        ids += [item["node_id"] for item in record["topology"]["nodes"]]
+        ids += [item["edge_id"] for item in record["topology"]["edges"]]
+        ids += [item["promise_id"] for item in record["narrative_promises"]]
+        ids += [item["obligation_id"] for item in record["hard_obligations"]]
+        ids += [item["ending_family_id"] for item in record["ending_families"]]
+        ids += [item["packet_slot_id"] for item in record["traversal_plan"]]
+    if record.get("record_type") == "creative_packet":
+        ids += [item["scene_id"] for item in record["scenes"]]
+        ids += [item["artifact_id"] for item in record["artifacts"]]
+        ids += [item["ending_id"] for item in record["endings"]]
+        ids += [item["composition_id"] for item in record["formal_compositions"]]
+        ids += [item["edge_id"] for item in record["decision_edges"]]
+    return sorted({item for item in ids if item})
+
+
+def observation_deltas(record: dict):
+    observations = record.get("memory_delta", record.get("observations", []))
+    canonical = [item["memory_id"] for item in observations if item["memory_class"] == "canonical_state"]
+    unresolved = [
+        item["memory_id"]
+        for item in observations
+        if item["memory_kind"] in {"unresolved_thread", "promise", "question", "branch_residue", "foreshadowing"}
+    ]
+    motifs = [item["memory_id"] for item in observations if item["memory_kind"] == "motif"]
+    return observations, canonical, unresolved, motifs
+
+
+def _source_index(run_dir: Path) -> dict:
+    path = run_dir / "state/source-index.json"
+    return read_json(path) if path.exists() else {}
+
+
+def make_memory_events(run_dir: Path, record: dict, commit_id: str, record_hash: str, step_id: str) -> list[dict]:
+    observations, _, _, _ = observation_deltas(record)
+    source_index = _source_index(run_dir)
+    for identifier in generated_ids(record):
+        source_index[identifier] = {"commit_id": commit_id, "hash": record_hash}
+    current_events = run_dir / "memory/memory-events.jsonl"
+    sequence = len(current_events.read_text(encoding="utf-8").splitlines()) if current_events.exists() else 0
+    protocol = load_protocol()
+    events = []
+    for observation in observations:
+        sources = []
+        for source in observation["sources"]:
+            resolved = source_index.get(source["artifact_id"])
+            if not resolved:
+                raise SchemaError(f"Memory source does not resolve: {source['artifact_id']}")
+            sources.append(
+                source
+                | {
+                    "source_commit_id": resolved["commit_id"],
+                    "source_hash": resolved["hash"],
+                }
+            )
+        event = {
+            "record_type": "memory_event",
+            "protocol_version": "2.0",
+            "generation_id": record["generation_id"],
+            "memory_event_sequence": sequence + len(events) + 1,
+            "origin_step_id": step_id,
+            "memory_id": observation["memory_id"],
+            "memory_class": observation["memory_class"],
+            "memory_kind": observation["memory_kind"],
+            "action": observation["action"],
+            "proposition": observation["proposition"],
+            "status": observation["status"],
+            "sources": sources,
+        }
+        for optional in ("supersedes_memory_id", "branch_scope_ids"):
+            if optional in observation:
+                event[optional] = observation[optional]
+        validate_json_schema(event, protocol["$defs"]["memoryEvent"], protocol)
+        events.append(event)
+    return events
+
+
+def committed_directories(run_dir: Path) -> list[Path]:
+    return sorted(path for path in (run_dir / "committed").iterdir() if path.is_dir())
+
+
+def verify_immutable_file(path: Path, expected_hash: str) -> None:
+    if not path.exists() or sha256_file(path) != expected_hash:
+        raise IntegrityError(f"Committed file changed or disappeared: {path}")
+
+
+def reconcile_run(run_dir: Path) -> None:
+    state = load_state(run_dir)
+    verify_engine_freeze(run_dir)
+    verify_immutable_file(run_dir / "generation-brief.json", state["brief_hash"])
+    verify_immutable_file(run_dir / "run-manifest.json", state["manifest_hash"])
+    verify_immutable_file(run_dir / "state/frozen-engine-context.txt", state["frozen_engine_context_hash"])
+    entries = ledger_entries(run_dir)
+    previous = None
+    for index, entry in enumerate(entries, 1):
+        if entry["ledger_sequence"] != index or entry["previous_entry_hash"] != previous:
+            raise IntegrityError("Ledger order or hash chain was changed")
+        if compute_entry_hash(entry) != entry["entry_hash"]:
+            raise IntegrityError(f"Ledger entry {index} was changed")
+        previous = entry["entry_hash"]
+    committed_steps = {}
+    expected_memory = []
+    source_index = {}
+    for directory in committed_directories(run_dir):
+        meta = read_json(directory / "commit-meta.json")
+        verify_immutable_file(directory / "record.json", meta["record_hash"])
+        verify_immutable_file(directory / "raw-response.txt", meta["raw_response_hash"])
+        verify_immutable_file(directory / "api-response.json", meta["api_response_hash"])
+        step_id = meta["ledger_entry"]["planned_step_id"]
+        if step_id in committed_steps:
+            raise IntegrityError(f"Creative step committed more than once: {step_id}")
+        committed_steps[step_id] = directory
+        match = next((entry for entry in entries if entry["planned_step_id"] == step_id and entry["commit_status"] == "COMMITTED"), None)
+        if match is None:
+            if meta["ledger_entry"]["previous_entry_hash"] != (entries[-1]["entry_hash"] if entries else None):
+                raise IntegrityError(f"Cannot reconcile ledger for {step_id}")
+            append_ledger_entry(run_dir, meta["ledger_entry"])
+            entries.append(meta["ledger_entry"])
+        elif match != meta["ledger_entry"]:
+            raise IntegrityError(f"Ledger metadata differs from immutable commit {step_id}")
+        record = read_json(directory / "record.json")
+        for identifier in generated_ids(record):
+            if identifier in source_index:
+                raise IntegrityError(f"Generated ID was reused: {identifier}")
+            source_index[identifier] = {"commit_id": record.get("commit_id", record.get("index_batch_id")), "hash": meta["record_hash"]}
+        expected_memory.extend(meta["memory_events"])
+    inflight_path = run_dir / "state/inflight.json"
+    if inflight_path.exists() and read_json(inflight_path).get("step_id") in committed_steps:
+        inflight_path.unlink()
+    memory_bytes = b"".join(canonical_json(event) for event in expected_memory)
+    memory_path = run_dir / "memory/memory-events.jsonl"
+    existing = memory_path.read_bytes() if memory_path.exists() else b""
+    if not memory_bytes.startswith(existing):
+        raise IntegrityError("Memory event history was changed")
+    if len(existing) < len(memory_bytes):
+        with memory_path.open("ab") as handle:
+            handle.write(memory_bytes[len(existing):])
+            handle.flush()
+            os.fsync(handle.fileno())
+    write_json(run_dir / "state/source-index.json", source_index)
+    canonical = {}
+    working = {}
+    for event in expected_memory:
+        target = canonical if event["memory_class"] == "canonical_state" else working
+        target[event["memory_id"]] = event
+    write_json(run_dir / "state/canonical-memory.json", canonical)
+    write_json(run_dir / "state/working-memory.json", working)
+    entries = ledger_entries(run_dir)
+    state["ledger_sequence"] = len(entries)
+    if entries:
+        state["canonical_state_hash"] = entries[-1]["canonical_state_hash_after"]
+    state["creative_step_count"] = sum(
+        entry["step_type"] == "creative" and entry["commit_status"] == "COMMITTED" for entry in entries
+    )
+    state["analysis_or_index_step_count"] = sum(
+        entry["step_type"] == "analysis_or_index" and entry["commit_status"] == "COMMITTED" for entry in entries
+    )
+    state["input_tokens"] = sum(entry["token_accounting"]["input_tokens"] or 0 for entry in entries)
+    state["output_tokens"] = sum(entry["token_accounting"]["output_tokens"] or 0 for entry in entries)
+    save_state(run_dir, state)
+
+
+def commit_record(
+    run_dir: Path,
+    record: dict,
+    raw_response: str,
+    api_response: dict,
+    *,
+    planned_step_id: str,
+    attempt: int,
+    step_phase: str,
+    prompt: str,
+    context: str,
+    parameters: dict,
+    branch_relation: str,
+) -> Path:
+    reconcile_run(run_dir)
+    state = load_state(run_dir)
+    protocol = load_protocol()
+    definition = protocol["$defs"][RECORD_DEFS[record["record_type"]]]
+    validate_json_schema(record, definition, protocol)
+    if record["generation_id"] != state["generation_id"]:
+        raise SchemaError("Record generation_id does not match the frozen run")
+    if any(
+        entry["planned_step_id"] == planned_step_id and entry["commit_status"] == "COMMITTED"
+        for entry in ledger_entries(run_dir)
+    ):
+        raise IntegrityError(f"Refusing to regenerate committed step {planned_step_id}")
+    duplicate_ids = set(generated_ids(record)) & set(_source_index(run_dir))
+    if duplicate_ids:
+        raise SchemaError(f"Record reuses previously committed IDs: {', '.join(sorted(duplicate_ids))}")
+    record_bytes = canonical_json(record)
+    record_hash = sha256_bytes(record_bytes)
+    raw_bytes = raw_response.encode("utf-8")
+    api_bytes = canonical_json(api_response)
+    observations, canonical_ids, unresolved_ids, motif_ids = observation_deltas(record)
+    commit_id = record.get("commit_id", record.get("index_batch_id"))
+    memory_events = make_memory_events(run_dir, record, commit_id, record_hash, planned_step_id)
+    memory_hash = sha256_bytes(b"".join(canonical_json(item) for item in memory_events))
+    state_after = sha256_bytes(f"{state['canonical_state_hash']}:{record_hash}:{memory_hash}".encode())
+    usage = api_response.get("usage", {}) if isinstance(api_response, dict) else {}
+    entry = new_ledger_entry(
+        run_dir,
+        planned_step_id=planned_step_id,
+        attempt=attempt,
+        step_type="creative" if record["record_type"] != "index_batch" else "analysis_or_index",
+        step_phase=step_phase,
+        parent_state_hash=state["canonical_state_hash"],
+        prompt_hash=sha256_bytes(prompt.encode()),
+        context_hash=sha256_bytes(context.encode()),
+        provider="LM Studio",
+        model=state["model"],
+        parameters=parameters,
+        seed=parameters["seed"],
+        started_at=api_response.get("_cathedrals_started_at", utc_now()),
+        output_hash=record_hash,
+        generated_ids=generated_ids(record),
+        canonical_delta_ids=canonical_ids,
+        unresolved_ids=unresolved_ids,
+        motif_ids=motif_ids,
+        branch_relation=branch_relation,
+        commit_status="COMMITTED",
+        state_hash_after=state_after,
+        failure_class="none",
+        usage=usage,
+    )
+    sequence = entry["ledger_sequence"]
+    destination = run_dir / "committed" / f"{sequence:04d}-{planned_step_id}"
+    if destination.exists():
+        raise IntegrityError(f"Commit directory already exists: {destination}")
+    staging = Path(tempfile.mkdtemp(prefix=f"{planned_step_id}-", dir=run_dir / ".staging"))
+    write_atomic(staging / "record.json", record_bytes)
+    write_atomic(staging / "raw-response.txt", raw_bytes)
+    write_atomic(staging / "api-response.json", api_bytes)
+    meta = {
+        "record_hash": record_hash,
+        "raw_response_hash": sha256_bytes(raw_bytes),
+        "api_response_hash": sha256_bytes(api_bytes),
+        "memory_events": memory_events,
+        "ledger_entry": entry,
+    }
+    write_json(staging / "commit-meta.json", meta)
+    for path in staging.iterdir():
+        make_read_only(path)
+    os.replace(staging, destination)
+    os.chmod(destination, 0o555)
+    append_ledger_entry(run_dir, entry)
+    raw_view = run_dir / "raw" / f"{sequence:04d}-{planned_step_id}.txt"
+    if not raw_view.exists():
+        try:
+            os.link(destination / "raw-response.txt", raw_view)
+        except OSError:
+            shutil.copyfile(destination / "raw-response.txt", raw_view)
+            make_read_only(raw_view)
+    state["canonical_state_hash"] = state_after
+    state["stage"] = step_phase.upper()
+    save_state(run_dir, state)
+    reconcile_run(run_dir)
+    return destination
+
+
+def append_failed_attempt(
+    run_dir: Path,
+    *,
+    step_id: str,
+    attempt: int,
+    phase: str,
+    prompt: str,
+    context: str,
+    parameters: dict,
+    started_at: str,
+    failure_class: str,
+    output_hash: str | None = None,
+    step_type: str = "creative",
+) -> None:
+    state = load_state(run_dir)
+    entry = new_ledger_entry(
+        run_dir,
+        planned_step_id=step_id,
+        attempt=attempt,
+        step_type=step_type,
+        step_phase=phase,
+        parent_state_hash=state["canonical_state_hash"],
+        prompt_hash=sha256_bytes(prompt.encode()),
+        context_hash=sha256_bytes(context.encode()),
+        provider="LM Studio",
+        model=state["model"],
+        parameters=parameters,
+        seed=parameters["seed"],
+        started_at=started_at,
+        output_hash=output_hash,
+        generated_ids=[],
+        canonical_delta_ids=[],
+        unresolved_ids=[],
+        motif_ids=[],
+        branch_relation=None,
+        commit_status="FAILED_BEFORE_COMMIT",
+        state_hash_after=state["canonical_state_hash"],
+        failure_class=failure_class,
+    )
+    append_ledger_entry(run_dir, entry)
+    state["ledger_sequence"] = entry["ledger_sequence"]
+    save_state(run_dir, state)
+
+
+def committed_record(run_dir: Path, record_type: str, packet_slot_id: str | None = None):
+    for directory in committed_directories(run_dir):
+        record = read_json(directory / "record.json")
+        if record.get("record_type") == record_type and (packet_slot_id is None or record.get("packet_slot_id") == packet_slot_id):
+            return record
+    return None
+
+
+def all_committed_records(run_dir: Path) -> list[dict]:
+    return [read_json(path / "record.json") for path in committed_directories(run_dir)]
+
+
+def retrieve_original_sources(run_dir: Path, memory_records: list[dict], limit: int = 24) -> list[dict]:
+    wanted = []
+    for memory in reversed(memory_records):
+        for source in memory.get("sources", []):
+            if source["artifact_id"] not in wanted:
+                wanted.append(source["artifact_id"])
+        if len(wanted) >= limit:
+            break
+    retrieved = []
+    for identifier in wanted:
+        for record in reversed(all_committed_records(run_dir)):
+            candidates = []
+            if record.get("record_type") == "creative_packet":
+                candidates = record["scenes"] + record["artifacts"] + record["endings"] + record["formal_compositions"]
+            elif identifier in generated_ids(record):
+                candidates = [record]
+            source = next(
+                (
+                    item
+                    for item in candidates
+                    if identifier
+                    in {
+                        item.get("scene_id"),
+                        item.get("artifact_id"),
+                        item.get("ending_id"),
+                        item.get("composition_id"),
+                        item.get("commit_id"),
+                    }
+                ),
+                candidates[0] if len(candidates) == 1 else None,
+            )
+            if source is not None:
+                retrieved.append({"source_id": identifier, "immutable_source": source})
+                break
+    return retrieved
+
+
+def geomancy_figures() -> list[dict]:
+    figures = []
+    current = None
+    for line in (ENGINE / "data/threshold-geomancy.yaml").read_text(encoding="utf-8").splitlines():
+        match = re.match(r"  - id: ([123]-[123]-[123]-[123])$", line)
+        if match:
+            if current:
+                figures.append(current)
+            current = {"figure": match.group(1)}
+            continue
+        if current:
+            field = re.match(r"    (name|summary|scene_motion|pressure_type): (.+)$", line)
+            if field:
+                current[field.group(1)] = field.group(2)
+    if current:
+        figures.append(current)
+    if len(figures) != 81:
+        raise CathedralsError("Engine freeze", f"Expected 81 threshold figures; found {len(figures)}")
+    return figures
+
+
+def precompute_geomancy(seed: str, possible_scene_count: int) -> dict:
+    figures = geomancy_figures()
+    assignments = []
+    for number in range(1, possible_scene_count + 1):
+        slot = f"scene_slot_{number:04d}"
+        digest = hashlib.sha256(f"{seed}:{slot}".encode()).digest()
+        figure = figures[int.from_bytes(digest[:4], "big") % len(figures)]
+        assignments.append({"technical_slot_id": slot} | figure)
+    for index, assignment in enumerate(assignments):
+        if index + 1 == len(assignments):
+            assignment["resultant"] = None
+            continue
+        left = [int(value) for value in assignment["figure"].split("-")]
+        right = [int(value) for value in assignments[index + 1]["figure"].split("-")]
+        assignment["resultant"] = "-".join(str(((a + b - 2) % 3) + 1) for a, b in zip(left, right))
+    return {"seed": seed, "assignments": assignments}
+
+
+def ensure_frozen_geomancy(run_dir: Path) -> dict:
+    path = run_dir / "state/frozen-geomancy.json"
+    if path.exists():
+        value = read_json(path)
+        expected = load_state(run_dir).get("geomancy_hash")
+        if expected and sha256_file(path) != expected:
+            raise IntegrityError("Frozen threshold geomancy changed")
+        return value
+    manifest = read_json(run_dir / "run-manifest.json")
+    value = precompute_geomancy(
+        manifest["engine_snapshot"]["geomancy_seed"],
+        manifest["scope"]["possible_scene_count"],
+    )
+    write_json(path, value, mode=0o444, exclusive=True)
+    state = load_state(run_dir)
+    state["geomancy_hash"] = sha256_file(path)
+    save_state(run_dir, state)
+    return value
+
+
+def engine_context() -> str:
+    sections = []
+    for relative in ENGINE_CONTEXT_FILES:
+        path = ENGINE / relative
+        sections.append(f"===== engine/{relative} =====\n{path.read_text(encoding='utf-8')}")
+    return "\n\n".join(sections)
+
+
+def render_prompt(name: str, replacements: dict[str, str]) -> str:
+    value = (ENGINE / "prompts" / name).read_text(encoding="utf-8")
+    for key, replacement in replacements.items():
+        value = value.replace("{{" + key + "}}", replacement)
+    if re.search(r"\{\{[A-Z0-9_]+\}\}", value):
+        raise CathedralsError("Prompt assembly", f"Unresolved prompt placeholder in {name}")
+    return value
+
+
+def bounded_context(sections: list[tuple[str, object]], max_tokens: int) -> str:
+    maximum = max_tokens * 4
+    output = []
+    used = 0
+    for label, value in sections:
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2)
+        section = f"===== {label} =====\n{text}\n"
+        if used + len(section) <= maximum:
+            output.append(section)
+            used += len(section)
+            continue
+        remaining = maximum - used
+        if remaining > 1000:
+            output.append(section[: remaining - 120] + "\n[context section truncated at deterministic budget boundary]\n")
+        break
+    return "\n".join(output)
+
+
+def parse_structured_content(content: str):
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        match = re.fullmatch(r"\s*```(?:json)?\s*\n([\s\S]*)\n```\s*", content)
+        if not match:
+            raise SchemaError("LM Studio returned malformed JSON")
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError as error:
+            raise SchemaError("LM Studio returned malformed JSON inside deterministic code-fence framing") from error
+
+
+def _response_content(response: dict) -> str:
+    try:
+        content = response["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as error:
+        raise SchemaError("LM Studio response has no choices[0].message.content") from error
+    if not isinstance(content, str) or not content.strip():
+        raise SchemaError("LM Studio returned empty structured content")
+    return content
+
+
+def step_seed(generation_seed: str, step_id: str) -> int:
+    return int.from_bytes(hashlib.sha256(f"{generation_seed}:{step_id}".encode()).digest()[:4], "big")
+
+
+def request_record(
+    run_dir: Path,
+    *,
+    expected_record_type: str,
+    step_id: str,
+    phase: str,
+    prompt: str,
+    context: str,
+    branch_relation: str,
+    temperature: float,
+    max_tokens: int = 10900,
+    transport=http_json,
+    precommit_validator=None,
+) -> dict:
+    state = load_state(run_dir)
+    brief = read_json(run_dir / "generation-brief.json")
+    if len(prompt) // 4 > read_json(run_dir / "run-manifest.json")["budgets"]["max_prepared_context_tokens"]:
+        raise CathedralsError("Context assembly", f"Prepared prompt for {step_id} exceeds the frozen context budget", "budget_exhaustion")
+    seed = step_seed(brief["generation_seed"], step_id)
+    schema = record_schema(expected_record_type)
+    parameters = {"temperature": temperature, "max_tokens": max_tokens, "seed": seed, "stream": False}
+    payload = {
+        "model": state["model"],
+        "messages": [
+            {
+                "role": "system",
+                "content": "Execute the supplied Cathedrals phase. Return only the schema-constrained record.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        **parameters,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": expected_record_type,
+                "strict": True,
+                "schema": schema,
+            },
+        },
+    }
+    request_hash = sha256_bytes(canonical_json(payload))
+    failed_attempts = [entry for entry in ledger_entries(run_dir) if entry["planned_step_id"] == step_id]
+    attempt = len(failed_attempts) + 1
+    inflight_path = run_dir / "state/inflight.json"
+    if inflight_path.exists():
+        inflight = read_json(inflight_path)
+        if inflight["step_id"] != step_id or inflight["request_hash"] != request_hash:
+            raise IntegrityError("Resume found a different in-flight creative request")
+        attempt = inflight["attempt"]
+    else:
+        write_json(
+            inflight_path,
+            {"step_id": step_id, "attempt": attempt, "request_hash": request_hash, "started_at": utc_now()},
+            exclusive=True,
+        )
+    inflight = read_json(inflight_path)
+    response_path = run_dir / "raw" / f"{step_id}-attempt{attempt}.api.json"
+    response = read_json(response_path) if response_path.exists() else None
+    if response is None:
+        failures = 0
+        while failures < 3:
+            try:
+                response = transport(
+                    "POST",
+                    api_url(brief["lm_studio_base_url"], "/v1/chat/completions"),
+                    payload,
+                    timeout=float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "3600")),
+                )
+                response["_cathedrals_started_at"] = inflight["started_at"]
+                write_json(response_path, response, mode=0o444, exclusive=True)
+                break
+            except CathedralsError as error:
+                append_failed_attempt(
+                    run_dir,
+                    step_id=step_id,
+                    attempt=attempt,
+                    phase=phase,
+                    prompt=prompt,
+                    context=context,
+                    parameters=parameters,
+                    started_at=inflight["started_at"],
+                    failure_class=error.failure_class,
+                )
+                failures += 1
+                if failures == 3:
+                    inflight_path.unlink(missing_ok=True)
+                    raise
+                attempt += 1
+                inflight["attempt"] = attempt
+                inflight["started_at"] = utc_now()
+                write_json(inflight_path, inflight)
+                response_path = run_dir / "raw" / f"{step_id}-attempt{attempt}.api.json"
+    content = _response_content(response)
+    try:
+        record = parse_structured_content(content)
+        protocol = load_protocol()
+        validate_json_schema(record, protocol["$defs"][RECORD_DEFS[expected_record_type]], protocol)
+        validate_declared_id_uniqueness(record)
+        duplicate_ids = set(generated_ids(record)) & set(_source_index(run_dir))
+        if duplicate_ids:
+            raise SchemaError(f"Record reuses previously committed IDs: {', '.join(sorted(duplicate_ids))}")
+        if precommit_validator:
+            precommit_validator(record)
+    except SchemaError:
+        append_failed_attempt(
+            run_dir,
+            step_id=step_id,
+            attempt=attempt,
+            phase=phase,
+            prompt=prompt,
+            context=context,
+            parameters=parameters,
+            started_at=inflight["started_at"],
+            failure_class="malformed_response",
+            output_hash=sha256_bytes(content.encode()),
+        )
+        inflight_path.unlink(missing_ok=True)
+        raise
+    commit_record(
+        run_dir,
+        record,
+        content,
+        response,
+        planned_step_id=step_id,
+        attempt=attempt,
+        step_phase=phase,
+        prompt=prompt,
+        context=context,
+        parameters=parameters,
+        branch_relation=branch_relation,
+    )
+    inflight_path.unlink(missing_ok=True)
+    return record
+
+
+def validate_architecture(architecture: dict, manifest: dict) -> None:
+    scope = architecture["scope_commitment"]
+    requested = manifest["scope"]["possible_scene_count"]
+    if scope["possible_scene_count"] != requested or scope["planned_scene_count"] > requested:
+        raise SchemaError("Architecture exceeded or replaced the user's possible scene count")
+    if scope["planned_scene_count"] < 8:
+        raise SchemaError("Architecture cannot satisfy the Cathedrals opening with fewer than eight scenes")
+    plans = sorted(architecture["traversal_plan"], key=lambda item: item["sequence"])
+    if [item["sequence"] for item in plans] != list(range(1, len(plans) + 1)):
+        raise SchemaError("Architecture packet sequence is not contiguous")
+    plan_ids = {item["packet_slot_id"] for item in plans}
+    if len(plan_ids) != len(plans):
+        raise SchemaError("Architecture packet IDs are not unique")
+    seen = set()
+    scene_slots = []
+    ending_slots = []
+    obligations = {item["obligation_id"] for item in architecture["hard_obligations"]}
+    nodes = {item["node_id"] for item in architecture["topology"]["nodes"]}
+    if architecture["topology"]["entry_segment_id"] not in nodes or architecture["topology"]["opening_branch_node_id"] not in nodes:
+        raise SchemaError("Architecture entry or opening-branch node does not resolve")
+    if not set(architecture["topology"]["reconvergence_node_ids"]).issubset(nodes):
+        raise SchemaError("Architecture reconvergence node does not resolve")
+    for node in architecture["topology"]["nodes"]:
+        if not set(node["hard_obligation_ids"]).issubset(obligations) or not set(node["generation_dependency_ids"]).issubset(nodes):
+            raise SchemaError(f"Architecture node references unknown canon: {node['node_id']}")
+    for edge in architecture["topology"]["edges"]:
+        if edge["from_node_id"] not in nodes or edge["to_node_id"] not in nodes or not set(edge["hard_obligation_ids"]).issubset(obligations):
+            raise SchemaError(f"Architecture edge references unknown canon: {edge['edge_id']}")
+    opening_edges = [
+        edge
+        for edge in architecture["topology"]["edges"]
+        if edge["from_node_id"] == architecture["topology"]["opening_branch_node_id"] and edge["relation"] == "branch"
+    ]
+    if len(opening_edges) != 3:
+        raise SchemaError("Macroarchitecture opening hub must establish exactly three branch relations")
+    for arc in architecture["arcs"]:
+        if not set(arc["hard_obligation_ids"]).issubset(obligations):
+            raise SchemaError(f"Arc references unknown hard obligation: {arc['arc_id']}")
+    for family in architecture["ending_families"]:
+        if not set(family["prerequisite_obligation_ids"]).issubset(obligations):
+            raise SchemaError(f"Ending family references unknown hard obligation: {family['ending_family_id']}")
+    for plan in plans:
+        if not set(plan["depends_on_packet_slot_ids"]).issubset(seen):
+            raise SchemaError(f"Packet dependencies are not causally forward: {plan['packet_slot_id']}")
+        if not set(plan["hard_obligation_ids"]).issubset(obligations):
+            raise SchemaError(f"Packet references an unknown hard obligation: {plan['packet_slot_id']}")
+        seen.add(plan["packet_slot_id"])
+        scene_slots += plan["scene_slot_ids"]
+        ending_slots += plan["ending_slot_ids"]
+    if len(scene_slots) != len(set(scene_slots)) or len(scene_slots) != scope["planned_scene_count"]:
+        raise SchemaError("Architecture scene slots are duplicated or do not match planned_scene_count")
+    if len(ending_slots) != len(set(ending_slots)) or len(ending_slots) != scope["planned_ending_count"]:
+        raise SchemaError("Architecture ending slots are duplicated or do not match planned_ending_count")
+    if sum(plan["artifact_count"] for plan in plans) != scope["planned_artifact_count"]:
+        raise SchemaError("Packet artifact allocations do not match planned_artifact_count")
+    if sum(plan["formal_composition_count"] for plan in plans) != scope["planned_formal_composition_count"]:
+        raise SchemaError("Packet formal-composition allocations do not match the frozen count")
+    if scope["planned_artifact_count"] > manifest["scope"]["artifact_hard_max"]:
+        raise SchemaError("Architecture exceeds the derived artifact budget")
+    if scope["planned_ending_count"] > manifest["scope"]["ending_hard_max"]:
+        raise SchemaError("Architecture exceeds the derived ending budget")
+    if sum(item["ending_target"] for item in architecture["ending_families"]) != scope["planned_ending_count"]:
+        raise SchemaError("Ending-family targets do not match planned_ending_count")
+    if 2 + len(plans) > manifest["budgets"]["max_creative_step_count"]:
+        raise SchemaError("Architecture exceeds the derived creative-step budget")
+
+
+def validate_declared_id_uniqueness(record: dict) -> None:
+    identifiers = [record.get("commit_id"), record.get("index_batch_id")]
+    if record.get("record_type") == "genesis":
+        identifiers += [record["work_canon"]["work_id"]]
+        identifiers += [item["event_id"] for item in record["work_canon"]["chronology"]]
+        identifiers += [item["claimant_id"] for item in record["claimants"]]
+        identifiers += [item["character_id"] for item in record["characters"]]
+    elif record.get("record_type") == "architecture":
+        identifiers += [item["obligation_id"] for item in record["hard_obligations"]]
+        identifiers += [item["arc_id"] for item in record["arcs"]]
+        identifiers += [item["node_id"] for item in record["topology"]["nodes"]]
+        identifiers += [item["edge_id"] for item in record["topology"]["edges"]]
+        identifiers += [item["promise_id"] for item in record["narrative_promises"]]
+        identifiers += [item["ending_family_id"] for item in record["ending_families"]]
+        identifiers += [item["packet_slot_id"] for item in record["traversal_plan"]]
+    elif record.get("record_type") == "creative_packet":
+        identifiers += [item["scene_id"] for item in record["scenes"]]
+        identifiers += [item["artifact_id"] for item in record["artifacts"]]
+        identifiers += [item["ending_id"] for item in record["endings"]]
+        identifiers += [item["composition_id"] for item in record["formal_compositions"]]
+        identifiers += [item["edge_id"] for item in record["decision_edges"]]
+    identifiers = [identifier for identifier in identifiers if identifier]
+    duplicates = sorted({identifier for identifier in identifiers if identifiers.count(identifier) > 1})
+    if duplicates:
+        raise SchemaError(f"Record declares duplicate generated IDs: {', '.join(duplicates)}")
+
+
+def validate_packet_against_plan(packet: dict, plan: dict) -> None:
+    if packet["packet_slot_id"] != plan["packet_slot_id"] or packet["packet_kind"] != plan["packet_kind"]:
+        raise SchemaError("Creative packet does not match its frozen packet slot")
+    expected = set(plan["scene_slot_ids"] if plan["packet_kind"] == "literary" else plan["ending_slot_ids"])
+    actual = {
+        item["technical_slot_id"]
+        for item in (packet["scenes"] if plan["packet_kind"] == "literary" else packet["endings"])
+    }
+    if expected != actual:
+        raise SchemaError(f"Packet {plan['packet_slot_id']} did not fill its assigned technical slots exactly once")
+    if len(packet["artifacts"]) != plan["artifact_count"] or len(packet["formal_compositions"]) != plan["formal_composition_count"]:
+        raise SchemaError(f"Packet {plan['packet_slot_id']} did not satisfy its frozen artifact/composition allocation")
+    if not set(plan["hard_obligation_ids"]).issubset(packet["obligations_consumed"]):
+        raise SchemaError(f"Packet {plan['packet_slot_id']} omitted a hard architectural obligation")
+
+
+def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict) -> str:
+    manifest = read_json(run_dir / "run-manifest.json")
+    genesis = committed_record(run_dir, "genesis")
+    dependency_records = [
+        committed_record(run_dir, "creative_packet", dependency)
+        for dependency in plan["depends_on_packet_slot_ids"]
+    ]
+    dependency_records = [record for record in dependency_records if record]
+    recent = [record for record in all_committed_records(run_dir) if record.get("record_type") == "creative_packet"][-2:]
+    canonical = read_json(run_dir / "state/canonical-memory.json") if (run_dir / "state/canonical-memory.json").exists() else {}
+    working = read_json(run_dir / "state/working-memory.json") if (run_dir / "state/working-memory.json").exists() else {}
+    relevant_memory = list(canonical.values())[-80:] + list(working.values())[-80:]
+    retrieved_sources = bounded_context(
+        [("SOURCE-GROUNDED PASSAGES", retrieve_original_sources(run_dir, relevant_memory))],
+        manifest["budgets"]["max_retrieved_source_tokens"],
+    )
+    geomancy = ensure_frozen_geomancy(run_dir)
+    slots = set(plan["scene_slot_ids"])
+    relevant_geomancy = [item for item in geomancy["assignments"] if item["technical_slot_id"] in slots]
+    obligations = [
+        item for item in architecture["hard_obligations"] if item["obligation_id"] in plan["hard_obligation_ids"]
+    ]
+    return bounded_context(
+        [
+            ("FROZEN ENGINE CANON", (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
+            ("FROZEN GENERATION BRIEF", manifest["generation_brief"]),
+            ("ACTIVE WEB FORMAT CONTRACT", active_format_contract("web").read_text(encoding="utf-8")),
+            ("GENERATED ROOT CANON", genesis),
+            ("PACKET PLAN", plan),
+            ("HARD OBLIGATIONS", obligations),
+            ("DEPENDENCY SOURCE RECORDS", dependency_records),
+            ("RECENT IMMUTABLE SOURCE RECORDS", recent),
+            ("RELEVANT CANONICAL GENERATED STATE", list(canonical.values())[-80:]),
+            ("RELEVANT NARRATIVE WORKING MEMORY", list(working.values())[-80:]),
+            ("RETRIEVED ORIGINAL SOURCE EVIDENCE", retrieved_sources),
+            ("FROZEN THRESHOLD GEOMANCY", relevant_geomancy),
+        ],
+        manifest["budgets"]["max_prepared_context_tokens"] - 14000,
+    )
+
+
+def step_is_committed(run_dir: Path, step_id: str) -> bool:
+    return any(
+        entry["planned_step_id"] == step_id and entry["commit_status"] == "COMMITTED"
+        for entry in ledger_entries(run_dir)
+    )
+
+
+def validate_genesis(record: dict, run_dir: Path) -> None:
+    brief = read_json(run_dir / "generation-brief.json")
+    if record["generation_id"] != brief["generation_id"] or record["story_format"] != "web":
+        raise SchemaError("Genesis does not match the frozen generation or active web format")
+    slots = [claimant["technical_slot_id"] for claimant in record["claimants"]]
+    if sorted(slots) != [f"claimant_slot_{number:02d}" for number in range(1, 6)]:
+        raise SchemaError("Genesis must fill each of the five semantically blank claimant slots once")
+
+
+def validate_architecture_for_run(record: dict, run_dir: Path) -> None:
+    genesis = committed_record(run_dir, "genesis")
+    if not genesis or record["genesis_commit_id"] != genesis["commit_id"]:
+        raise SchemaError("Architecture does not descend from the committed genesis")
+    if record["story_format"] != "web":
+        raise SchemaError("The active architecture format must be web")
+    claimants = {item["claimant_id"] for item in genesis["claimants"]}
+    if any(not set(arc["claimant_pressures"]).issubset(claimants) for arc in record["arcs"]):
+        raise SchemaError("Architecture applies pressure from an unknown claimant")
+    validate_architecture(record, read_json(run_dir / "run-manifest.json"))
+
+
+def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
+    architecture = committed_record(run_dir, "architecture")
+    if not architecture or record["architecture_commit_id"] != architecture["commit_id"]:
+        raise SchemaError("Packet does not descend from the committed architecture")
+    if record["generation_id"] != run_dir.name or record["story_format"] != "web":
+        raise SchemaError("Packet does not match the frozen run or active web format")
+    if record["packet_sequence"] != plan["sequence"]:
+        raise SchemaError("Packet sequence differs from frozen traversal")
+    obligations = {item["obligation_id"] for item in architecture["hard_obligations"]}
+    arcs = {item["arc_id"] for item in architecture["arcs"]}
+    claimants = {item["claimant_id"] for item in committed_record(run_dir, "genesis")["claimants"]}
+    if not set(record["obligations_consumed"]).issubset(obligations):
+        raise SchemaError("Packet claims an unknown architectural obligation")
+    if any(scene["arc_id"] not in arcs or not set(scene["claimant_focus_ids"]).issubset(claimants) for scene in record["scenes"]):
+        raise SchemaError("Packet scene references an unknown arc or claimant")
+    if any(not set(item["claimant_relevance_ids"]).issubset(claimants) for item in record["artifacts"]):
+        raise SchemaError("Packet artifact references an unknown claimant")
+    if any(not set(item["claimant_pressure_ids"]).issubset(claimants) for item in record["endings"]):
+        raise SchemaError("Packet ending references an unknown claimant")
+    current_content = {item["scene_id"] for item in record["scenes"]} | {item["ending_id"] for item in record["endings"]}
+    if any(edge["from_content_id"] not in current_content for edge in record["decision_edges"]):
+        raise SchemaError("A packet cannot retroactively attach an edge to earlier content")
+    geomancy = {item["technical_slot_id"]: item for item in ensure_frozen_geomancy(run_dir)["assignments"]}
+    if any(
+        scene["technical_slot_id"] not in geomancy
+        or scene["threshold_figure"] != geomancy[scene["technical_slot_id"]]["figure"]
+        or scene["threshold_resultant"] != geomancy[scene["technical_slot_id"]]["resultant"]
+        for scene in record["scenes"]
+    ):
+        raise SchemaError("Packet changed its frozen threshold geomancy")
+    validate_packet_against_plan(record, plan)
+
+
+def compact_schema(record_type: str) -> str:
+    return json.dumps(record_schema(record_type), ensure_ascii=False, separators=(",", ":"))
+
+
+def genesis_prompt(run_dir: Path) -> tuple[str, str]:
+    manifest = read_json(run_dir / "run-manifest.json")
+    context = bounded_context(
+        [
+            ("FROZEN ENGINE CANON", (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
+            ("FROZEN RUN MANIFEST", manifest),
+            ("FROZEN THRESHOLD GEOMANCY", ensure_frozen_geomancy(run_dir)),
+        ],
+        manifest["budgets"]["max_prepared_context_tokens"] - 14000,
+    )
+    return render_prompt(
+        "generation-genesis.md",
+        {"FROZEN_GENESIS_CONTEXT": context, "GENESIS_PROTOCOL_DEFINITIONS": compact_schema("genesis")},
+    ), context
+
+
+def architecture_prompt(run_dir: Path) -> tuple[str, str]:
+    manifest = read_json(run_dir / "run-manifest.json")
+    context = bounded_context(
+        [
+            ("FROZEN ENGINE CANON", (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
+            ("FROZEN RUN MANIFEST", manifest),
+            ("IMMUTABLE GENESIS", committed_record(run_dir, "genesis")),
+            ("FROZEN THRESHOLD GEOMANCY", ensure_frozen_geomancy(run_dir)),
+        ],
+        manifest["budgets"]["max_prepared_context_tokens"] - 16000,
+    )
+    return render_prompt(
+        "generation-architecture.md",
+        {
+            "FROZEN_ARCHITECTURE_CONTEXT": context,
+            "ARCHITECTURE_PROTOCOL_DEFINITIONS": compact_schema("architecture"),
+        },
+    ), context
+
+
+def packet_prompt(run_dir: Path, architecture: dict, plan: dict) -> tuple[str, str]:
+    context = relevant_packet_context(run_dir, architecture, plan)
+    obligations = json.dumps(plan, ensure_ascii=False, indent=2)
+    if plan["packet_kind"] == "literary":
+        name = "generation-packet.md"
+        replacements = {
+            "PACKET_CONTEXT": context,
+            "PACKET_OBLIGATIONS": obligations,
+            "PACKET_PROTOCOL_DEFINITIONS": compact_schema("creative_packet"),
+        }
+    else:
+        name = "generation-ending-packet.md"
+        replacements = {
+            "ENDING_PACKET_CONTEXT": context,
+            "ENDING_PACKET_OBLIGATIONS": obligations,
+            "ENDING_PROTOCOL_DEFINITIONS": compact_schema("creative_packet"),
+        }
+    return render_prompt(name, replacements), context
+
+
+def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json) -> None:
+    verify_engine_freeze(run_dir)
+    ensure_frozen_geomancy(run_dir)
+    if not committed_record(run_dir, "genesis"):
+        output_fn("[03] Genesis                       …")
+        prompt, context = genesis_prompt(run_dir)
+        request_record(
+            run_dir,
+            expected_record_type="genesis",
+            step_id="genesis",
+            phase="genesis",
+            prompt=prompt,
+            context=context,
+            branch_relation="generated_root_canon",
+            temperature=0.8,
+            transport=transport,
+            precommit_validator=lambda record: validate_genesis(record, run_dir),
+        )
+        output_fn("[03] Genesis                       ✓ committed")
+    else:
+        output_fn("[03] Genesis                       ✓ already committed")
+    if not committed_record(run_dir, "architecture"):
+        output_fn("[04] Architecture                  …")
+        prompt, context = architecture_prompt(run_dir)
+        request_record(
+            run_dir,
+            expected_record_type="architecture",
+            step_id="architecture",
+            phase="architecture",
+            prompt=prompt,
+            context=context,
+            branch_relation="macroarchitecture",
+            temperature=0.7,
+            transport=transport,
+            precommit_validator=lambda record: validate_architecture_for_run(record, run_dir),
+        )
+        output_fn("[04] Architecture                  ✓ committed")
+    else:
+        output_fn("[04] Architecture                  ✓ already committed")
+    architecture = committed_record(run_dir, "architecture")
+    plans = sorted(architecture["traversal_plan"], key=lambda item: item["sequence"])
+    literary_total = sum(plan["packet_kind"] == "literary" for plan in plans)
+    ending_total = len(plans) - literary_total
+    literary_index = ending_index = 0
+    for plan in plans:
+        if plan["packet_kind"] == "literary":
+            literary_index += 1
+            label = f"Literary packet {literary_index:02d}/{literary_total:02d}"
+        else:
+            ending_index += 1
+            label = f"Ending packet {ending_index:02d}/{ending_total:02d}"
+        step_id = f"packet_{plan['packet_slot_id']}"
+        if committed_record(run_dir, "creative_packet", plan["packet_slot_id"]):
+            output_fn(f"      {label:<31} ✓ already committed")
+            continue
+        missing = [dependency for dependency in plan["depends_on_packet_slot_ids"] if not committed_record(run_dir, "creative_packet", dependency)]
+        if missing:
+            raise CathedralsError("Traversal", f"{plan['packet_slot_id']} has uncommitted dependencies: {', '.join(missing)}", "continuity_impossibility")
+        output_fn(f"      {label:<31} …")
+        prompt, context = packet_prompt(run_dir, architecture, plan)
+        request_record(
+            run_dir,
+            expected_record_type="creative_packet",
+            step_id=step_id,
+            phase="literary_packet" if plan["packet_kind"] == "literary" else "ending_packet",
+            prompt=prompt,
+            context=context,
+            branch_relation=plan["branch_path_relation"],
+            temperature=0.85 if plan["packet_kind"] == "literary" else 0.75,
+            transport=transport,
+            precommit_validator=lambda record, frozen_plan=plan: validate_packet_for_run(record, run_dir, frozen_plan),
+        )
+        counts = committed_record(run_dir, "creative_packet", plan["packet_slot_id"])
+        output_fn(f"      {label:<31} ✓ committed ({len(counts['scenes'])} scenes, {len(counts['artifacts'])} artifacts, {len(counts['endings'])} endings)")
+
+
+def literary_word_count(value: str) -> int:
+    return len(re.findall(r"\b[\w’'-]+\b", value, flags=re.UNICODE))
+
+
+def validate_complete_work(run_dir: Path) -> dict:
+    reconcile_run(run_dir)
+    manifest = read_json(run_dir / "run-manifest.json")
+    architecture = committed_record(run_dir, "architecture")
+    packets = [record for record in all_committed_records(run_dir) if record.get("record_type") == "creative_packet"]
+    if not architecture:
+        return {"result": "FAIL", "reasons": ["Architecture is absent."]}
+    plans = architecture["traversal_plan"]
+    by_slot = {packet["packet_slot_id"]: packet for packet in packets}
+    reasons = []
+    if set(by_slot) != {plan["packet_slot_id"] for plan in plans}:
+        reasons.append("Not every frozen packet plan has exactly one committed packet.")
+    scenes = [item for packet in packets for item in packet["scenes"]]
+    artifacts = [item for packet in packets for item in packet["artifacts"]]
+    endings = [item for packet in packets for item in packet["endings"]]
+    compositions = [item for packet in packets for item in packet["formal_compositions"]]
+    edges = [item for packet in packets for item in packet["decision_edges"]]
+    commitment = architecture["scope_commitment"]
+    actual_counts = {
+        "scenes": len(scenes),
+        "artifacts": len(artifacts),
+        "endings": len(endings),
+        "formal_compositions": len(compositions),
+    }
+    expected_counts = {
+        "scenes": commitment["planned_scene_count"],
+        "artifacts": commitment["planned_artifact_count"],
+        "endings": commitment["planned_ending_count"],
+        "formal_compositions": commitment["planned_formal_composition_count"],
+    }
+    if actual_counts != expected_counts:
+        reasons.append(f"Projected content counts {actual_counts} do not match frozen counts {expected_counts}.")
+    if len(scenes) > manifest["scope"]["possible_scene_count"]:
+        reasons.append("The work exceeds the user's possible-scene scope.")
+    content_ids = {item["scene_id"] for item in scenes} | {item["ending_id"] for item in endings}
+    edge_by_id = {edge["edge_id"]: edge for edge in edges}
+    edge_ids = set(edge_by_id)
+    artifact_ids = {item["artifact_id"] for item in artifacts}
+    for edge in edges:
+        if edge["from_content_id"] not in content_ids or edge["to_content_id"] not in content_ids:
+            reasons.append(f"Decision edge {edge['edge_id']} points outside committed content.")
+    for scene in scenes:
+        if not set(scene["choice_edge_ids"]).issubset(edge_ids):
+            reasons.append(f"Scene {scene['scene_id']} references an absent choice edge.")
+        if not set(scene["artifact_ids"]).issubset(artifact_ids):
+            reasons.append(f"Scene {scene['scene_id']} references an absent artifact.")
+        if any(edge_by_id[edge_id]["from_content_id"] != scene["scene_id"] for edge_id in scene["choice_edge_ids"] if edge_id in edge_by_id):
+            reasons.append(f"Scene {scene['scene_id']} claims an edge owned by different content.")
+        if literary_word_count(scene["prose_mdx"]) > 600:
+            reasons.append(f"Scene {scene['scene_id']} exceeds the 600-word hard limit.")
+        if scene["major_decision"] and not scene["hesitation_consequence"]:
+            reasons.append(f"Major decision {scene['scene_id']} has no consequential hesitation.")
+        if re.search(r"(^|\n)\s*(import|export)\s|<\s*(script|iframe)\b|<[A-Z][A-Za-z0-9]*\b", scene["prose_mdx"], re.IGNORECASE):
+            reasons.append(f"Scene {scene['scene_id']} contains unsafe generated Markdown.")
+    for artifact in artifacts:
+        if literary_word_count(artifact["body_mdx"]) > 350:
+            reasons.append(f"Artifact {artifact['artifact_id']} exceeds the 350-word hard limit.")
+        if re.search(r"<\s*(script|iframe)\b", artifact["body_mdx"], re.IGNORECASE):
+            reasons.append(f"Artifact {artifact['artifact_id']} contains unsafe generated Markdown.")
+    for ending in endings:
+        if literary_word_count(ending["prose_mdx"]) > 500:
+            reasons.append(f"Ending {ending['ending_id']} exceeds the 500-word hard limit.")
+        if re.search(r"<\s*(script|iframe)\b", ending["prose_mdx"], re.IGNORECASE):
+            reasons.append(f"Ending {ending['ending_id']} contains unsafe generated Markdown.")
+        target = ending["redirect_target_scene_id"]
+        if target is not None and target not in {scene["scene_id"] for scene in scenes}:
+            reasons.append(f"Ending {ending['ending_id']} redirects to an absent scene.")
+    groups = {}
+    for edge in edges:
+        if edge["decision_group_id"] is not None:
+            groups.setdefault(edge["decision_group_id"], []).append(edge)
+    if any(not 2 <= len(group) <= 5 for group in groups.values()):
+        reasons.append("A decision group does not contain two to five prebuilt choices.")
+    ordered_scenes = sorted(scenes, key=lambda scene: scene["technical_slot_id"])
+    playable_choice_count = lambda scene: sum(edge_by_id[edge_id]["availability"] == "playable" for edge_id in scene["choice_edge_ids"] if edge_id in edge_by_id)
+    first_hub = next((index for index, scene in enumerate(ordered_scenes) if playable_choice_count(scene) >= 2), None)
+    if first_hub is None or not 3 <= first_hub <= 5:
+        reasons.append("The first live hub does not follow three to five scene surfaces.")
+    elif playable_choice_count(ordered_scenes[first_hub]) != 3:
+        reasons.append("The first live hub does not expose exactly three choices.")
+    if ordered_scenes:
+        reachable = {ordered_scenes[0]["scene_id"]}
+        changed = True
+        while changed:
+            changed = False
+            for edge in edges:
+                if edge["availability"] == "playable" and edge["from_content_id"] in reachable and edge["to_content_id"] not in reachable:
+                    reachable.add(edge["to_content_id"])
+                    changed = True
+        missing_content = content_ids - reachable
+        if missing_content:
+            reasons.append(f"Committed content is unreachable from the entry scene: {', '.join(sorted(missing_content)[:8])}.")
+    if len({scene["branch_depth"] for scene in scenes}) < 2:
+        reasons.append("Branch depth is uniform rather than meaningfully unequal.")
+    containers = content_ids | artifact_ids
+    if any(item["container_id"] not in containers for item in compositions):
+        reasons.append("A formal composition anchor container does not resolve.")
+    geomancy = {item["technical_slot_id"]: item for item in ensure_frozen_geomancy(run_dir)["assignments"]}
+    for scene in scenes:
+        assignment = geomancy.get(scene["technical_slot_id"])
+        if not assignment or scene["threshold_figure"] != assignment["figure"] or scene["threshold_resultant"] != assignment["resultant"]:
+            reasons.append(f"Scene {scene['scene_id']} does not preserve frozen threshold geomancy.")
+    state = load_state(run_dir)
+    if state["creative_step_count"] > manifest["budgets"]["max_creative_step_count"]:
+        reasons.append("Creative-step budget was exceeded.")
+    if state["input_tokens"] > manifest["budgets"]["max_cumulative_input_tokens"] or state["output_tokens"] > manifest["budgets"]["max_cumulative_output_tokens"]:
+        reasons.append("Cumulative token budget was exceeded.")
+    memory_path = run_dir / "memory/memory-events.jsonl"
+    memory_count = len(memory_path.read_text(encoding="utf-8").splitlines()) if memory_path.exists() else 0
+    if memory_count > manifest["budgets"]["max_memory_records"]:
+        reasons.append("Narrative-memory capacity was exceeded.")
+    total_words = sum(literary_word_count(scene["prose_mdx"]) for scene in scenes)
+    total_words += sum(literary_word_count(item["body_mdx"]) for item in artifacts)
+    total_words += sum(literary_word_count(item["prose_mdx"]) for item in endings)
+    if total_words > manifest["budgets"]["max_total_literary_words"]:
+        reasons.append("Total literary-word budget was exceeded.")
+    project = run_dir / "projection/web"
+    for scene in scenes:
+        source = project / "public/source" / f"{scene['scene_id']}.md"
+        if not source.exists() or source.read_text(encoding="utf-8") != scene["prose_mdx"]:
+            reasons.append(f"Projection changed immutable scene source {scene['scene_id']}.")
+    for artifact in artifacts:
+        source = project / "public/source" / f"{artifact['artifact_id']}.md"
+        if not source.exists() or source.read_text(encoding="utf-8") != artifact["body_mdx"]:
+            reasons.append(f"Projection changed immutable artifact source {artifact['artifact_id']}.")
+    for ending in endings:
+        source = project / "public/source" / f"{ending['ending_id']}.md"
+        if not source.exists() or source.read_text(encoding="utf-8") != ending["prose_mdx"]:
+            reasons.append(f"Projection changed immutable ending source {ending['ending_id']}.")
+    if any(state[name] != 0 for name in ("human_intervention_count", "committed_rewrite_count", "committed_regeneration_count", "backtrack_count")):
+        reasons.append("An irreversibility counter is nonzero.")
+    verdict = {"result": "FAIL" if reasons else "PASS", "reasons": reasons or ["All committed records, counts, references, budgets, and complete-work constraints are mechanically valid."]}
+    write_json(run_dir / "validation/mechanical.json", verdict)
+    append_deterministic_step(run_dir, "mechanical_validation", "validation", sha256_bytes(canonical_json(verdict)))
+    return verdict
+
+
+ARTISTIC_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["result", "reasons"],
+    "properties": {
+        "result": {"enum": ["PASS", "FAIL GENERATION"]},
+        "reasons": {"type": "array", "minItems": 1, "maxItems": 12, "items": {"type": "string", "minLength": 1}},
+    },
+}
+
+
+def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http_json) -> dict:
+    result_path = run_dir / "validation" / f"{step_id}.json"
+    raw_path = run_dir / "validation" / f"{step_id}.api.json"
+    commit_path = run_dir / "validation" / f".{step_id}.commit.json"
+    if commit_path.exists():
+        meta = read_json(commit_path)
+        entry = meta["ledger_entry"]
+        matches = [item for item in ledger_entries(run_dir) if item["planned_step_id"] == step_id and item["commit_status"] == "COMMITTED"]
+        if not matches:
+            entries = ledger_entries(run_dir)
+            if entry["previous_entry_hash"] != (entries[-1]["entry_hash"] if entries else None):
+                raise IntegrityError(f"Cannot reconcile analysis commit {step_id}")
+            append_ledger_entry(run_dir, entry)
+        elif matches[0] != entry:
+            raise IntegrityError(f"Analysis ledger metadata changed for {step_id}")
+        if not raw_path.exists():
+            write_json(raw_path, meta["api_response"], mode=0o444, exclusive=True)
+        if not result_path.exists():
+            write_json(result_path, meta["verdict"], mode=0o444, exclusive=True)
+        if sha256_bytes(canonical_json(read_json(result_path))) != entry["output_hash"]:
+            raise IntegrityError(f"Committed analysis verdict changed for {step_id}")
+        reconcile_run(run_dir)
+        return meta["verdict"]
+    if result_path.exists() or raw_path.exists():
+        raise IntegrityError(f"Analysis output exists without commit metadata: {step_id}")
+    reconcile_run(run_dir)
+    state = load_state(run_dir)
+    brief = read_json(run_dir / "generation-brief.json")
+    seed = step_seed(brief["generation_seed"], step_id)
+    parameters = {"temperature": 0.0, "max_tokens": 4096, "seed": seed, "stream": False}
+    payload = {
+        "model": state["model"],
+        "messages": [
+            {"role": "system", "content": "Judge the completed immutable work. Do not author, rewrite, or suggest replacement fiction."},
+            {"role": "user", "content": prompt},
+        ],
+        **parameters,
+        "response_format": {"type": "json_schema", "json_schema": {"name": "artistic_verdict", "strict": True, "schema": ARTISTIC_SCHEMA}},
+    }
+    attempt = 1 + sum(entry["planned_step_id"] == step_id for entry in ledger_entries(run_dir))
+    started_at = utc_now()
+    response = None
+    current_attempt = attempt
+    for retry in range(3):
+        try:
+            response = transport("POST", api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), payload, timeout=float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "3600")))
+            break
+        except CathedralsError as error:
+            append_failed_attempt(
+                run_dir,
+                step_id=step_id,
+                attempt=current_attempt,
+                phase="artistic_acceptance",
+                prompt=prompt,
+                context=prompt,
+                parameters=parameters,
+                started_at=started_at,
+                failure_class=error.failure_class,
+                step_type="analysis_or_index",
+            )
+            if retry == 2:
+                raise
+            current_attempt += 1
+    content = _response_content(response)
+    try:
+        verdict = parse_structured_content(content)
+        validate_json_schema(verdict, ARTISTIC_SCHEMA)
+    except SchemaError:
+        append_failed_attempt(
+            run_dir,
+            step_id=step_id,
+            attempt=current_attempt,
+            phase="artistic_acceptance",
+            prompt=prompt,
+            context=prompt,
+            parameters=parameters,
+            started_at=started_at,
+            failure_class="malformed_response",
+            output_hash=sha256_bytes(content.encode()),
+            step_type="analysis_or_index",
+        )
+        raise
+    output_hash = sha256_bytes(canonical_json(verdict))
+    current = load_state(run_dir)
+    entry = new_ledger_entry(
+        run_dir,
+        planned_step_id=step_id,
+        attempt=current_attempt,
+        step_type="analysis_or_index",
+        step_phase="artistic_acceptance",
+        parent_state_hash=current["canonical_state_hash"],
+        prompt_hash=sha256_bytes(prompt.encode()),
+        context_hash=sha256_bytes(prompt.encode()),
+        provider="LM Studio",
+        model=current["model"],
+        parameters=parameters,
+        seed=seed,
+        started_at=started_at,
+        output_hash=output_hash,
+        generated_ids=[],
+        canonical_delta_ids=[],
+        unresolved_ids=[],
+        motif_ids=[],
+        branch_relation=None,
+        commit_status="COMMITTED",
+        state_hash_after=current["canonical_state_hash"],
+        failure_class="none",
+        usage=response.get("usage", {}),
+    )
+    write_json(commit_path, {"verdict": verdict, "api_response": response, "ledger_entry": entry}, mode=0o444, exclusive=True)
+    append_ledger_entry(run_dir, entry)
+    write_json(raw_path, response, mode=0o444, exclusive=True)
+    write_json(result_path, verdict, mode=0o444, exclusive=True)
+    reconcile_run(run_dir)
+    return verdict
+
+
+def artistic_acceptance(run_dir: Path, *, transport=http_json) -> dict:
+    packet_verdicts = []
+    acceptance_law = (ENGINE / "canon/acceptance-tests.md").read_text(encoding="utf-8")
+    for packet in [record for record in all_committed_records(run_dir) if record.get("record_type") == "creative_packet"]:
+        step_id = f"artistic_review_{packet['packet_slot_id']}"
+        prompt = bounded_context(
+            [
+                ("ARTISTIC ACCEPTANCE LAW", acceptance_law),
+                ("IMMUTABLE PACKET SOURCE", packet),
+                ("INSTRUCTION", "Return PASS only if this source contributes viable Cathedrals literature. Judge; do not repair or propose replacement prose."),
+            ],
+            30000,
+        )
+        packet_verdicts.append({"packet_slot_id": packet["packet_slot_id"], "verdict": request_analysis(run_dir, step_id, prompt, transport=transport)})
+    final_prompt = bounded_context(
+        [
+            ("ARTISTIC ACCEPTANCE LAW", acceptance_law),
+            ("IMMUTABLE GENESIS", committed_record(run_dir, "genesis")),
+            ("IMMUTABLE ARCHITECTURE", committed_record(run_dir, "architecture")),
+            ("SOURCE-GROUNDED PACKET VERDICTS", packet_verdicts),
+            ("CANONICAL MEMORY INDEX", read_json(run_dir / "state/canonical-memory.json")),
+            ("NARRATIVE WORKING MEMORY", read_json(run_dir / "state/working-memory.json")),
+            ("INSTRUCTION", "Return the whole-work PASS or FAIL GENERATION verdict. Any packet failure is evidence against acceptance. Do not repair, rewrite, or resample."),
+        ],
+        42000,
+    )
+    verdict = request_analysis(run_dir, "whole_work_artistic_acceptance", final_prompt, transport=transport)
+    if any(item["verdict"]["result"] == "FAIL GENERATION" for item in packet_verdicts):
+        verdict = {"result": "FAIL GENERATION", "reasons": ["At least one immutable packet failed source-level artistic acceptance."] + verdict["reasons"]}
+    write_json(run_dir / "validation/artistic.json", verdict)
+    append_deterministic_step(run_dir, "artistic_acceptance_verdict", "artistic_acceptance", sha256_bytes(canonical_json(verdict)))
+    return verdict
+
+
+def project_web(run_dir: Path) -> tuple[Path, dict]:
+    project = run_dir / "projection/web"
+    if project.exists():
+        shutil.rmtree(project)
+    (project / "src/pages").mkdir(parents=True)
+    (project / "public/source").mkdir(parents=True)
+    manifest = read_json(run_dir / "run-manifest.json")
+    genesis = committed_record(run_dir, "genesis")
+    architecture = committed_record(run_dir, "architecture")
+    packets = [record for record in all_committed_records(run_dir) if record.get("record_type") == "creative_packet"]
+    scenes = sorted([item for packet in packets for item in packet["scenes"]], key=lambda item: item["technical_slot_id"])
+    artifacts = [item for packet in packets for item in packet["artifacts"]]
+    endings = [item for packet in packets for item in packet["endings"]]
+    edges = [item for packet in packets for item in packet["decision_edges"]]
+    work = {
+        "generation_id": run_dir.name,
+        "project_name": manifest["generation_brief"]["project_name"],
+        "generated_title": genesis["work_canon"]["generated_title"],
+        "entry_content_id": scenes[0]["scene_id"],
+        "scenes": scenes,
+        "artifacts": artifacts,
+        "endings": endings,
+        "decision_edges": edges,
+        "architecture": architecture,
+    }
+    write_json(project / "public/work.json", work)
+    for packet in packets:
+        for scene in packet["scenes"]:
+            write_atomic(project / "public/source" / f"{scene['scene_id']}.md", scene["prose_mdx"].encode())
+        for artifact in packet["artifacts"]:
+            write_atomic(project / "public/source" / f"{artifact['artifact_id']}.md", artifact["body_mdx"].encode())
+        for ending in packet["endings"]:
+            write_atomic(project / "public/source" / f"{ending['ending_id']}.md", ending["prose_mdx"].encode())
+    write_json(
+        project / "package.json",
+        {
+            "name": slugify(manifest["generation_brief"]["project_name"]).replace("_", "-"),
+            "private": True,
+            "type": "module",
+            "scripts": {"build": "astro build"},
+            "dependencies": {"astro": ASTRO_VERSION},
+        },
+    )
+    write_atomic(project / "astro.config.mjs", b"import { defineConfig } from 'astro/config';\nexport default defineConfig({ output: 'static' });\n")
+    style = r''':root{color-scheme:dark;font-family:Georgia,serif;background:#11120f;color:#e8e2d2}body{margin:0;background:radial-gradient(circle at 20% 0,#27302c 0,#11120f 46rem);min-height:100vh}main{width:min(48rem,calc(100% - 2rem));margin:auto;padding:4rem 0 8rem}header{border-bottom:1px solid #85816f;margin-bottom:2rem;padding-bottom:1rem}h1,h2{font-weight:400;letter-spacing:.04em}.kicker,.trace{color:#a9aa9d;font:.78rem system-ui,sans-serif;letter-spacing:.12em;text-transform:uppercase}.prose,.artifact-body{white-space:pre-wrap;line-height:1.75;font-size:1.08rem}.choices{display:grid;gap:.75rem;margin-top:2.5rem}.choice,.begin{color:inherit;background:#1b211e;border:1px solid #77786d;padding:1rem;text-decoration:none}.choice:hover,.choice:focus-visible,.begin:hover,.begin:focus-visible{border-color:#e8e2d2;background:#242c27}details{border-left:2px solid #77786d;margin:1.5rem 0;padding:.5rem 1rem}button{font:inherit;color:inherit;background:none;border:0;text-decoration:underline;cursor:pointer}'''
+    state_script = r'''const body=document.body,key=`cathedrals:${body.dataset.generation}:reader-state:v1`;let state=JSON.parse(localStorage.getItem(key)||'{"path":[],"values":{}}');const apply=effects=>effects.forEach(e=>{const v=state.values[e.key];if(e.operation==='set')state.values[e.key]=e.value;else if(e.operation==='increment')state.values[e.key]=(v||0)+e.value;else if(e.operation==='add')state.values[e.key]=[...new Set([...(v||[]),e.value])];else if(e.operation==='remove')state.values[e.key]=(v||[]).filter(x=>x!==e.value)});const satisfies=c=>{const v=state.values[c.key];return c.operator==='equals'?v===c.value:c.operator==='not_equals'?v!==c.value:c.operator==='gte'?v>=c.value:c.operator==='lte'?v<=c.value:c.operator==='contains'?Array.isArray(v)&&v.includes(c.value):!Array.isArray(v)||!v.includes(c.value)};const current=body.dataset.current;if(state.path.at(-1)!==current){state.path.push(current);apply(JSON.parse(body.dataset.effects||'[]'));localStorage.setItem(key,JSON.stringify(state))}document.querySelector('.trace').textContent=state.path.join(' / ');for(const link of document.querySelectorAll('.choice')){const conditions=JSON.parse(link.dataset.conditions),effects=JSON.parse(link.dataset.effects);link.hidden=!conditions.every(satisfies);link.addEventListener('click',()=>{apply(effects);localStorage.setItem(key,JSON.stringify(state))})}document.querySelector('.reset')?.addEventListener('click',()=>{localStorage.removeItem(key);location.href='/'})'''
+    index_page = r'''---
+import fs from 'node:fs';
+const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));
+---
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{work.generated_title}</title></head><body><main><div class="kicker">{work.project_name}</div><h1>{work.generated_title}</h1><p>A complete static Cathedrals work.</p><a class="begin" href={`/scenes/${work.entry_content_id}/`}>Enter the annex</a></main></body></html>
+'''
+    scene_page = r'''---
+import fs from 'node:fs';
+const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));
+export function getStaticPaths(){return work.scenes.map(scene=>({params:{sceneId:scene.scene_id},props:{scene,artifacts:scene.artifact_ids.map(id=>work.artifacts.find(a=>a.artifact_id===id)).filter(Boolean),edges:scene.choice_edge_ids.map(id=>work.decision_edges.find(e=>e.edge_id===id)).filter(e=>e&&e.availability==='playable')}}))}
+const {scene,artifacts,edges}=Astro.props;
+const pathFor=id=>work.scenes.some(s=>s.scene_id===id)?`/scenes/${id}/`:`/endings/${id}/`;
+---
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{scene.title} · {work.generated_title}</title></head><body data-generation={work.generation_id} data-current={scene.scene_id} data-effects={JSON.stringify(scene.state_effects)}><main><header><div class="kicker">{work.generated_title}</div><h1>{scene.title}</h1><div class="trace"></div></header><article><div class="prose">{scene.prose_mdx}</div>{artifacts.map(a=><details><summary>{a.title}</summary><div class="artifact-body">{a.body_mdx}</div><a href={`/artifacts/${a.artifact_id}/`}>Open as evidence</a></details>)}<nav class="choices" aria-label="Story choices">{edges.map(e=><a class="choice" href={pathFor(e.to_content_id)} data-conditions={JSON.stringify(e.state_conditions)} data-effects={JSON.stringify(e.state_effects)}>{e.label}</a>)}</nav></article></main><script is:inline src="/state.js"></script></body></html>
+'''
+    ending_page = r'''---
+import fs from 'node:fs';
+const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));
+export function getStaticPaths(){return work.endings.map(ending=>({params:{endingId:ending.ending_id},props:{ending,edges:work.decision_edges.filter(e=>e.from_content_id===ending.ending_id&&e.availability==='playable')}}))}
+const {ending,edges}=Astro.props;const pathFor=id=>work.scenes.some(s=>s.scene_id===id)?`/scenes/${id}/`:`/endings/${id}/`;
+---
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{ending.title} · {work.generated_title}</title></head><body data-generation={work.generation_id} data-current={ending.ending_id} data-effects={JSON.stringify(ending.state_effects)}><main><header><div class="kicker">Ending · {work.generated_title}</div><h1>{ending.title}</h1><div class="trace"></div></header><div class="prose">{ending.prose_mdx}</div><nav class="choices">{edges.map(e=><a class="choice" href={pathFor(e.to_content_id)} data-conditions={JSON.stringify(e.state_conditions)} data-effects={JSON.stringify(e.state_effects)}>{e.label}</a>)}{ending.redirect_target_scene_id&&<a class="choice" href={pathFor(ending.redirect_target_scene_id)} data-conditions="[]" data-effects="[]">Continue</a>}</nav><button class="reset">Start over</button></main><script is:inline src="/state.js"></script></body></html>
+'''
+    artifact_page = r'''---
+import fs from 'node:fs';
+const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));
+export function getStaticPaths(){return work.artifacts.map(artifact=>({params:{artifactId:artifact.artifact_id},props:{artifact}}))}const {artifact}=Astro.props;
+---
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{artifact.title} · {work.generated_title}</title></head><body><main><header><div class="kicker">Evidence · {work.generated_title}</div><h1>{artifact.title}</h1></header><div class="artifact-body">{artifact.body_mdx}</div><button onclick="history.back()">Return</button></main></body></html>
+'''
+    for relative in ("scenes/[sceneId].astro", "endings/[endingId].astro", "artifacts/[artifactId].astro"):
+        (project / "src/pages" / Path(relative).parent).mkdir(parents=True, exist_ok=True)
+    write_atomic(project / "public/style.css", style.encode())
+    write_atomic(project / "public/state.js", state_script.encode())
+    write_atomic(project / "src/pages/index.astro", index_page.encode())
+    write_atomic(project / "src/pages/scenes/[sceneId].astro", scene_page.encode())
+    write_atomic(project / "src/pages/endings/[endingId].astro", ending_page.encode())
+    write_atomic(project / "src/pages/artifacts/[artifactId].astro", artifact_page.encode())
+    hashes = {
+        str(path.relative_to(project)): sha256_file(path)
+        for path in sorted(project.rglob("*"))
+        if path.is_file()
+    }
+    projection = {"format": "web", "renderer": "astro", "source_hashes": hashes}
+    write_json(run_dir / "validation/projection.json", projection)
+    append_deterministic_step(run_dir, "complete_projection", "projection", sha256_bytes(canonical_json(projection)))
+    return project, {"scenes": len(scenes), "artifacts": len(artifacts), "endings": len(endings)}
+
+
+def parse_node_version(value: str) -> tuple[int, int, int] | None:
+    match = re.match(r"v?(\d+)\.(\d+)\.(\d+)", value.strip())
+    return tuple(map(int, match.groups())) if match else None
+
+
+def download(url: str, destination: Path) -> None:
+    request = urllib.request.Request(url, headers={"User-Agent": "Cathedrals generator"})
+    with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as handle:
+        shutil.copyfileobj(response, handle)
+
+
+def ensure_node(output_fn=print) -> tuple[Path, Path]:
+    system_node = shutil.which("node")
+    system = run_command([system_node, "--version"]) if system_node else None
+    version = parse_node_version(system.stdout) if system and system.returncode == 0 else None
+    if version and version >= NODE_MINIMUM and version[0] % 2 == 0 and shutil.which("npm"):
+        return Path(shutil.which("node")), Path(shutil.which("npm"))
+    machine = platform.machine().lower()
+    architecture = "x64" if machine in {"x86_64", "amd64"} else "arm64" if machine in {"aarch64", "arm64"} else None
+    if not architecture:
+        raise CathedralsError("Web toolchain", f"No pinned Node binary is configured for {machine}", "build_failure")
+    base = RUNTIME_ROOT / "toolchains/node" / NODE_VERSION
+    node = base / f"node-v{NODE_VERSION}-linux-{architecture}/bin/node"
+    npm = node.parent / "npm"
+    if node.exists() and npm.exists():
+        return node, npm
+    output_fn(f"      Downloading pinned Node {NODE_VERSION} into .cathedrals/toolchains/node/")
+    base.mkdir(parents=True, exist_ok=True)
+    archive_name = f"node-v{NODE_VERSION}-linux-{architecture}.tar.xz"
+    release = f"https://nodejs.org/download/release/v{NODE_VERSION}"
+    with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT / "cache") as temporary:
+        archive = Path(temporary) / archive_name
+        checksums = Path(temporary) / "SHASUMS256.txt"
+        download(f"{release}/{archive_name}", archive)
+        download(f"{release}/SHASUMS256.txt", checksums)
+        expected = next((line.split()[0] for line in checksums.read_text().splitlines() if line.endswith(f"  {archive_name}")), None)
+        if not expected or sha256_file(archive) != expected:
+            raise CathedralsError("Web toolchain", "Pinned Node download failed SHA-256 verification", "build_failure")
+        with tarfile.open(archive, "r:xz") as bundle:
+            try:
+                bundle.extractall(base, filter="data")
+            except TypeError:
+                if any(member.name.startswith("/") or ".." in Path(member.name).parts for member in bundle.getmembers()):
+                    raise CathedralsError("Web toolchain", "Unsafe path in Node archive", "build_failure")
+                bundle.extractall(base)
+    return node, npm
+
+
+def build_web(run_dir: Path, project: Path, output_fn=print) -> dict:
+    node, npm = ensure_node(output_fn)
+    environment = os.environ.copy()
+    environment["PATH"] = str(node.parent) + os.pathsep + environment.get("PATH", "")
+    environment["npm_config_cache"] = str(RUNTIME_ROOT / "cache/npm")
+    install = run_command([npm, "install", "--no-audit", "--no-fund"], cwd=project, env=environment)
+    (run_dir / "logs/npm-install.log").write_text(install.stdout + install.stderr, encoding="utf-8")
+    if install.returncode:
+        raise CathedralsError("Astro dependency install", "npm install failed; see the run log", "build_failure")
+    build = run_command([npm, "run", "build"], cwd=project, env=environment)
+    (run_dir / "logs/astro-build.log").write_text(build.stdout + build.stderr, encoding="utf-8")
+    if build.returncode:
+        raise CathedralsError("Astro build", "Astro static build failed; see the run log", "build_failure")
+    required = [project / "dist/index.html", project / "dist/work.json"]
+    reasons = [f"Missing static build output: {path.name}" for path in required if not path.exists()]
+    verdict = {"result": "FAIL" if reasons else "PASS", "reasons": reasons or ["Astro emitted the complete static reader and immutable work data."]}
+    write_json(run_dir / "validation/build.json", verdict)
+    if reasons:
+        raise CathedralsError("Static build validation", reasons[0], "build_failure")
+    append_deterministic_step(run_dir, "static_astro_build", "build_validation", sha256_bytes(canonical_json(verdict)))
+    return verdict
+
+
+def preflight_model_capacity(base_url: str, model: str, output_fn=print, transport=http_json) -> None:
+    required = 49152 + 10900 + 4096
+    try:
+        payload = transport("GET", api_url(base_url, "/api/v1/models"), timeout=10.0)
+    except CathedralsError as error:
+        raise CathedralsError(
+            "LM Studio preflight",
+            "LM Studio model capacity could not be read from /api/v1/models. Update LM Studio, keep the Local Server running, and try again.",
+            error.failure_class,
+        ) from error
+    limits = []
+    loaded_limits = []
+    for candidate in payload.get("models", []) if isinstance(payload, dict) else []:
+        if candidate.get("type") != "llm":
+            continue
+        for instance in candidate.get("loaded_instances", []):
+            config = instance.get("config", {})
+            limit = config.get("context_length") or candidate.get("max_context_length")
+            if isinstance(limit, int):
+                loaded_limits.append(limit)
+            if model in {candidate.get("key"), instance.get("id")}:
+                if isinstance(limit, int):
+                    limits.append(limit)
+    if not limits and len(loaded_limits) == 1:
+        limits = loaded_limits
+    if not limits:
+        raise CathedralsError("LM Studio preflight", f"No loaded context limit could be resolved for {model!r}.", "budget_exhaustion")
+    if limits and max(limits) < required:
+        raise CathedralsError(
+            "LM Studio preflight",
+            f"The selected model is loaded with a {max(limits):,}-token context; Cathedrals requires at least {required:,} for a prepared packet, output, and safety reserve.",
+            "budget_exhaustion",
+        )
+
+
+def committed_hashes(run_dir: Path) -> dict[str, str]:
+    values = {"run_manifest": sha256_file(run_dir / "run-manifest.json")}
+    for directory in committed_directories(run_dir):
+        record = read_json(directory / "record.json")
+        identifier = record.get("commit_id", record.get("index_batch_id", directory.name))
+        values[identifier] = sha256_file(directory / "record.json")
+    return values
+
+
+def make_finalization(run_dir: Path, status: str, failure_class: str, reason: str | None = None) -> dict:
+    state = load_state(run_dir)
+    entries = ledger_entries(run_dir)
+    mechanical = read_json(run_dir / "validation/mechanical.json") if (run_dir / "validation/mechanical.json").exists() else {"result": "NOT_RUN", "reasons": [reason or "Not reached."]}
+    artistic = read_json(run_dir / "validation/artistic.json") if (run_dir / "validation/artistic.json").exists() else {"result": "NOT_RUN", "reasons": [reason or "Not reached."]}
+    build = read_json(run_dir / "validation/build.json") if (run_dir / "validation/build.json").exists() else {"result": "NOT_RUN", "reasons": [reason or "Not reached."]}
+    ready = status == "READY_TO_PLAY"
+    if not ready and reason:
+        target = mechanical if mechanical["result"] == "NOT_RUN" else build if build["result"] == "NOT_RUN" else None
+        if target:
+            target["reasons"] = [reason]
+    memory_path = run_dir / "memory/memory-events.jsonl"
+    finalization = {
+        "record_type": "finalization",
+        "protocol_version": "2.0",
+        "generation_id": run_dir.name,
+        "run_status": status,
+        "run_manifest_hash": state["manifest_hash"],
+        "generation_brief_hash": state["brief_hash"],
+        "completed_at": utc_now(),
+        "creative_step_count": state["creative_step_count"],
+        "analysis_or_index_step_count": state["analysis_or_index_step_count"],
+        "human_intervention_count": state["human_intervention_count"],
+        "committed_rewrite_count": state["committed_rewrite_count"],
+        "committed_regeneration_count": state["committed_regeneration_count"],
+        "backtrack_count": state["backtrack_count"],
+        "ledger_head_hash": entries[-1]["entry_hash"],
+        "committed_record_hashes": committed_hashes(run_dir),
+        "memory_event_stream_hash": sha256_file(memory_path) if memory_path.exists() else sha256_bytes(b""),
+        "token_accounting": {"input_tokens": state["input_tokens"], "output_tokens": state["output_tokens"], "cost": state["cost"], "currency": None},
+        "mechanical_validation": mechanical,
+        "artistic_acceptance": artistic,
+        "static_build_validation": build,
+        "complete_work_barrier_satisfied": ready,
+        "playable": ready,
+        "failure_class": failure_class,
+    }
+    protocol = load_protocol()
+    validate_json_schema(finalization, protocol["$defs"]["finalization"], protocol)
+    return finalization
+
+
+def copy_provenance(run_dir: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in ("generation-brief.json", "run-manifest.json", "ledger.jsonl", "finalization.json"):
+        source = run_dir / name
+        if source.exists():
+            shutil.copy2(source, destination / ("run-ledger.jsonl" if name == "ledger.jsonl" else name))
+    for name in ("raw", "committed", "memory", "validation"):
+        source = run_dir / name
+        if source.exists():
+            shutil.copytree(source, destination / name, dirs_exist_ok=True)
+
+
+def publish_success(run_dir: Path, project: Path) -> Path:
+    parent = ROOT / "generated-work"
+    destination = parent / run_dir.name
+    if destination.exists():
+        raise IntegrityError(f"Refusing to overwrite published generation {destination}")
+    staging = run_dir / "publish-staging"
+    if staging.exists():
+        shutil.rmtree(staging)
+    shutil.copytree(project, staging / "web", ignore=shutil.ignore_patterns("node_modules"))
+    copy_provenance(run_dir, staging / "provenance")
+    parent.mkdir(parents=True, exist_ok=True)
+    os.replace(staging, destination)
+    return destination / "web/dist"
+
+
+def publish_failure_provenance(run_dir: Path) -> None:
+    destination = ROOT / "generated-work" / run_dir.name / "provenance"
+    if destination.exists():
+        return
+    copy_provenance(run_dir, destination)
+
+
+def finalize_success(run_dir: Path, project: Path) -> tuple[Path, dict]:
+    reconcile_run(run_dir)
+    finalization = make_finalization(run_dir, "READY_TO_PLAY", "none")
+    write_json(run_dir / "finalization.json", finalization, mode=0o444, exclusive=True)
+    build_path = publish_success(run_dir, project)
+    state = load_state(run_dir)
+    state["status"] = "READY_TO_PLAY"
+    state["stage"] = "READY_TO_PLAY"
+    state["completed_at"] = finalization["completed_at"]
+    state["build_path"] = str(build_path)
+    save_state(run_dir, state)
+    return build_path, finalization
+
+
+def finalize_failure(run_dir: Path, error: CathedralsError) -> dict:
+    existing = run_dir / "finalization.json"
+    if existing.exists():
+        finalization = read_json(existing)
+        if finalization["run_status"] == "READY_TO_PLAY":
+            return finalization
+        return finalization
+    finalization = make_finalization(run_dir, "FAILED_GENERATION", error.failure_class, error.reason)
+    write_json(existing, finalization, mode=0o444, exclusive=True)
+    state = load_state(run_dir)
+    state["status"] = "FAILED_GENERATION"
+    state["stage"] = error.stage
+    state["failure_reason"] = error.reason
+    state["completed_at"] = finalization["completed_at"]
+    save_state(run_dir, state)
+    publish_failure_provenance(run_dir)
+    return finalization
+
+
+def ensure_resume_ready(run_dir: Path, output_fn=print, transport=http_json) -> None:
+    state = load_state(run_dir)
+    if current_branch() != state["branch"]:
+        if git("status", "--porcelain"):
+            raise CathedralsError("Resume preflight", "The worktree has changes; cannot switch to the frozen generation branch.")
+        git("switch", state["branch"])
+    reconcile_run(run_dir)
+    brief = read_json(run_dir / "generation-brief.json")
+    payload = transport("GET", api_url(brief["lm_studio_base_url"], "/v1/models"), timeout=10.0)
+    if state["model"] not in usable_model_ids(payload):
+        raise CathedralsError("Resume preflight", f"Frozen model {state['model']!r} is no longer visible to LM Studio.", "provider_before_creative_output")
+    preflight_model_capacity(brief["lm_studio_base_url"], state["model"], output_fn, transport)
+
+
+def execute_run(run_dir: Path, output_fn=print, transport=http_json) -> tuple[Path, dict, dict]:
+    execute_creative_phases(run_dir, output_fn, transport)
+    output_fn("[05] Complete web projection        …")
+    project, counts = project_web(run_dir)
+    output_fn("[05] Complete web projection        ✓")
+    output_fn("[06] Mechanical validation          …")
+    mechanical = validate_complete_work(run_dir)
+    if mechanical["result"] != "PASS":
+        raise CathedralsError("Mechanical validation", mechanical["reasons"][0], "mechanical_validation")
+    output_fn("[06] Mechanical validation          ✓")
+    output_fn("[07] Whole-work artistic acceptance …")
+    artistic = artistic_acceptance(run_dir, transport=transport)
+    if artistic["result"] != "PASS":
+        raise CathedralsError("Whole-work artistic acceptance", artistic["reasons"][0], "artistic_rejection")
+    output_fn("[07] Whole-work artistic acceptance ✓")
+    output_fn("[08] Static Astro build             …")
+    build_web(run_dir, project, output_fn)
+    output_fn("[08] Static Astro build             ✓")
+    build_path, _ = finalize_success(run_dir, project)
+    return build_path, counts, read_json(run_dir / "generation-brief.json")
+
+
+def print_failure(run_dir: Path | None, error: CathedralsError, output_fn=print) -> None:
+    output_fn("\nFAILED_GENERATION\n")
+    output_fn(f"Generation:\n{run_dir.name if run_dir else 'not created'}\n")
+    output_fn(f"Failure stage:\n{error.stage}\n")
+    output_fn(f"Reason:\n{error.reason}\n")
+    output_fn("Committed work was not rewritten.\nNo partial game is playable.")
+
+
+def print_success(run_dir: Path, build_path: Path, counts: dict, brief: dict, output_fn=print) -> None:
+    output_fn("\nREADY_TO_PLAY\n")
+    output_fn(f"Project: {brief['project_name']}")
+    output_fn(f"Generation: {run_dir.name}")
+    output_fn("Format: web")
+    output_fn(f"Scenes: {counts['scenes']}")
+    output_fn(f"Artifacts: {counts['artifacts']}")
+    output_fn(f"Endings: {counts['endings']}\n")
+    output_fn(f"Build:\n{build_path}\n")
+    output_fn(f"Run:\npython3 -m http.server 4321 --directory {build_path}")
+
+
+def main(argv=None, *, input_fn=input, output_fn=print, transport=http_json) -> int:
+    parser = argparse.ArgumentParser(description="Generate one complete static Cathedrals work through LM Studio.")
+    parser.parse_args(argv)
+    run_dir = None
+    try:
+        ensure_runtime_layout()
+        run_dir = choose_resume(input_fn, output_fn)
+        if run_dir:
+            ensure_resume_ready(run_dir, output_fn, transport)
+            brief = read_json(run_dir / "generation-brief.json")
+            output_fn(f"Generation: {run_dir.name}\nFormat: web\nModel: {brief['model']}\nRequested scope: up to {brief['possible_scene_count']} scenes\n")
+            output_fn("[01] Preflight                     ✓ resumed")
+            output_fn("[02] Engine frozen                ✓ verified")
+        else:
+            frozen = collect_inputs(input_fn, output_fn)
+            base_url = configured_lm_studio_url()
+            model = lm_studio_preflight(base_url, os.environ.get("CATHEDRALS_MODEL"), input_fn, output_fn, transport)
+            preflight_model_capacity(base_url, model, output_fn, transport)
+            run_dir = create_run(frozen, base_url, model, output_fn)
+            output_fn("[01] Preflight                     ✓")
+            output_fn("[02] Engine frozen                ✓")
+        build_path, counts, brief = execute_run(run_dir, output_fn, transport)
+        print_success(run_dir, build_path, counts, brief, output_fn)
+        return 0
+    except KeyboardInterrupt:
+        if run_dir:
+            output_fn(f"\nGeneration interrupted before its next commit.\nRun ./cathedrals again to resume {run_dir.name}.")
+        else:
+            output_fn("\nCancelled before generation state was created.")
+        return 130
+    except CathedralsError as error:
+        if run_dir and state_path(run_dir).exists():
+            try:
+                finalize_failure(run_dir, error)
+            except Exception as finalization_error:
+                error = CathedralsError(error.stage, f"{error.reason} (failure finalization also failed: {finalization_error})", error.failure_class)
+        print_failure(run_dir, error, output_fn)
+        return 1
+    except Exception as error:
+        wrapped = CathedralsError("Generator", str(error) or error.__class__.__name__)
+        if run_dir and state_path(run_dir).exists():
+            try:
+                finalize_failure(run_dir, wrapped)
+            except Exception:
+                pass
+        print_failure(run_dir, wrapped, output_fn)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
