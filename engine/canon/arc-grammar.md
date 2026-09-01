@@ -16,9 +16,9 @@ At the scale of the full work:
 - visible aftershock
 - lingering residue or contamination
 
-## 3. Route-Level Beat Grammar
+## 3. Branch-Level Beat Grammar
 
-Each claimant route must include:
+Across the generated graph, each substantial branch must contribute to this sequence:
 
 1. invitation
 2. plausibility
@@ -79,6 +79,9 @@ The hidden contamination route requires:
 - route differences that are only cosmetic
 - endings that merely explain lore
 
+Branches may distribute these beats unevenly and may reconverge. Five claimants do
+not imply five routes or five copies of this sequence.
+
 ## 9. Threshold-Geometric Scene Progression
 
 Scene progression may be shaped by threshold figures.
@@ -99,3 +102,8 @@ Threshold figures may also influence:
 - likelihood of premature ending
 - death / disappearance / lockout conditions
 - unresolved or contaminated arc termination
+
+Figure assignments, resultants, scene-slot counts, and transition tendencies are
+deterministic preparation. The single creative transaction authors what happens in
+those slots. Figure names and example images are symbolic labels, never claimant
+identities, required props, or required prose.

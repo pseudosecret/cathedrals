@@ -16,9 +16,17 @@ The reader believes they are investigating. In fact, they are judging. Their int
 
 Claimants are not merely suspects. Each claimant is a pressure toward a specific world-logic. To accuse one is to strengthen that logic and starve rival realities.
 
+There are exactly five claimant positions. Their identities, roles, relationships,
+ways of knowing, evidence logics, voices, and consequences do not exist before the
+single creative generation transaction.
+
 ## 5. The Central Transgression
 
-A patient or resident was moved, released, or signed out under impossible or contradictory circumstances. The transgression is concrete on the surface and metaphysical underneath.
+The engine fixes only a class: a concrete threshold event involving admission,
+release, transfer, removal, exclusion, or custodial responsibility occurred under
+mutually incompatible circumstances. The generated work decides the event, subjects,
+chronology, evidence, culpability, relationships, and consequences. The transgression
+is concrete on the surface and metaphysical underneath.
 
 ## 6. Action Semantics
 
@@ -49,5 +57,10 @@ Hidden:
 
 - full metaphysical explanation
 - the system’s original purpose
-- the deeper identity of the adjudicated force
 - whether the reader is being tested, used, or diagnosed
+
+## 10. Canon Boundary
+
+This file is engine canon. Generated names, incidents, artifacts, motifs, routes, and
+endings belong only to their generation instance and never become engine canon by
+precedent.

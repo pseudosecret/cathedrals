@@ -4,7 +4,8 @@
 
 This document turns the desired branching feel of the work into explicit structural law.
 
-Use it when planning, generating, validating, or building any future executable pass.
+Use it during deterministic preparation, the single creative transaction, validation,
+and building.
 Its role is to prevent the system from collapsing into three shallow claimant spines with cosmetic variation.
 
 ## Core Model
@@ -117,9 +118,9 @@ Rules:
 - do not label a reset control as `back` or `return` when it does not restore the prior page state
 - hesitation inside the story is not the same as global reset and must remain distinct in wording and state effects
 
-## Planning Implications
+## Generation-Bundle Implications
 
-Planning artifacts must explicitly encode:
+The single generated bundle must explicitly encode:
 
 - which scenes belong to the introduction sequence
 - which scene or hub is the first exact three-option decision
@@ -127,6 +128,10 @@ Planning artifacts must explicitly encode:
 - where reconvergence is allowed
 - which decisions are major and require hesitation surfaces
 - which endings are terminal and which are redirective
+
+Deterministic preparation may fix abstract slots, edge cardinalities, branch depths,
+reconvergence capacity, and state laws. It must not decide the actual choices, events,
+branch purposes, claimant influence, revelations, or endings.
 
 ## Graph Implications
 

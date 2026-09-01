@@ -35,28 +35,15 @@
 - Avoid exposing build-process terms such as `route`, `debug`, `state`, `graph`, `decision scar`, `beat`, or similar scaffolding in the default reader view
 - Prefer `opened` and `closed` over more technical or bureaucratic branch language in reader-facing ending views
 
-## 6. Claimant Registers
+## 6. Generated Claimant Registers
 
-Custodian:
-
-- precise
-- administrative
-- procedural
-- salt-of-the-earth
-
-Mourner:
-
-- recursive
-- intimate
-- elegiac
-- poetic
-
-Examiner:
-
-- diagnostic
-- cool
-- threshold-oriented
-- stark
+- Generate all five registers together with the claimant identities.
+- Make each register substantially different in diction, cadence, syntax, paragraph
+  behavior, rhetoric, and emotional pressure.
+- Derive register from the claimant's generated way of knowing and dramatic function.
+- Do not assign any register, genre, evidence family, or cadence to a technical slot
+  before generation.
+- Do not satisfy difference by renaming familiar archetypes or swapping adjectives.
 
 ## 7. Focus-Scaled Contamination
 
@@ -84,9 +71,9 @@ Examiner:
 - overtly stating emotions characters/claimants have and what they are
 - reader-visible copy that sounds like a prototype, debug panel, or generated placeholder
 
-## 9. Revision Heuristics
+## 9. Generation Rejection Heuristics
 
-Reject or rewrite any passage that:
+Fail the immutable generation if any passage:
 
 - could belong to any claimant
 - explains instead of dramatizes
@@ -96,3 +83,5 @@ Reject or rewrite any passage that:
 - pre-renders a closed choice as if it were a full live branch
 - keeps claimant focus high while leaving diction, cadence, and structure basically neutral
 - mistakes illegibility for successful contamination
+
+Do not rewrite the passage. Artistic failure rejects the generation.

@@ -1,10 +1,9 @@
 version: 0.1
 
-surface_container: hospice_annex
-dominant_regime: neutral
+surface_container: snowbound_hospice_annex
+dominant_regime_id: neutral
 
-accused_claimant: null
-prior_accusations: []
+accused_claimant_id: null
 
 indecision_count: 0
 retraction_count: 0
@@ -19,12 +18,11 @@ hidden_route_unlocked: false
 rules:
   accusation:
     effects:
-      - set_dominant_regime_to_accused
-      - add_prior_accusation
+      - set_dominant_regime_id_to_accused_claimant_id
       - increase_world_scar
   retraction:
     effects:
-      - clear_accused_claimant
+      - clear_accused_claimant_id
       - increase_retraction_count
       - increase_contamination
       - add_world_scar

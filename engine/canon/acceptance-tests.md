@@ -1,107 +1,145 @@
 # Acceptance Tests
 
-## 1. Scene Tests
+Every accepted work must pass mechanical validation and artistic acceptance. A failure
+kills that generation. Nothing in this file authorizes creative repair.
+
+## README Conformance
+
+### Authorship
+
+1. Can the human know the five fictional claimant identities before generation? **No.**
+2. Can the human know their exact roles, voices, or evidence modes before generation? **No.**
+3. Can the human know the exact central incident before generation? **No, beyond its event-class envelope.**
+4. Can the human know what happens scene by scene? **No.**
+5. Can the human know exactly which artifacts will exist? **No.**
+6. Can the human know exactly what the endings depict? **No.**
+
+### Artistic Identity
+
+7. Is the work recognizably Cathedrals rather than generic AI fiction? **Yes.**
+8. Are the hospice annex, judgment mechanics, thematic pressure, branching grammar,
+   threshold geomancy, and compositional law strongly authored? **Yes.**
+9. Are all five generated claimant forces substantially differentiated? **Yes.**
+
+### One Creative Transaction
+
+10. How many creative model transactions produced the work? **Exactly 1.**
+11. Was generated creative material used as the prompt for another creative stage? **No.**
+12. Was any scene authored in a later independent creative pass? **No.**
+13. Was any generated prose creatively rewritten by a human or model? **No.**
+
+### Failure Behavior
+
+14. Can a bad work be rejected? **Yes.**
+15. Can that same generated work be creatively repaired? **No.**
+16. Can an entirely fresh generation be attempted later? **Yes.**
+
+### Runtime
+
+17. Does the final experience require AI? **No.**
+18. Is the final reader artifact static? **Yes.**
+
+Any wrong answer is a conformance failure.
+
+## Mechanical Validation
+
+Fail the generation for any of the following:
+
+- the response is not one complete JSON document
+- the bundle fails `engine/data/generation-bundle.schema.json`
+- `creative_transaction_count` is not `1`
+- IDs are duplicated or references dangle
+- claimant slots are missing, repeated, or not exactly five
+- graph nodes, edges, entry, or redirects are invalid
+- the opening hub does not have exactly three playable edges
+- another meaningful decision has fewer than two or more than five playable edges
+- an opening branch does not split again
+- required reconvergence loses inbound state
+- a major irreversible decision lacks consequential hesitation
+- required scenes, artifacts, endings, formal compositions, or prose bodies are absent
+- the response exceeds the declared scope or was produced without a passing budget preflight
+- generated MDX uses executable imports, exports, scripts, or unapproved components
+- frontmatter, serialization, or Astro compilation fails
+- accepted literary hashes do not match the generated files
+
+Pure serialization repair is lawful only when the literary strings and creative facts
+remain byte-for-byte unchanged. Otherwise fail the generation.
+
+## Claimant-Set Acceptance
+
+Pass only if:
+
+- all five identities, incident roles, voices, evidence logics, contradiction modes,
+  environmental pressures, and consequences were generated in the single transaction
+- each pair is substantially different on the axes in `engine/data/claimants.yaml`
+- at least one claimant pressures truth materially or institutionally
+- at least one pressures truth relationally or experientially
+- at least one way of knowing is initially difficult for the others to assimilate
+- influence emerges unevenly through the work rather than as five symmetrical routes
+
+Fail if any claimant is a renamed prewritten archetype, an assigned difference role, or
+interchangeable with another after surface adjectives are removed.
+
+## Scene and Route Acceptance
 
 A scene passes only if it:
 
-- performs at least 2 scene-level jobs
-- contains at least 1 concrete, rememberable detail
-- increases pressure, knowledge, or consequence
-- matches claimant register if route-bound
-- expresses its declared contamination band through diction, cadence, and structure when claimant focus is `primary_focus` or `dominant_focus`
-- closes with a clear live action when it contains a decision point
-- does not present a closed sibling option as an equivalent playable scene-level choice in the normal reader flow
+- performs at least two dramatic jobs
+- contains at least one memorable concrete detail
+- changes knowledge, pressure, state, interpretation, or consequence
+- makes clues alter interpretation
+- presents clear actions when it contains a decision
+- preserves the generated claimant pressure appropriate to its focus
 
-A scene fails length validation if:
+The work passes only if:
 
-- it exceeds its hard max
-- it exceeds its soft max without structural justification
-- its length is inflated by atmospheric repetition rather than added function
-- it could lose 20% of its words without losing structural effect
+- three to five reader-perspective scene surfaces precede the first live hub
+- the first live hub offers exactly three situated actions and is not a claimant menu
+- downstream branches split again, terminate at unequal depths, or reconverge meaningfully
+- earlier path state survives reconvergence
+- hesitation creates residue rather than undo
+- `start_over` remains distinct from in-story reconsideration
+- endings convert interpretation into consequence; redirective endings are graph-explicit
 
-## 2. Artifact Tests
+## Artifact Acceptance
 
-An artifact passes only if it:
+Each artifact must:
 
-- can plausibly exist as an object
-- changes interpretation
-- supports or complicates at least 1 claimant
-- remains readable on mobile
-- can survive a preview-plus-expansion presentation without collapsing into summary
-- makes its key contradiction legible through the object, not only through explanatory framing
-- keeps framing and document-body contamination distinct enough that the object remains plausible
+- plausibly exist as a material or documentary object
+- support, complicate, or bias interpretation
+- contain a legible clue, contradiction, omission, or pressure point
+- remain readable on mobile
+- behave as evidence rather than decoration or disguised exposition
 
-## 3. Route Tests
+## Artistic Acceptance
 
-A route passes only if:
+Evaluate the complete immutable generation, then return only `PASS` or
+`FAIL GENERATION` with reasons. Fail for:
 
-- its ontology is visibly different from the others
-- accusation causes observable change
-- retraction leaves residue
-- indecision can be felt as a cost
-- the ending path view can show opened and closed choices without requiring debug language to make sense
-- claimant contamination patterns are not swappable across routes without major rewrite
+- generic ominous prose, faux profundity, lore dumping, or therapist-speak
+- arbitrary abstraction or stock AI uncanny-language habits
+- exposition-vending characters or interchangeable voices
+- adjective-only stylistic differentiation
+- unreadable experimental prose
+- atmospheric but inert scenes
+- cosmetic branching or inconsequential choices
+- meaningless artifacts
+- redundant routes, evidence logic, scenes, or endings
+- weak concrete detail or incoherent thematic development
+- endings that recap instead of foreclose, transform, condemn, release, or redirect
 
-## 4. Claimant Profile Tests
+Artistic findings are verdicts, not revision instructions.
 
-A claimant-profile set passes only if:
+## Build Acceptance
 
-- each active claimant preserves its authored identity according to its `definition_mode`
-- locked claimants reproduce their authored source exactly
-- bounded-variation claimants drift only within their `variation_policy`
-- slot-generated claimants obey their `slot_spec` and grounding constraints deterministically
-- every active claimant pair remains distinct on the hard separation axes
-- the winning set reads as meaningfully different in prose pressure, not just in metadata
-- the same seed reproduces the same compiled claimant-profile artifact
+The accepted bundle must compile into an Astro static site with:
 
-Reject the claimant-profile set if:
+- prose-dominant, intentionally art-directed reading surfaces
+- strong hierarchy and restrained route-sensitive visual pressure
+- mobile readability and accessible interactions
+- light and dark treatments with sufficient contrast
+- clear choices and meaningful artifact presentation
+- ceremonial endings and a legible taken-path visualization
+- client-side state only and no live AI or server dependency
 
-- two claimants score differently but still sound interchangeable
-- novelty is achieved by weakening archetype law
-- expressive drift reduces route distinction instead of sharpening it
-
-## 5. Focus-Scaled Contamination Tests
-
-Contamination passes only if:
-
-- focus, not branch identity alone, determines contamination intensity
-- `passing_focus` produces very light to light drift
-- `primary_focus` produces moderate claimant-specific drift
-- `dominant_focus` produces moderate-to-heavy claimant-specific drift without obscuring dramatic function
-- contamination remains materially grounded and readable
-
-Reject contamination if:
-
-- claimant pressure appears only in adjectives or mood words
-- paragraph behavior stays neutral despite primary or dominant focus
-- artifact contamination makes the document unreadable instead of pressured
-- the prose feels randomly uncanny rather than patterned by claimant logic
-
-## 6. Hidden Route Tests
-
-The hidden route passes only if:
-
-- it emerges from reader behavior
-- it thematically fits contamination
-- it reframes the reader
-- it is not a gimmick reward for random completionism
-
-## 7. Global Failure Conditions
-
-Reject the build if:
-
-- routes feel cosmetically different but structurally same
-- prose is atmospheric but inert
-- the reader feels like a tourist instead of a judge
-- the site requires lore explanation to feel meaningful
-- claimant profiles are numerically distinct but expressively blurry
-- claimant-focused prose stays sentence-neutral despite declared contamination pressure
-- default scene pages expose route/build/debug metadata as part of the primary reading surface
-- choice actions are presented so ambiguously that adjacent options read as one cluster
-- a long scene forces the reader to scroll back upward to a side rail just to reach the primary next action
-- artifact navigation implies the wrong continuation path or misroutes the reader between scenes
-- endings mainly repeat evidence instead of converting it into consequence
-- the build looks like a generic template with story text dropped into it
-- page chrome, decorative effects, or component clutter compete with the prose instead of framing it
-- route presentation flattens claimant pressure into one neutral visual shell
-- endings feel like ordinary recap pages instead of consequence surfaces
+Fail a visually generic build that resembles text dropped into a template.

@@ -1,420 +1,160 @@
 # Content Schema Contract
 
-## Purpose
+## Authority
 
-This document defines canonical file naming and minimum schema expectations for compiled planning artifacts, generated prose, and the structural decision graph.
+`engine/data/generation-bundle.schema.json` is the machine-readable output contract
+for the sole creative transaction. The accepted raw bundle is generated-work canon.
+Everything under `schema-generation/` and `prose/` is a deterministic projection of
+that bundle, not an input to another creative generation stage.
 
-Use this alongside the templates in `engine/planning/`.
+## Generation-Branch Layout
 
-## General Rules
+`main` keeps downstream directories empty. A generation branch or release may contain:
 
-- compiled planning files live under `schema-generation/`
-- generated prose files live under `prose/`
-- all ids are stable, lowercase, and underscore-delimited
-- file names are lowercase and kebab-cased
-- generated content must remain readable and editable
-- these output paths are downstream-only and must not be mutated during `engine_revision`
+```text
+generated-work/<generation-id>/
+  bundle.json
+  manifest.json
+  mechanical-validation.json
+  artistic-acceptance.json
 
-## Planning Artifacts
+schema-generation/
+  work-canon/<work-id>.json
+  claimant-profiles/<work-id>.json
+  character-profiles/<work-id>.json
+  arc-briefs/<arc-id>.json
+  scene-specs/<scene-id>.json
+  artifact-specs/<artifact-id>.json
+  decision-graph.json
 
-### Work Brief
+prose/
+  scenes/<scene-id>.mdx
+  artifacts/<artifact-id>.mdx
+  endings/<ending-id>.mdx
+```
 
-Path:
+No generated work becomes canonical content of `main`.
 
-- `schema-generation/work-briefs/<work-id>-work-brief.md`
+## Bundle Boundary
 
-Required contents:
+The creative response must be exactly one JSON document conforming to the schema. Do
+not wrap it in prose or Markdown fences. A truncated or ambiguous response fails.
 
-- work id
-- title
-- short description
-- active claimants
-- introduction sequence summary
-- opening choice hub summary
-- branch topology summary
-- route families
-- artifact families
-- allowed endings
-- current execution milestone summary
-- assumption registry summary relevant to the planned outputs
-- deferred decision status that remains acceptable
+The bundle contains together:
 
-Source shape:
+- provenance
+- exact generated work canon and chronology
+- five generated claimant profiles and their relationships
+- generated non-claimant characters
+- arc purposes and structural roles
+- scene specifications and complete scene prose
+- artifact specifications and complete artifact text
+- ending specifications and complete ending prose
+- formal-composition placement metadata
+- the complete decision graph and state effects
 
-- use the work-brief requirements in `engine/prompts/planning-compiler.md`
+Stable IDs use lowercase letters, digits, and underscores. Examples such as
+`claimant_a`, `generated_claimant_id`, `scene_01`, and `artifact_01` are synthetic and
+carry no desired fictional meaning.
 
-### Arc Brief
+## Deterministic Projection
 
-Path:
+After the bundle passes schema and cross-reference validation, a deterministic tool
+may:
 
-- `schema-generation/arc-briefs/<arc-file>.md`
+1. preserve the raw response as `bundle.json`
+2. copy each structured record to its declared output directory
+3. add mechanical frontmatter derived only from that record
+4. copy `prose_mdx` or `body_mdx` verbatim beneath the frontmatter
+5. serialize `decision_graph` as `schema-generation/decision-graph.json`
+6. calculate file hashes and write the manifest
 
-Required contents:
+Projection must not summarize, rephrase, reorder literary paragraphs, normalize
+punctuation, repair dialogue, add transitions, or otherwise change creative content.
 
-- arc id
-- work id
-- route type
-- claimant if applicable
-- required beats
-- branch role
-- opening hub relation
-- reconvergence targets
-- major decisions
-- redirect outcomes
-- scene limits
-- entry and exit conditions
-- premature termination conditions
-- state pressures
-- decision points
-- validation notes
+## MDX Projection
 
-Source shape:
-
-- use `engine/planning/arc-brief-template.md`
-
-### Claimant Profile Artifact
-
-Path:
-
-- `schema-generation/claimant-profiles/<work-id>-claimant-profiles.yaml`
-
-Required contents:
-
-- work id
-- roster source path
-- generation mode
-- semantic drift mode
-- balancing mode
-- seed
-- active claimant ids
-- hard constraint summary
-- scoring summary
-- per-claimant selected expressive profile
-- per-claimant selected contamination profile
-- per-claimant focus escalation notes
-- pairwise contrast summary
-
-Per-claimant required contents:
-
-- claimant id
-- definition mode
-- surface persona summary
-- fixed archetype summary
-- variation-policy summary
-- slot-spec summary if applicable
-- selected expressive fields
-- selected contamination fields
-- artifact surface behavior
-- identity-integrity pass summary
-- expressive-separation notes against the other active claimants
-
-Source shape:
-
-- use `engine/planning/claimant-profile-template.md`
-
-### Scene Spec
-
-Path:
-
-- `schema-generation/scene-specs/<scene-file>.md`
-
-Required contents:
-
-- scene id
-- work id
-- arc id
-- beat role
-- scene type
-- claimant if applicable
-- reader perspective mode
-- branch depth
-- branch role
-- opening hub relation
-- current state inputs
-- threshold current and next
-- threshold resultant if defined
-- required outputs
-- forbidden outputs
-- decision options with stable edge ids if choices exist
-- live option count
-- decision group id when choices exist
-- major decision flag when applicable
-- hesitation surface requirements when applicable
-- reconsideration outcomes when applicable
-- reconvergence behavior
-- state delta
-- validation checks
-- output target path
-- length budget
-- primary claimant focus
-- secondary claimant bleed
-- contamination intensity band
-- diction requirements
-- cadence requirements
-- structure requirements
-
-Reader-surface additions for new or regenerated scene specs:
-
-- reader surface order
-- back action behavior
-- closed option handling
-- top reset label when the page-level control resets the story
-
-Source shape:
-
-- use `engine/planning/scene-spec-template.md`
-
-### Artifact Spec
-
-Path:
-
-- `schema-generation/artifact-specs/<artifact-file>.md`
-
-Required contents:
-
-- artifact id
-- work id
-- arc id or scene id if applicable
-- artifact type
-- claimant relevance
-- interpretive function
-- required clue or contradiction
-- validation checks
-- output target path
-- artifact contamination band
-- framing contamination rules
-- document body contamination rules
-- material distortion rules
-
-Reader-surface additions for new or regenerated artifact specs:
-
-- presentation mode with `inline_expandable` as the default when the artifact does not divert route context
-- preview excerpt
-- expand label
-- diverts route boolean
-- material emphasis markers when important corrections or contradictions must be surfaced in rendering
-
-Source shape:
-
-- use `engine/planning/artifact-spec-template.md`
-
-### Validation or Ambiguity Report
-
-Path:
-
-- `schema-generation/validation-reports/<report-file>.md`
-
-Required contents:
-
-- target artifact or target phase
-- checks performed
-- explicit status lines `result: pass|fail`, `blocking_ambiguity: <value>`, and `stop_conditions_triggered: []|[items]`
-- concrete failures or blocking ambiguity
-- required remediation or human decision if blocked
-- milestone scope confirmation when the report is used to accept a planning milestone
-
-Canonical validation report paths for the current branching-focused milestone chain:
-
-- `schema-generation/validation-reports/hospice-annex-v01-branching-planning-02.md`
-- `schema-generation/validation-reports/hospice-annex-v01-branching-prose-02.md`
-- `schema-generation/validation-reports/hospice-annex-v01-branching-graph-02.md`
-- `schema-generation/validation-reports/hospice-annex-v01-branching-build-02.md`
-
-Milestone advancement keys off:
-
-- the required validation report for the active milestone
-- `result: pass` in that report
-- `stop_conditions_triggered: []` in that report
-- full presence of the milestone's declared deliverables
-
-Milestone advancement does not key off:
-
-- chat approval
-- partial file presence
-- inferred readiness
-
-## Generated Prose
-
-### Scene MDX Frontmatter
-
-Path:
-
-- `prose/scenes/<scene-file>.mdx`
-
-Required frontmatter:
+Scene frontmatter is derived mechanically:
 
 ```yaml
 ---
-id: operative_scene_01
+id: scene_01
 work_id: hospice-annex-v01
-arc_id: operative_route
-claimant: operative
-beat_role: invitation
-scene_type: exploration
-state_inputs:
-  accused_claimant: null
-  dominant_regime: neutral
-  contamination: 0
-threshold_current: 1-1-2-3
-threshold_next: 1-1-3-2
-threshold_resultant: 1-1-1-2
+arc_id: generated_arc_id
+claimant_focus_ids:
+  - claimant_a
 artifact_ids:
-  - intake_discrepancy_01
-reader_perspective_mode: second_person_close
-branch_depth: 1
-decision_group_id: opening_hub_01
-live_option_count: 3
-status: draft
+  - artifact_01
+choice_edge_ids:
+  - edge_01
+major_decision: false
+generation_id: generation_example
 ---
 ```
 
-The exact threshold figures may vary by accepted planning outputs.
-The field names must remain stable.
+Artifact and ending frontmatter follow the same rule: identifiers, relationships,
+state metadata, and generation ID come from the bundle; the literary body is copied
+verbatim. Generated MDX is restricted to plain Markdown plus an engine-approved
+component allowlist. Imports, exports, scripts, and arbitrary JSX fail mechanical
+validation.
 
-### Artifact MDX Frontmatter
+## Cross-Reference Validation
 
-Path:
+JSON Schema cannot enforce graph-wide identity. Deterministic validation must also
+confirm:
 
-- `prose/artifacts/<artifact-file>.mdx`
+- all IDs are unique within and across relevant namespaces
+- all technical claimant slots appear exactly once
+- every referenced claimant, character, arc, scene, artifact, ending, node, and edge exists
+- every arc's scene list agrees with scene records
+- every graph node resolves to exactly one scene or ending
+- every graph edge has existing endpoints
+- the entry scene and opening decision group exist
+- the opening group has exactly three playable options
+- every other meaningful decision has two to five playable options
+- opening branches split again
+- reconvergent nodes preserve multiple inbound edges and consequential state
+- every major decision exposes a consequential hesitation path
+- redirective endings name valid new-beginning scenes
+- formal-composition anchors resolve to generated content
+- prose, artifact, and ending hard word limits are respected
+- `creative_transaction_count` equals `1`
 
-Required frontmatter:
+## Manifest and Immutability
 
-```yaml
----
-id: intake_discrepancy_01
-work_id: hospice-annex-v01
-arc_id: operative_route
-artifact_type: intake_document
-claimant_relevance:
-  - operative
-status: draft
----
-```
+`manifest.json` records the provenance required by `engine/data/work-instance.yaml`
+and a SHA-256 hash for:
 
-### Ending MDX Frontmatter
+- `bundle.json`
+- every projected scene, artifact, and ending file
+- the projected decision graph
+- mechanical and artistic validation results
 
-Path:
+Once accepted, any literary hash mismatch invalidates the generation. Humans may
+inspect, diff, render, preserve, or reject generated prose; they may not edit it.
 
-- `prose/endings/<ending-file>.mdx`
+## Validation Results
 
-Required frontmatter:
-
-```yaml
----
-id: accusation_operative_01
-work_id: hospice-annex-v01
-arc_id: operative_route
-ending_type: accusation
-accused_claimant: operative
-dominant_regime: operative
-decision_scar_enabled: true
-status: draft
----
-```
-
-### Optional Interstitial MDX Frontmatter
-
-Path:
-
-- `prose/interstitials/<interstitial-file>.mdx`
-
-Use this only when a reflection or hesitation surface needs its own readable unit rather than being embedded inside a scene page.
-
-Required frontmatter:
-
-```yaml
----
-id: hesitation_interstitial_01
-work_id: hospice-annex-v01
-arc_id: introduction_route
-interstitial_type: reflection
-reader_perspective_mode: second_person_close
-branch_depth: 1
-decision_group_id: opening_hub_01
-status: draft
----
-```
-
-## Decision Graph
-
-Path:
-
-- `schema-generation/decision-graph.json`
-
-This file is a compiled structural artifact derived from accepted planning outputs.
-Do not treat it as hand-authored canon.
-
-Required top-level shape:
+Mechanical validation emits structured pass/fail details. Artistic evaluation emits:
 
 ```json
 {
-  "version": "0.1",
-  "work_id": "hospice-annex-v01",
-  "entry_scene_id": "introduction_scene_01",
-  "opening_choice_group_id": "opening_hub_01",
-  "generated_from": {
-    "work_brief": "schema-generation/work-briefs/hospice-annex-v01-work-brief.md",
-    "arc_briefs": ["schema-generation/arc-briefs/operative-branch-02.md"],
-    "scene_specs": [
-      "schema-generation/scene-specs/operative-branch-01.md",
-      "schema-generation/scene-specs/operative-branch-02.md",
-      "schema-generation/scene-specs/opening-hub-scene-01.md"
-    ]
-  },
-  "nodes": [],
-  "edges": [],
-  "path_trace_defaults": {
-    "mode": "normal",
-    "debug_mode_available": true
-  }
+  "generation_id": "generation_example",
+  "result": "PASS",
+  "reasons": []
 }
 ```
 
-Required node fields:
+or:
 
-- `id`
-- `type` as `scene`, `ending`, or `interstitial`
-- `title`
-- `route_context`
-- `branch_role`
-- `branch_depth`
-- `output_path`
-- `status`
+```json
+{
+  "generation_id": "generation_example",
+  "result": "FAIL GENERATION",
+  "reasons": ["Concrete reasons only"]
+}
+```
 
-Required edge fields:
-
-- `id`
-- `from`
-- `to`
-- `label`
-- `kind` as `progression`, `decision`, or `ending`
-- `availability` as `playable` or `reserved`
-- `sibling_group` when the edge is part of a decision set
-- `live_option_count` when the edge belongs to a playable decision set
-
-Optional but preferred edge fields when state changes are canonical:
-
-- `state_effects`
-- `redirect_target_scene_id`
-- `mutates_prior_context`
-
-Examples of `state_effects` include:
-
-- `set_accused_claimant_custodian`
-- `set_dominant_regime_custodian`
-- `increase_indecision_count`
-- `add_world_scar`
-
-Decision graph validation rules:
-
-- every playable decision set must expose 2 to 5 live options
-- the opening hub must expose exactly 3 live options
-- reconvergent nodes must preserve multiple inbound edges explicitly
-- redirective endings must declare the new-beginning target in the graph rather than relying on runtime invention
-
-## Stability Rule
-
-Do not rename ids, file paths, or frontmatter keys casually.
-Refactors are allowed only when all dependent repo files are updated in the same change.
-
-New planning fields should prefer extending planning artifacts and graph exports before introducing new prose frontmatter keys.
+Neither result may contain or trigger replacement prose. A failed generation is
+preserved or discarded as a whole; a later attempt starts a new generation ID and a
+new single creative transaction.

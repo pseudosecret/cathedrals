@@ -1,1367 +1,392 @@
-version: 0.1
+version: 1.0
 
 work:
   id: hospice-annex-v01
   title_working: "The Annex"
   format: literary_escape_room
   status: engine_revision
+  generated_work_present: false
   description: >
-    A static, build-time-generated literary mystery set in a snowbound hospice annex
-    where accusation selects reality, indecision accumulates contamination, and the
-    reader gradually realizes they are judging rather than merely investigating. The
-    story's arcs should be exciting, gripping, and thrilling, regardless of any
-    narrative/stylistic contamination present.
+    A static nonlinear literary work to be generated in one creative transaction
+    inside a snowbound hospice-annex frame. Interpretation, commitment, hesitation,
+    and foreclosure alter what the annex can sustain.
 
 execution_phase:
-  current_phase: graph_or_build 
-  allowed_engine_roots:
-    - engine/docs
-    - engine/canon
-    - engine/data
-    - engine/prompts
-    - engine/planning
-    - engine/llm-instructions.md
-  phase_write_policy:
-    engine_revision:
-      engine_writes_allowed: true
-      schema_generation_writes_allowed: false
-      prose_writes_allowed: false
-      graph_compilation_allowed: false
-      planning_compilation_allowed: false
-      prose_generation_allowed: false
-      build_mutation_allowed: false
-      change_phase_allowed: false
-      notes:
-        - "Use engine-revision passes to change canon, data, prompts, docs, and templates only."
-        - "Do not create, update, or regenerate files under schema-generation/ during this phase."
-        - "Do not create, update, or regenerate files under prose/ during this phase."
-        - "If compiled outputs need to change, switch phases explicitly before doing that work."
-    planning_compilation:
-      engine_writes_allowed: true
-      schema_generation_writes_allowed: true
-      prose_writes_allowed: false
-      graph_compilation_allowed: false
-      planning_compilation_allowed: true
-      prose_generation_allowed: false
-      build_mutation_allowed: false
-      change_phase_allowed: true
-    prose_generation:
-      engine_writes_allowed: true
-      schema_generation_writes_allowed: true
-      prose_writes_allowed: true
-      graph_compilation_allowed: false
-      planning_compilation_allowed: true
-      prose_generation_allowed: true
-      build_mutation_allowed: false
-      change_phase_allowed: true
-    graph_or_build:
-      engine_writes_allowed: true
-      schema_generation_writes_allowed: true
-      prose_writes_allowed: true
-      graph_compilation_allowed: true
-      planning_compilation_allowed: true
-      prose_generation_allowed: true
-      build_mutation_allowed: true
-      change_phase_allowed: true
-  global_rules:
-    - "Current phase gates what directories may be mutated."
-    - "Phase changes must happen in repo truth before downstream compilation begins."
-    - "Engine revision is the default when revising the engine itself."
+  current_phase: engine_revision
+  current_operation: readme_conformance_refactor
+  downstream_outputs_authoritative: false
+  allowed_write_roots:
+    - engine
+  forbidden_write_roots:
+    - schema-generation
+    - prose
+    - src
+  rules:
+    - "Engine revision changes the machine only."
+    - "Leaving engine_revision requires a new explicit human generation instruction."
+    - "A milestone is complete only when every declared output exists."
+    - "Historical claims never establish current executable truth."
 
-scope:
-  target_form: short_playable_work
-  target_total_arcs: 7
-  target_total_scenes_min: 23
-  target_total_scenes_soft_max: 43
-  target_total_scenes_hard_max: 65
-  target_total_artifacts_min: 5
-  target_total_artifacts_soft_max: 12
-  target_total_endings: 18
+milestone_control:
+  active_milestone_id: readme_conformance_refactor_03
+  active_milestone:
+    id: readme_conformance_refactor_03
+    phase: engine_revision
+    status: completed
+    purpose: >
+      Restore the README authorship boundary and replace sequential creative stages
+      with one generation-bundle transaction.
+    completed_outputs:
+      - engine/data/work-instance.yaml
+      - engine/data/claimants.yaml
+      - engine/data/generation-bundle.schema.json
+      - engine/docs/generation-workflow-contract.md
+      - engine/prompts/single-transaction-generation.md
+    downstream_outputs_created: false
+  next_milestone:
+    id: first_readme_compliant_generation_test_04
+    status: inactive
+    activation_requires_explicit_human_instruction: true
+    creative_transaction_limit: 1
+  historical_record: engine/docs/first-spike-freeze.md
+  historical_record_is_executable: false
+
+integrity_repairs:
+  cleanup_completed_before_engine_revision_reset: true
+  removed_noncanonical_outputs:
+    - schema-generation/decision-graph.json
+  removed_filesystem_metadata_count: 11
+  ignored_filesystem_metadata_pattern: "*:Zone.Identifier"
   notes:
-    - "This is the first instantiation of the engine, not the final large-scale work."
-    - "Favor legitimate branching depth over fake breadth or claimant-spine symmetry."
-    - "Five claimants are canonical for hospice-annex-v01."
+    - "The deleted decision graph described a historical claimant-specific slice and referenced absent sources."
+    - "No generated prose or complete Astro story pages existed in this repository."
+
+authorship_boundary:
+  engine_canon:
+    authority: human_authored
+    may_define:
+      - artistic_doctrine
+      - thematic_gravity
+      - setting_envelope
+      - ontology_as_world_law
+      - fractal_grammar
+      - branching_and_state_mechanics
+      - threshold_geomancy
+      - scope_and_output_budgets
+      - validation_and_build_law
+  generated_work_canon:
+    authority: single_creative_transaction
+    absent_before_generation: true
+    must_define:
+      - claimant_identities_and_relationships
+      - all_character_names_roles_and_personalities
+      - exact_central_incident_and_chronology
+      - exact_evidence_clues_and_contradictions
+      - arc_and_scene_purposes
+      - scene_events_and_reader_facing_choices
+      - artifacts_and_their_contents
+      - generated_motifs_and_environmental_mutations
+      - endings_poetry_and_all_reader_facing_prose
+    promotion_to_engine_canon_forbidden: true
+  deterministic_tooling:
+    may_derive:
+      - seeded_abstract_branch_topology
+      - scene_slot_counts_and_decision_cardinalities
+      - state_transition_envelope
+      - threshold_figure_assignments_and_resultants
+      - output_budget
+      - prompt_context_and_hashes
+      - parsed_files_frontmatter_checksums_and_manifest
+    may_not_decide:
+      - fictional_identity
+      - plot_or_scene_events
+      - exact_artifacts_or_clues
+      - prose_or_poetry
+      - endings
 
 surface_container:
   id: snowbound_hospice_annex
-  label: Snowbound Hospice Annex
-  description: >
-    A sealed, materially concrete annex attached to or adjacent to a hospice-like
-    facility in winter isolation. It contains rooms, intake records, maintenance
-    traces, medication and treatment documentation, personal effects, and signs of
-    ongoing institutional use. It should feel real enough to anchor the reader before
-    ontological drift becomes obvious.
-  properties:
-    isolated: true
-    mutable: true
-    institution_like: true
-    domestic_traces_present: true
-    weather_pressure: snowbound
-    traversal_style: room_document_interview
-  mutation_law_summary: >
-    The annex mutates in response to judgment pressure. As one claimant’s regime
-    becomes dominant, room function, document tone, naming conventions, and sensory
-    atmosphere drift toward that claimant’s ontology.
+  fixed_law:
+    - "The work begins in an enclosed hospice annex under winter isolation."
+    - "Care, administration, rooms, records, personal traces, and material wear remain legible."
+    - "The reader initially investigates."
+    - "Interpretation and commitment exert consequences on reality."
+    - "Ambiguity cannot remain cost-free indefinitely."
+  generated_particulars:
+    - exact_layout_and_rooms
+    - exact_people_and_relationships
+    - exact_records_objects_and_traces
+    - exact_history_of_the_annex
 
 central_transgression:
-  id: impossible_release
-  summary: >
-    A patient or resident was moved, released, transferred, or signed out under
-    contradictory and possibly impossible circumstances.
-  surface_question: "Who is responsible for the impossible release?"
-  underlying_pressure: >
-    The apparent question of institutional responsibility conceals a deeper struggle
-    over what kind of reality is being selected through judgment.
+  abstraction_level: event_class_only
+  class: >
+    A concrete threshold event involving admission, release, transfer, removal,
+    exclusion, or custodial responsibility occurred under mutually incompatible
+    circumstances.
+  generated_particulars:
+    - event_type
+    - subject_or_subjects
+    - chronology
+    - causes_and_culpability
+    - records_and_witness_relationships
+    - clues_contradictions_and_competing_interpretations
+    - consequences
   constraints:
-    - "The transgression must remain concrete on the surface."
-    - "Do not resolve the deeper metaphysical layer too early."
-    - "Different claimants must frame the same event differently."
-    - "Evidence must be interpretable under multiple regimes."
+    - "Keep the surface event materially concrete."
+    - "Do not expose a complete metaphysical explanation early."
+    - "The evidence must sustain incompatible readings until commitment has cost."
 
 reader_role:
   apparent_role: investigator
   actual_role: judge
-  hidden_implication: >
-    By interpreting evidence and accusing a claimant, the reader collapses the annex
-    toward one world-logic and starves alternative realities.
-  behavioral_risks:
-    - premature certainty
-    - false neutrality
-    - extractive completionism
-    - prolonged refusal to commit
+  action_law:
+    - "Commitment selects and forecloses."
+    - "Hesitation has consequences and is not undo."
+    - "Retraction reopens ambiguity but leaves residue."
+    - "Extractive completionism increases contamination."
 
 claimants:
-  roster_source_path: engine/data/claimant-rosters/hospice-annex-v01.yaml
-  source_priority:
-    - work_specific_roster
-    - global_claimant_library
-  active:
-    - operative
-    - haunter
-    - curator
-    - witness
-    - contrast_slot
-  inactive: []
-  route_ids:
-    operative: operative_route
-    haunter: haunter_route
-    curator: curator_route
-    witness: witness_route
-    contrast_slot: contrast_route
-  notes:
-    - "Use the work-specific roster before the global claimant library for hospice-annex-v01."
-    - "Five claimants are active for this work instance."
-    - "The opening hub remains a three-option decision rather than a five-claimant picker."
+  count_exact: 5
+  slot_ids:
+    - claimant_slot_01
+    - claimant_slot_02
+    - claimant_slot_03
+    - claimant_slot_04
+    - claimant_slot_05
+  authoring_mode: generated_together_in_single_creative_transaction
+  locked_fictional_claimants_allowed: false
+  preassigned_slot_semantics_allowed: false
+  opening_hub_is_claimant_selector: false
+  generated_fields:
+    - stable_generated_id
+    - name
+    - exact_role_and_relationship_to_incident
+    - occupation_if_any
+    - personality_and_emotional_register
+    - epistemic_regime
+    - relationship_to_responsibility
+    - evidence_logic_and_evidence_family
+    - rhetoric_cadence_and_diction
+    - contradiction_mode
+    - artifact_affinity
+    - environmental_pressure
+    - literary_and_genre_effects
+    - accusation_and_retraction_consequences
+  set_constraints_source: engine/data/claimants.yaml
 
-claimant_generation:
-  mode: mixed_authoring
-  semantic_drift: mode_governed
-  balancing_mode: hybrid
-  variation_level: high
-  seed: hospice-annex-v01-claimants-v2
-  output_profile_path: schema-generation/claimant-profiles/hospice-annex-v01-claimant-profiles.yaml
-  compile_stage: before_arc_briefs
-  definition_mode_rules:
-    locked:
-      selection_rule: exact_authored_reuse
-      notes:
-        - "Locked claimants reproduce their authored surface persona, claimant law, and expressive materials exactly."
-    bounded_variation:
-      selection_rule: select_within_authored_variation_policy
-      notes:
-        - "Bounded-variation claimants may drift only within the fields named by their variation_policy."
-        - "Claimant law, route identity, and forbidden traits remain fixed."
-    slot_generated:
-      selection_rule: derive_from_slot_spec_via_seeded_contrast_scoring
-      notes:
-        - "Slot-generated claimants are derived from their slot_spec plus seed and the other active claimants."
-        - "Generated outputs must maximize contrast while remaining grounded in annex ontology."
-  hard_separation_requirements:
-    - "Each active claimant must preserve its mode-governed identity integrity."
-    - "Each active claimant must preserve its role pressure and route identity."
-    - "No active claimant pair may share the same primary truth style family."
-    - "No active claimant pair may share the same primary evidence family."
-    - "No active claimant pair may share the same voice family."
-    - "Forbidden traits remain fixed and non-negotiable."
-  scoring_axes:
-    - literary_genre_distance
-    - secondary_evidence_affinities
-    - speech_texture_variants
-    - contradiction_motifs
-    - environmental_drift_variants
-    - local_framing_tendencies
-    - artifact_pressure_profile
-    - scene_surface_mutation_details
-  anti_slop_guardrails:
-    - "Reject claimant sets that are numerically distinct but still read as voice-blurred."
-    - "Reject drift that weakens route differentiation instead of sharpening it."
-    - "Reject novelty that changes ontology, role pressure, or forbidden traits unlawfully."
-    - "Reject generated contrast slots that overlap the authored four in genre feel, evidence logic, or cadence."
-  notes:
-    - "Locked claimants must reproduce authored source exactly."
-    - "Bounded-variation claimants may drift only within authored variation_policy."
-    - "Slot-generated claimants must be derived deterministically from slot_spec plus seed."
-    - "Claimant profiles are compiled structural artifacts, not new canon."
-    - "Determinism matters: the same seed and source data should reproduce the same claimant profiles."
-
-route_model:
-  entry_route: introduction_route
-  primary_routes:
-    - introduction_route
-    - operative_route
-    - haunter_route
-    - curator_route
-    - witness_route
-    - contrast_route
-  special_routes:
-    - contamination_route
-  route_constraints:
-    - "The work must begin with a reader-perspective introduction before claimant-bound branch emphasis."
-    - "The opening introduction does not need to introduce every claimant explicitly."
-    - "The first live choice hub must branch into exactly three distinct onward scene directions."
-    - "Post-hub structure must splinter beyond claimant-spine linearity."
-    - "Reconvergence is allowed only when prior branch state still matters."
-    - "Each claimant route must feel ontologically distinct even when the surface genres are radically different."
-    - "Route differences must not be merely cosmetic."
-    - "At least one artifact should pressure each claimant route differently."
-    - "Accusation endings must visibly alter reality."
-    - "Retraction may exist, but should not dominate v0.1 scope."
+aesthetic_attractor:
+  freedom_profile:
+    artistic_identity: low
+    fictional_instantiation: high
+  pressures:
+    - institutional_materiality
+    - care_and_responsibility
+    - isolation_and_winter
+    - interior_enclosure
+    - opening_closing_and_thresholds
+    - admission_release_and_exclusion
+    - memory_documentation_and_absence
+    - judgment_contradiction_and_implication
+    - commitment_and_foreclosure
+    - the_cost_of_refusing_commitment
+  central_theme: "Saying yes is the biggest no one can say to everything else."
+  formal_poetry:
+    required_integrated_compositions_min: 2
+    exact_forms_and_placement_generated: true
 
 branching_experience_model:
   introduction_sequence:
-    required: true
     reader_perspective_required: true
-    introduction_scene_count_min: 3
-    introduction_scene_count_soft_max: 5
-    reflection_interstitial_budget_pages_max: 1.5
-    claimant_full_roster_reveal_required: false
-    must_end_in_opening_choice_hub: true
-    rules:
-      - "The introduction should be eventful, interesting, and concretely situate the reader inside the annex."
-      - "Reflection is allowed only as pressure-bearing interiority, not inert padding."
-      - "The introduction should orient the reader toward a decision without flattening the mystery into exposition."
+    scene_surfaces_before_first_live_hub_min: 3
+    scene_surfaces_before_first_live_hub_max: 5
+    eventful_and_pressure_bearing: true
   opening_choice_hub:
-    required: true
-    option_count_exact: 3
-    option_label_rule: summary_of_scene_level_decision
-    rules:
-      - "Each opening option must summarize the scene-level decision the reader is making."
-      - "The three opening options must branch into materially different next scenes."
-      - "The opening choice must not be a disguised claimant list with no situational pressure."
-  decision_option_policy:
+    live_option_count_exact: 3
+    option_content_generated: true
+    claimant_selector_forbidden: true
+    requirements:
+      - "Each option is a genuine situated action."
+      - "Each option changes direction and interpretive pressure."
+      - "Labels describe decisions rather than destinations."
+  decisions:
     live_option_min: 2
     live_option_soft_max: 4
     live_option_hard_max: 5
-    single_live_choice_disallowed: true
-    click_without_alternative_disallowed: true
-    rules:
-      - "A clickable surface is not a meaningful decision unless at least two live options are present."
-      - "Choice sets may exceed four only when structural pressure clearly justifies it, and never above five."
-      - "Reserved or closed siblings do not count toward the live-option minimum."
-  branch_topology:
-    model: splinter_and_rejoin_tree
-    secondary_splits_required: true
-    reconvergence_allowed: true
-    literal_shared_scene_reuse_allowed: true
-    variable_terminal_depth_required: true
+    single_option_choice_forbidden: true
+  topology:
+    abstract_skeleton_prepared_deterministically: true
+    opening_branches_split_again: true
+    meaningful_reconvergence_allowed: true
+    inbound_state_survives_reconvergence: true
+    variable_branch_depth_required: true
     redirective_endings_allowed: true
-    rules:
-      - "Opening branches must splinter into further decisions rather than collapsing into one shallow route spine."
-      - "Some branches may reconverge into similar or identical scenes, but inbound state must remain legible."
-      - "Different branches may terminate at different depths."
-      - "At least one lawful ending family may redirect into a new beginning on a different branch."
-  major_decision_hesitation:
-    required_for_major_decisions: true
-    major_decision_definition:
-      - accusation_commitment
-      - branch_lock
-      - irreversible_threshold_crossing
-    required_reflection_mode: anxious_counterfactual_pressure
-    required_option_labels:
-      - commit_and_do_the_thing
-      - hesitate_and_reconsider
-    hesitation_can_mutate_prior_context: true
-    hesitation_can_open_new_path: true
-    rules:
-      - "Before major commitment, the reader should feel the character thinking through dread, anxiety, and projected outcomes."
-      - "Hesitation is not a null action; it must leave residue, mutate pressure, or create a different onward path."
-  navigation_surface:
-    top_reset_label: start_over
-    fake_back_disallowed: true
-    rules:
-      - "If the top control resets progress to the beginning, label it start_over."
-      - "Do not present a prior-page promise when no true back-navigation state exists."
-      - "Reset behavior must be semantically distinct from hesitation or reconsideration inside the story."
+  major_decisions:
+    hesitation_surface_required: true
+    hesitation_has_state_consequence: true
+    hesitation_is_undo: false
+  navigation:
+    global_reset_label: start_over
+    global_reset_is_reconsideration: false
 
-state_logic_profile:
-  accusation_enabled: true
-  retraction_enabled: true
-  indecision_enabled: true
-  contamination_enabled: true
-  hidden_route_enabled: true
-  state_priorities:
-    - accusation
-    - dominant_regime
-    - contamination
-    - indecision_count
-    - retraction_count
-    - world_scars
-  notes:
-    - "Indecision preserves plurality temporarily but becomes costly when prolonged."
-    - "Retraction should reopen ambiguity but leave residue."
-    - "Contamination should emerge from noncommittal, extractive traversal."
-
-hidden_route:
-  id: contamination_route
-  enabled: true
-  premise: >
-    A reader who tries to consume all possible interpretations without accepting the
-    cost of judgment begins to resemble the very noncommittal, parasitic intelligence
-    the system fears or is attempting to detect.
-  trigger_logic:
-    all_of:
-      - seen_all_active_claimants
-      - no_stable_commitment
-      - contamination_gte_3
-  route_effects:
-    - "The reader is reframed as object of judgment."
-    - "Neutrality becomes suspect."
-    - "The system recognizes behavior rather than belief."
-  constraints:
-    - "Do not make this route feel like a completionist prize."
-    - "It must emerge from thematically legible behavior."
-    - "It should reframe the reader rather than merely reward exploration."
-
-artifacts:
-  families:
-    - intake_document
-    - maintenance_log
-    - treatment_chart
-    - personal_letter
-    - release_form
-    - room_assignment_record
-  artifact_rules:
-    - "Artifacts are evidence, not decoration."
-    - "Each artifact must support, complicate, or bias interpretation."
-    - "At least one artifact must plausibly support multiple claimants."
-    - "Artifacts must remain readable on mobile."
-  v0_1_minimum:
-    required_count: 3
-    current_milestone_count: 3
-
-ending_model:
-  allowed_endings:
-    - accusation_operative
-    - accusation_haunter
-    - accusation_curator
-    - accusation_witness
-    - accusation_contrast
-    - contamination_ending
-    - redirect_beginning
-  ending_families:
-    - accusation_collapse
-    - contamination_implication
-    - redirective_new_beginning
-  ending_rules:
-    - "Each accusation ending must visibly collapse the annex into that claimant’s regime."
-    - "The contamination ending must implicate the reader."
-    - "Some endings may function as new beginnings that redirect the reader onto another branch."
-    - "Endings do not all need to terminate at the same structural depth."
-    - "Do not over-explain the hidden cosmology in endings."
-    - "Endings should feel like selection and foreclosure, not just conclusion."
-  decision_scar_view:
-    enabled: true
-    default_mode: normal
-    debug_mode_available: true
-    render_rules:
-      - "Render the taken path as the primary spine."
-      - "Render closed sibling options at each decision point."
-      - "In normal mode, show rejected option labels only."
-      - "In debug mode, show rejected option labels plus destination scene titles."
-      - "Do not render the full decision tree by default."
+fractal_grammar:
+  sequence:
+    - encounter
+    - interpret
+    - pressure
+    - choose_or_defer
+    - consequence
+    - residue
+  applies_at:
+    - work
+    - branch
+    - sequence
+    - scene
+    - threshold
+    - artifact_interaction
 
 threshold_geomancy:
   enabled: true
-  role: compositional_engine
-  purpose:
-    - scene_flow
-    - transition_logic
-    - arc_pressure
-    - premature_termination_bias
-  constraints:
-    - "Use threshold geomancy as hidden generation grammar first, not explicit lore."
-    - "Do not invent resultant math."
-    - "Use only explicitly defined figure meanings and resultant rules."
-    - "If a rule is missing, flag it rather than guessing."
-  operational_model:
-    - "Assign a threshold figure to each scene."
-    - "Assign a next-figure when a subsequent scene exists."
-    - "Use the current figure to shape the scene’s motion."
-    - "Use the resultant of current and next to shape the transition."
-    - "Allow arc termination before a next scene if termination conditions are met."
+  source: engine/data/threshold-geomancy.yaml
+  phase: deterministic_preparation
+  prepared_outputs:
+    - figure_assignments
+    - resultants
+    - structural_pressures
+    - transition_tendencies
+    - rupture_and_termination_biases
+  reinterpretation_after_generation_forbidden: true
 
-arc_rules:
-  default_min_scenes_per_arc: 4
-  default_soft_max_scenes_per_arc: 8
-  default_hard_max_scenes_per_arc: 12
-  early_termination_enabled: true
-  allowed_premature_endings:
-    - death
-    - disappearance
-    - unresolved_exit
-    - collapse
-    - adjudicated_lock
-  constraints:
-    - "Arcs are finite."
-    - "Not every arc must reach full realization."
-    - "Premature endings must feel like consequences, not missing content."
-    - "Arc structure must permit splintering, reconvergence, and unequal terminal depth."
+state_logic_profile:
+  variables:
+    - accused_claimant_id
+    - dominant_regime_id
+    - contamination
+    - indecision_count
+    - retraction_count
+    - claimants_seen
+    - artifacts_seen
+    - world_scars
+    - hidden_route_unlocked
+  hidden_route_law:
+    premise: >
+      A reader who consumes interpretations without accepting commitment becomes an
+      object of judgment rather than a rewarded completionist.
+    exact_manifestation_generated: true
 
-style_profile:
-  tone: controlled_weirdness
-  density: literary_but_legible
-  emphasis:
-    - concrete_detail_before_abstraction
-    - pressure_before_explanation
-    - claimant_specific_register
-    - artifacts_as_real_objects
-  prohibitions:
-    - lore_dumping
-    - generic_ominous_atmosphere
-    - faux_profundity
-    - claimant_voice_blurring
-    - decorative_artifacts
-    - AI_stock_phrases
+scope:
+  profile: one_transaction_32k
+  scene_count_min: 14
+  scene_count_target: 16
+  scene_count_hard_max: 16
+  artifact_count_exact: 5
+  ending_count_min: 5
+  ending_count_hard_max: 7
+  prose_word_limits:
+    scene_target: 450
+    scene_hard_max: 600
+    artifact_target: 250
+    artifact_hard_max: 300
+    ending_target: 300
+    ending_hard_max: 400
   notes:
-    - "This work should feel architecturally dense rather than branchy."
-    - "Weirdness must be patterned and legible, not random."
+    - "Unequal branch depth is required; counts do not imply claimant-route symmetry."
+    - "Scope is deliberately smaller than the superseded 23-to-65-scene plan."
 
-prose_contamination:
-  enabled: true
-  primary_driver: claimant_focus
-  required_surfaces:
-    - scenes
-    - artifacts
-  deferred_surfaces:
-    - endings
-  focus_ladder:
-    ambient: mostly_neutral
-    passing_focus: very_light_to_light
-    primary_focus: moderate
-    dominant_focus: moderate_to_heavy
-  operational_rules:
-    - "Focus, not accusation alone, determines contamination intensity."
-    - "Scene prose must show contamination through diction, cadence, and structure when focus is primary or dominant."
-    - "Artifact framing may drift more than the core document body."
-    - "Document bodies must remain plausible and readable objects."
-    - "Heavy contamination must remain materially grounded and parseable."
+generation_budget:
+  calculation_version: 1
+  minimum_model_output_tokens: 32768
+  safety_reserve_tokens: 4096
+  usable_output_tokens: 28672
+  words_per_token_assumption: 0.75
+  hard_max_creative_words: 13900
+  hard_max_creative_tokens: 18534
+  structured_metadata_token_allowance: 5000
+  json_serialization_token_allowance: 2000
+  estimated_hard_max_output_tokens: 25534
+  usable_headroom_tokens: 3138
+  formula: >
+    ceil(hard_max_creative_words / words_per_token_assumption) +
+    structured_metadata_token_allowance + json_serialization_token_allowance
+    <= minimum_model_output_tokens - safety_reserve_tokens
+  preflight_rules:
+    - "Record the selected model's documented maximum output."
+    - "Fail before generation when the model maximum is below minimum_model_output_tokens."
+    - "Fail before generation when the calculated estimate exceeds usable output tokens."
+    - "Never split creative authorship across calls to escape the budget."
 
-generation_resolution_policy:
-  deterministic_resolution:
-    seed_namespace: hospice-annex-v01
-    reproducibility_required: true
-    selection_rule: seeded_bounded_choice
-    notes:
-      - "All machine-resolved selections must be derivable from repo truth plus seed."
-      - "Selections may vary across works, but not across repeated runs of the same work and seed."
-  patient_identity_policy:
-    internal_subject_id: released_resident_01
-    external_identity_mode: role_defined_optional_name
-    naming_strategy:
-      allowed:
-        - unnamed
-        - first_name_only
-        - surname_only
-        - role_reference_only
-      disallowed:
-        - full_biographical_dossier
-        - melodramatic_symbolic_naming
-        - route_specific_identity_replacement
-    default_selection:
-      primary_mode: role_reference_only
-      reveal_thresholds:
-        planning: unnamed
-        prose_generation: unnamed_or_partial
-        endings: partial_allowed
-    invariants:
-      - "The same underlying resident must be referenced across all routes."
-      - "Contradictions may affect framing, chart position, room relation, or naming form, but not replace the underlying subject."
-      - "Identity must remain concrete enough to anchor the impossible release."
-    validation:
-      must:
-        - preserve_single_subject_continuity
-        - avoid_backstory_bloat
-      fail_if:
-        - route_specific_subject_substitution
-        - proper_name_forced_without_structural_need
-  metaphysical_visibility_policy:
-    current_band: residue_forward
-    allowed_bands:
-      - surface_only
-      - residue_forward
-      - drift_explicit
-      - overt_metaphysical
-    band_rules:
-      planning:
-        max_allowed: residue_forward
-      prose_generation_v0_1:
-        max_allowed: residue_forward
-      endings_v0_1:
-        max_allowed: drift_explicit
-    permitted_manifestations:
-      - regime_drift
-      - environmental_contradiction
-      - ontological_residue
-      - judgment_pressure
-      - impossible_administrative_coherence
-    forbidden_manifestations_before_late_scope:
-      - direct_cosmology_exposition
-      - named_metaphysical_systems
-      - explicit_explanation_of_adjudication_mechanics
-    validation:
-      must:
-        - keep_surface_transgression_concrete
-      fail_if:
-        - hidden_layer_explains_itself
-        - metaphysical_content_displaces_dramatic_function
-  contamination_policy:
-    primary_driver: claimant_focus
-    focus_bands:
-      ambient: mostly_neutral
-      passing_focus: very_light_to_light
-      primary_focus: moderate
-      dominant_focus: moderate_to_heavy
-    spotlight_rules:
-      scenes: focus_scaled
-      artifacts:
-        framing: focus_scaled
-        document_body: constrained_focus_scaled
-      endings: deferred_until_explicit_scope
-    trigger_rules:
-      accusation_alone_is_insufficient: true
-      indecision_can_accumulate_contamination: true
-      prolonged_noncommitment_can_unlock_hidden_route: true
-    invariants:
-      - "Contamination intensity is determined by spotlight pressure, not by route label alone."
-      - "Claimant-specific contamination must appear in diction, cadence, and structure."
-      - "Heavy contamination must remain readable and concretely grounded."
-    validation:
-      must:
-        - claimant_specific_surface_behavior
-        - framing_body_separation_for_artifacts_when_needed
-      fail_if:
-        - adjective_swap_only
-        - generic_uncanniness
-        - unreadable_document_body
-  route_architecture_policy:
-    architecture_model: introduction_hub_branch_tree_with_reconvergence
-    work_level_requirements:
-      introduction_sequence_required: true
-      introduction_scene_count_min: 3
-      introduction_scene_count_soft_max: 5
-      opening_choice_hub_required: true
-      opening_choice_option_count: 3
-      reader_perspective_introduction_required: true
-      reflection_interstitial_budget_pages_max: 1.5
-    route_level_requirements:
-      required_beat_families:
-        - introduction_or_orientation
-        - invitation_or_plausibility
-        - contradiction_or_artifact_pressure
-        - threshold
-      optional_beat_families:
-        - hesitation
-        - aftershock
-        - residue
-        - premature_lock
-      minimum_scene_jobs_per_scene: 2
-    decision_cardinality_policy:
-      live_option_min: 2
-      live_option_soft_max: 4
-      live_option_hard_max: 5
-      single_live_choice_disallowed: true
-      major_decision_requires_hesitation_surface: true
-    per_route_scene_budget_policy:
-      default_min: 4
-      default_soft_max: 8
-      default_hard_max: 12
-      claimant_variation_allowed: true
-      variation_rule:
-        - "Shorter routes are lawful if dramatic pressure escalates cleanly and threshold consequence lands."
-        - "Longer routes are lawful if each additional scene performs distinct structural work."
-    branch_topology_policy:
-      opening_hub_exact_option_count: 3
-      secondary_splits_required: true
-      reconvergence_allowed: true
-      identical_shared_scene_reuse_allowed: true
-      variable_terminal_depth_required: true
-      redirective_endings_allowed: true
-    route_shape_constraints:
-      - "The work must begin with an eventful introduction before the first choice hub."
-      - "All claimant routes must satisfy the authored architecture, not just mood progression."
-      - "Variation may alter pacing, amplitude, and scene count, but not remove threshold consequence."
-      - "Post-hub branches must continue to split or reconverge meaningfully rather than march as parallel three-scene spines."
-      - "No route may become structurally inert, baggy, or single-choice linear."
-    validation:
-      must:
-        - preserve_reader_perspective_introduction
-        - preserve_opening_choice_hub
-        - preserve_decision_cardinality_bounds
-        - preserve_hesitation_surfaces_for_major_decisions
-        - preserve_meaningful_reconvergence
-        - preserve_authored_architecture
-        - justify_scene_count_variation
-      fail_if:
-        - opening_sequence_is_claimant_menu_disguised_as_drama
-        - any_decision_has_fewer_than_two_live_options
-        - every_branch_terminates_at_the_same_shallow_depth
-        - hesitation_surface_is_missing_for_irreversible_choice
-        - claimant_route_is_only_cosmetically_distinct
-        - additional_scenes_do_not_add_new_structural_work
-  retraction_policy:
-    v0_1_mode: stateful_non_route_action
-    current_playability:
-      planning: yes_as_state_logic
-      prose_generation_v0_1: optional_local_choice_only
-      route_family: false
-      ending_family: false
-    state_effects:
-      - clear_accused_claimant
-      - increase_retraction_count
-      - increase_contamination
-      - add_world_scar
-    dramatic_requirements:
-      - "Retraction must reopen ambiguity."
-      - "Retraction must leave damage."
-      - "Retraction must reduce trust in neutrality."
-    usage_constraints:
-      - "Retraction may appear as a local decision or aftermath behavior."
-      - "Retraction must not dominate v0.1 route identity."
-      - "Retraction must not become a separate claimant alternative in parity planning."
-    validation:
-      must:
-        - leave_residue
-      fail_if:
-        - acts_as_cost_free_reset
-        - becomes_primary_route_content_without_scope_change
+generation_transaction:
+  creative_transaction_count_required: 1
+  output_contract: engine/data/generation-bundle.schema.json
+  prompt_contract: engine/prompts/single-transaction-generation.md
+  package_format: application_json
+  must_generate_together:
+    - work_canon
+    - claimant_profiles
+    - characters
+    - arcs
+    - scenes_and_prose
+    - artifacts_and_contents
+    - endings_and_prose
+    - decision_graph
+  forbidden_patterns:
+    - claimant_call_then_arc_call
+    - plan_call_then_prose_call
+    - scene_by_scene_calls
+    - critique_then_rewrite
+    - model_generated_material_used_as_later_creative_prompt
+
+post_processing:
+  deterministic_only: true
+  allowed:
+    - parse_bundle
+    - validate_schema_ids_references_graph_and_state
+    - split_bundle_into_repo_files
+    - create_frontmatter
+    - serialize_json_and_mdx_without_literary_change
+    - hash_generated_files
+    - compile_static_astro_site
+  literary_change_forbidden: true
+
+validation:
+  mechanical_result: pass_or_fail
+  artistic_result: pass_or_fail_generation
+  repair_policy:
+    serialization_only_when_literary_bytes_unchanged: true
+    creative_repair_allowed: false
+    failed_generation_may_be_replaced_by_fresh_generation: true
+  acceptance_source: engine/canon/acceptance-tests.md
+
+generated_output_integrity:
+  prose_is:
+    - readable
+    - inspectable
+    - renderable
+    - diffable
+    - immutable
+  accepted_literary_file_hashes_required: true
+  human_literary_editing_allowed: false
+
+provenance:
+  required_fields:
+    - generation_id
+    - work_seed
+    - engine_commit_sha
+    - engine_config_hashes
+    - provider
+    - model
+    - generation_parameters
+    - threshold_geomancy_seed_and_config_hash
+    - structural_generation_seed_and_config_hash
+    - generation_timestamp_utc
+    - creative_transaction_count
+  compliance_rule: "creative_transaction_count must equal 1"
 
 build_target:
   framework: astro
-  content_format: mdx
   static_only: true
-  no_live_api_calls: true
-  no_server_side_processing: true
-  output_goal: >
-    Prose and artifact files should remain directly readable and editable as MDX
-    during development, without requiring full site compilation for every revision.
-
-repo_layout:
-  engine_root: engine
-  planning_dir: engine/planning
-  schema_generation_dir: schema-generation
-  prose_dir: prose
-  expectations:
-    - "Canon, operator docs, prompts, and planning templates live under engine/."
-    - "Compiled structural artifacts live under schema-generation/."
-    - "Generated prose and artifacts live under prose/."
-    - "The repo is the source of truth."
-    - "Linear tracks execution, not canon."
-
-linear_workflow:
-  enabled: true
-  role: execution_tracker
-  rules:
-    - "Arc briefs and scene specs should be stored in repo first, then mirrored into Linear."
-    - "Linear must not be the only location for lore or route truth."
-    - "No scene should be generated without a scene spec."
-    - "No task should be marked complete without validation."
-    - "If repo and Linear disagree, repo wins."
-
-validation_profile:
-  required_checks:
-    - introduction_sequence_integrity
-    - opening_choice_hub_integrity
-    - decision_cardinality
-    - hesitation_surface_integrity
-    - reconvergence_integrity
-    - claimant_profile_balance
-    - planning_parity_completeness
-    - focus_scaled_contamination
-    - ontology_consistency
-    - claimant_consistency
-    - scene_function
-    - route_differentiation
-    - cross_route_artifact_differentiation
-    - style_compliance
-    - artifact_relevance
-    - mobile_readability
-  rejection_conditions:
-    - "Introduction pages that feel inert, purely reflective, or like setup notes instead of dramatic entry."
-    - "Decision points with only one live option."
-    - "Opening branches that never splinter again."
-    - "Reconvergence that erases all consequence of prior choices."
-    - "Claimant profiles that are interchangeable despite different scores"
-    - "Atmospheric but inert prose"
-    - "Claimant routes that feel cosmetically different but structurally the same"
-    - "Artifacts that do not change interpretation"
-    - "Scenes that do not perform a beat function"
-    - "Lore explanation replacing dramatic consequence"
-
-planning_expectations:
-  required_generated_artifacts:
-    - schema-generation/work-briefs/*.md
-    - schema-generation/claimant-profiles/*.yaml
-    - schema-generation/arc-briefs/*.md
-    - schema-generation/scene-specs/*.md
-    - schema-generation/artifact-specs/*.md
-  generation_order:
-    - "Read canon and data files."
-    - "Compile work brief."
-    - "Compile claimant profiles for the active claimant set."
-    - "Compile arc briefs."
-    - "Compile scene and artifact specs."
-    - "Validate specs."
-    - "Generate prose from approved specs."
-    - "Validate prose."
-    - "Compile structural graph/path-trace artifacts."
-    - "Build static site views."
-  stop_conditions:
-    - "Canon conflict"
-    - "Missing claimant law"
-    - "Missing threshold geomancy rule needed for generation"
-    - "Opening choice hub cannot be specified with exactly three lawful live options"
-    - "Decision structure collapses into single-option progression"
-    - "Major decision cannot support hesitation and reconsideration surfaces lawfully"
-    - "Scene spec cannot satisfy beat grammar"
-    - "Work-instance ambiguity that would require new ontology invention"
-    - "Current execution milestone cannot be completed without relaxing route differentiation rules"
-
-milestone_control:
-  active_milestone_id: complete
-  auto_advance_enabled: true
-  auto_advance_requires_validation_pass: true
-  auto_advance_requires_all_deliverables_present: true
-  phase_transition_mode: milestone_driven
-  manual_phase_edit_required_to_leave_engine_revision: true
-  manual_phase_edit_required_for_downstream_activation: false
-  autonomous_progression:
-    enabled: true
-    engine_revision_exit_requires_human_edit: true
-    downstream_phase_updates_agent_authorized: true
-    advance_immediately_after_validation_pass: true
-    advance_requires_validation_report_pass: true
-    advance_requires_all_deliverables_present: true
-    advance_requires_no_stop_conditions: true
-    record_transition_in_repo_truth: true
-  notes:
-    - "Engine revision remains the only phase the agent may not leave autonomously."
-    - "Once execution is already in a downstream phase, successful milestone validation authorizes the agent to update repo truth and continue immediately."
-    - "Automatic advancement still requires validation success, deliverable completeness, and no active stop conditions."
-    - "The completed _01 milestone chain remains historical reference only; future execution should use the branching-focused _02 chain."
-
-execution_milestones:
-  planning_parity_01:
-    id: planning_parity_01
-    phase: planning_compilation
-    status: completed
-    purpose: >
-      Prove that the system can compile a balanced claimant-profile artifact plus
-      three structurally parallel claimant-route planning packages before widening
-      prose or build execution.
-    scope_controller: sole_operational_scope
-    route_families_in_scope:
-      - custodian_route
-      - mourner_route
-      - examiner_route
-    route_families_deferred:
-      - contamination_route
-    deliverables:
-      - schema-generation/work-briefs/hospice-annex-v01-work-brief.md
-      - schema-generation/claimant-profiles/hospice-annex-v01-claimant-profiles.yaml
-      - schema-generation/arc-briefs/custodian-arc-01.md
-      - schema-generation/arc-briefs/mourner-arc-01.md
-      - schema-generation/arc-briefs/examiner-arc-01.md
-      - schema-generation/scene-specs/custodian-scene-01.md
-      - schema-generation/scene-specs/custodian-scene-02.md
-      - schema-generation/scene-specs/custodian-scene-03.md
-      - schema-generation/scene-specs/mourner-scene-01.md
-      - schema-generation/scene-specs/mourner-scene-02.md
-      - schema-generation/scene-specs/mourner-scene-03.md
-      - schema-generation/scene-specs/examiner-scene-01.md
-      - schema-generation/scene-specs/examiner-scene-02.md
-      - schema-generation/scene-specs/examiner-scene-03.md
-      - schema-generation/artifact-specs/intake-discrepancy-01.md
-      - schema-generation/artifact-specs/visitation-letter-01.md
-      - schema-generation/artifact-specs/threshold-chart-01.md
-      - schema-generation/validation-reports/hospice-annex-v01-planning-parity-01.md
-    validation_report: schema-generation/validation-reports/hospice-annex-v01-planning-parity-01.md
-    acceptance_requirements:
-      - "The planning validation report must exist and pass."
-      - "All declared planning deliverables must exist."
-      - "Route differentiation requirements must pass without relaxed constraints."
-    scope_constraints:
-      - "Compile claimant profiles before route planning."
-      - "Keep route ids stable and claimant-specific."
-      - "Preserve a three-scene plus one-artifact package for each claimant route."
-      - "This milestone temporarily normalizes route length for parity comparison and does not override the broader route architecture policy."
-      - "Defer contamination-route execution unless a planning dependency makes it unavoidable."
-      - "Do not require prose or Astro build parity for this milestone."
-      - "Fail validation instead of relaxing route differentiation to force parity."
-    notes:
-      - "Operational scope now lives here rather than in engine/docs/first-spike-freeze.md."
-      - "This milestone remains active until planning validation passes; downstream phases may then auto-advance repo truth unless the current phase is engine_revision."
-      - "Milestone scope does not override the current execution phase write gate."
-  prose_generation_01:
-    id: prose_generation_01
-    phase: prose_generation
-    status: completed
-    purpose: >
-      Generate all v0.1 prose outputs from accepted planning artifacts for the three
-      claimant routes and the ending set kept in current work-instance scope.
-    scope_controller: sole_operational_scope
-    route_families_in_scope:
-      - custodian_route
-      - mourner_route
-      - examiner_route
-    route_families_deferred:
-      - contamination_route
-    deliverables:
-      - prose/scenes/custodian-scene-01.mdx
-      - prose/scenes/custodian-scene-02.mdx
-      - prose/scenes/custodian-scene-03.mdx
-      - prose/scenes/mourner-scene-01.mdx
-      - prose/scenes/mourner-scene-02.mdx
-      - prose/scenes/mourner-scene-03.mdx
-      - prose/scenes/examiner-scene-01.mdx
-      - prose/scenes/examiner-scene-02.mdx
-      - prose/scenes/examiner-scene-03.mdx
-      - prose/artifacts/intake-discrepancy-01.mdx
-      - prose/artifacts/visitation-letter-01.mdx
-      - prose/artifacts/threshold-chart-01.mdx
-      - prose/endings/custodian-ending-01.mdx
-      - prose/endings/mourner-ending-01.mdx
-      - prose/endings/examiner-ending-01.mdx
-      - prose/endings/contamination-ending-01.mdx
-      - schema-generation/validation-reports/hospice-annex-v01-prose-generation-01.md
-    validation_report: schema-generation/validation-reports/hospice-annex-v01-prose-generation-01.md
-    acceptance_requirements:
-      - "The prose validation report must exist and pass."
-      - "All declared prose deliverables must exist."
-      - "Outputs must respect claimant separation, contamination policy, route architecture policy, and acceptance tests."
-    scope_constraints:
-      - "Generate prose only from accepted scene specs, artifact specs, and ending definitions."
-      - "Keep contamination route execution deferred unless later milestone truth changes."
-      - "Retraction may appear only within current retraction policy and must not become a standalone route family."
-    notes:
-      - "This milestone covers all v0.1 prose outputs currently canonized in work-instance scope."
-      - "Contamination ending prose remains in scope because contamination_ending is still listed in ending_model.allowed_endings."
-      - "If planning validation passes while execution is already in a downstream phase, the agent may activate this milestone by updating repo truth and continue immediately."
-  graph_compilation_01:
-    id: graph_compilation_01
-    phase: graph_or_build
-    status: completed
-    purpose: >
-      Compile the full structural graph and path-trace artifact for the accepted v0.1
-      planning and prose set.
-    scope_controller: sole_operational_scope
-    route_families_in_scope:
-      - custodian_route
-      - mourner_route
-      - examiner_route
-      - contamination_route
-    route_families_deferred: []
-    deliverables:
-      - schema-generation/decision-graph.json
-      - schema-generation/validation-reports/hospice-annex-v01-graph-compilation-01.md
-    validation_report: schema-generation/validation-reports/hospice-annex-v01-graph-compilation-01.md
-    acceptance_requirements:
-      - "The graph validation report must exist and pass."
-      - "The decision graph must be derived from planning artifacts rather than guessed from prose."
-      - "Stable node, edge, ending, sibling-group, and state-effect data must support ending path reconstruction."
-    scope_constraints:
-      - "Compile graph structure from accepted planning outputs."
-      - "Do not treat prose alone as the source of route structure."
-    notes:
-      - "This milestone canonizes graph compilation as a separate stage before build release."
-      - "If prose validation passes while execution is already in a downstream phase, the agent may activate this milestone by updating repo truth and continue immediately."
-  build_release_01:
-    id: build_release_01
-    phase: graph_or_build
-    status: completed
-    purpose: >
-      Implement the full polished static Astro reader for the accepted executable
-      slice, including ending path rendering and reader-state behavior.
-    scope_controller: sole_operational_scope
-    route_families_in_scope:
-      - custodian_route
-      - mourner_route
-      - examiner_route
-      - contamination_route
-    route_families_deferred: []
-    deliverables:
-      - src/pages/index.astro
-      - src/pages/scenes/[sceneId].astro
-      - src/pages/artifacts/[artifactId].astro
-      - src/pages/endings/[endingId].astro
-      - src/layouts/ReaderLayout.astro
-      - src/components/ChoiceList.astro
-      - src/components/ArtifactPreview.astro
-      - src/components/DecisionGraph.astro
-      - src/lib/content-loader.ts
-      - src/lib/path-trace.ts
-      - src/lib/reader-state.ts
-      - schema-generation/validation-reports/hospice-annex-v01-build-release-01.md
-    validation_report: schema-generation/validation-reports/hospice-annex-v01-build-release-01.md
-    acceptance_requirements:
-      - "The build validation report must exist and pass."
-      - "The static site must render the accepted executable slice from repo-managed prose and graph outputs."
-      - "Ending path rendering, reader state behavior, mobile readability, theme support, and polished UX must pass validation."
-      - "No important story truth may live only in src."
-    scope_constraints:
-      - "Use graph and prose outputs as canonical runtime inputs."
-      - "Keep the experience static and client-side for reader state."
-      - "Include full site polish rather than a minimal rendering pass."
-    notes:
-      - "This milestone is the final v0.1 build-release target."
-      - "If graph validation passes while execution is already in a downstream phase, the agent may activate this milestone by updating repo truth and continue immediately."
-  branching_planning_02:
-    id: branching_planning_02
-    phase: planning_compilation
-    status: completed
-    purpose: >
-      Re-plan the work as a genuine branching introduction-and-tree structure with
-      exact opening-hub cardinality, hesitation surfaces, reconvergence, and mixed
-      terminal depths.
-    scope_controller: sole_operational_scope
-    route_families_in_scope:
-      - introduction_route
-      - operative_route
-      - haunter_route
-      - curator_route
-      - witness_route
-      - contrast_route
-      - contamination_route
-    route_families_deferred: []
-    deliverables:
-      - schema-generation/work-briefs/hospice-annex-v01-work-brief.md
-      - schema-generation/claimant-profiles/hospice-annex-v01-claimant-profiles.yaml
-      - schema-generation/arc-briefs/introduction-arc-01.md
-      - schema-generation/arc-briefs/operative-branch-02.md
-      - schema-generation/arc-briefs/haunter-branch-02.md
-      - schema-generation/arc-briefs/curator-branch-02.md
-      - schema-generation/arc-briefs/witness-branch-02.md
-      - schema-generation/arc-briefs/contrast-branch-02.md
-      - schema-generation/arc-briefs/reconvergence-arc-01.md
-      - schema-generation/scene-specs/introduction-scene-01.md
-      - schema-generation/scene-specs/introduction-scene-02.md
-      - schema-generation/scene-specs/introduction-scene-03.md
-      - schema-generation/scene-specs/opening-hub-scene-01.md
-      - schema-generation/scene-specs/operative-branch-01.md
-      - schema-generation/scene-specs/operative-branch-02.md
-      - schema-generation/scene-specs/haunter-branch-01.md
-      - schema-generation/scene-specs/haunter-branch-02.md
-      - schema-generation/scene-specs/curator-branch-01.md
-      - schema-generation/scene-specs/curator-branch-02.md
-      - schema-generation/scene-specs/witness-branch-01.md
-      - schema-generation/scene-specs/witness-branch-02.md
-      - schema-generation/scene-specs/contrast-branch-01.md
-      - schema-generation/scene-specs/contrast-branch-02.md
-      - schema-generation/scene-specs/reconvergence-scene-01.md
-      - schema-generation/scene-specs/hesitation-scene-01.md
-      - schema-generation/artifact-specs/intake-discrepancy-01.md
-      - schema-generation/artifact-specs/visitation-letter-01.md
-      - schema-generation/artifact-specs/threshold-chart-01.md
-      - schema-generation/validation-reports/hospice-annex-v01-branching-planning-02.md
-    validation_report: schema-generation/validation-reports/hospice-annex-v01-branching-planning-02.md
-    acceptance_requirements:
-      - "The branching planning validation report must exist and pass."
-      - "All declared branching-planning deliverables must exist."
-      - "The introduction sequence must contain 3 to 5 reader-perspective scene-pages before the first live hub."
-      - "The opening hub must expose exactly three lawful live options."
-      - "Each opening branch must split again or reconverge meaningfully rather than remain a shallow straight spine."
-      - "At least one major decision must carry an explicit hesitation/reconsideration surface."
-    scope_constraints:
-      - "Do not regress to the earlier three-scene-per-claimant parity package."
-      - "Allow reconvergence and redirective endings only when path consequence stays legible."
-      - "Keep claimant roster fixed while widening branch topology."
-    notes:
-      - "This milestone defines the next lawful planning pass after the completed _01 release."
-  branching_prose_02:
-    id: branching_prose_02
-    phase: prose_generation
-    status: completed
-    purpose: >
-      Generate prose for the branching introduction, post-hub splintering scenes,
-      hesitation surfaces, reconvergent scenes, and mixed ending families.
-    scope_controller: sole_operational_scope
-    route_families_in_scope:
-      - introduction_route
-      - operative_route
-      - haunter_route
-      - curator_route
-      - witness_route
-      - contrast_route
-      - contamination_route
-    route_families_deferred: []
-    deliverables:
-      - prose/scenes/introduction-scene-01.mdx
-      - prose/scenes/introduction-scene-02.mdx
-      - prose/scenes/introduction-scene-03.mdx
-      - prose/scenes/opening-hub-scene-01.mdx
-      - prose/scenes/operative-branch-01.mdx
-      - prose/scenes/operative-branch-02.mdx
-      - prose/scenes/haunter-branch-01.mdx
-      - prose/scenes/haunter-branch-02.mdx
-      - prose/scenes/curator-branch-01.mdx
-      - prose/scenes/curator-branch-02.mdx
-      - prose/scenes/witness-branch-01.mdx
-      - prose/scenes/witness-branch-02.mdx
-      - prose/scenes/contrast-branch-01.mdx
-      - prose/scenes/contrast-branch-02.mdx
-      - prose/scenes/reconvergence-scene-01.mdx
-      - prose/scenes/hesitation-scene-01.mdx
-      - prose/artifacts/intake-discrepancy-01.mdx
-      - prose/artifacts/visitation-letter-01.mdx
-      - prose/artifacts/threshold-chart-01.mdx
-      - prose/endings/operative-ending-01.mdx
-      - prose/endings/haunter-ending-01.mdx
-      - prose/endings/curator-ending-01.mdx
-      - prose/endings/witness-ending-01.mdx
-      - prose/endings/contrast-ending-01.mdx
-      - prose/endings/contamination-ending-01.mdx
-      - prose/endings/redirect-beginning-01.mdx
-      - schema-generation/validation-reports/hospice-annex-v01-branching-prose-02.md
-    validation_report: schema-generation/validation-reports/hospice-annex-v01-branching-prose-02.md
-    acceptance_requirements:
-      - "The branching prose validation report must exist and pass."
-      - "All declared branching prose deliverables must exist."
-      - "Introduction scenes must read as eventful reader-perspective entry, not setup notes."
-      - "Major decision prose must render hesitation and reconsideration as stateful pressure."
-    scope_constraints:
-      - "Generate prose only from accepted branching planning artifacts."
-      - "Do not collapse different branches into claimant-surface rewrites."
-  branching_graph_02:
-    id: branching_graph_02
-    phase: graph_or_build
-    status: completed
-    purpose: >
-      Compile a graph that captures the introduction hub, post-hub splintering,
-      reconvergence, hesitation mutations, and redirective endings explicitly.
-    scope_controller: sole_operational_scope
-    route_families_in_scope:
-      - introduction_route
-      - operative_route
-      - haunter_route
-      - curator_route
-      - witness_route
-      - contrast_route
-      - contamination_route
-    route_families_deferred: []
-    deliverables:
-      - schema-generation/decision-graph.json
-      - schema-generation/validation-reports/hospice-annex-v01-branching-graph-02.md
-    validation_report: schema-generation/validation-reports/hospice-annex-v01-branching-graph-02.md
-    acceptance_requirements:
-      - "The branching graph validation report must exist and pass."
-      - "The graph must encode the exact three-option opening hub and all downstream 2-to-5 option decision sets."
-      - "Reconvergence and redirective endings must be explicit in node and edge structure."
-    scope_constraints:
-      - "Do not infer the new branching graph from prose alone."
-  branching_build_02:
-    id: branching_build_02
-    phase: graph_or_build
-    status: completed
-    purpose: >
-      Render the revised branching architecture cleanly in Astro, including start-over
-      semantics, hesitation surfaces, and legible path traces through reconvergence.
-    scope_controller: sole_operational_scope
-    route_families_in_scope:
-      - introduction_route
-      - operative_route
-      - haunter_route
-      - curator_route
-      - witness_route
-      - contrast_route
-      - contamination_route
-    route_families_deferred: []
-    deliverables:
-      - src/pages/index.astro
-      - src/pages/scenes/[sceneId].astro
-      - src/pages/artifacts/[artifactId].astro
-      - src/pages/endings/[endingId].astro
-      - src/layouts/ReaderLayout.astro
-      - src/components/ChoiceList.astro
-      - src/components/DecisionGraph.astro
-      - src/lib/path-trace.ts
-      - src/lib/reader-state.ts
-      - schema-generation/validation-reports/hospice-annex-v01-branching-build-02.md
-    validation_report: schema-generation/validation-reports/hospice-annex-v01-branching-build-02.md
-    acceptance_requirements:
-      - "The branching build validation report must exist and pass."
-      - "The top reset control must be labeled start_over when it performs reset."
-      - "The build must render hesitation/reconsideration surfaces and reconvergent path traces correctly."
-    scope_constraints:
-      - "Keep runtime logic graph-driven and static."
-      - "Do not imply browser-history back behavior when only reset exists."
-
-milestone_transitions:
-  - from: planning_parity_01
-    to: prose_generation_01
-    trigger: planning_validation_pass
-    requires_validation_report: schema-generation/validation-reports/hospice-annex-v01-planning-parity-01.md
-    requires_all_deliverables_present: true
-    set_phase_to: prose_generation
-    transition_authorized_only_when_current_phase_allows_next_stage: true
-    execution_mode: autonomous_downstream
-    notes:
-      - "If current phase is engine_revision, this transition remains blocked pending human phase change."
-      - "Otherwise, successful planning validation authorizes the agent to rewrite active milestone and current phase, then continue directly into prose generation."
-  - from: prose_generation_01
-    to: graph_compilation_01
-    trigger: prose_validation_pass
-    requires_validation_report: schema-generation/validation-reports/hospice-annex-v01-prose-generation-01.md
-    requires_all_deliverables_present: true
-    set_phase_to: graph_or_build
-    transition_authorized_only_when_current_phase_allows_next_stage: true
-    execution_mode: autonomous_downstream
-    notes:
-      - "Successful prose validation authorizes the agent to rewrite active milestone and current phase, then continue directly into graph compilation."
-  - from: graph_compilation_01
-    to: build_release_01
-    trigger: graph_validation_pass
-    requires_validation_report: schema-generation/validation-reports/hospice-annex-v01-graph-compilation-01.md
-    requires_all_deliverables_present: true
-    set_phase_to: graph_or_build
-    transition_authorized_only_when_current_phase_allows_next_stage: true
-    execution_mode: autonomous_downstream
-    notes:
-      - "Successful graph validation authorizes the agent to rewrite active milestone and continue directly into build release."
-  - from: build_release_01
-    to: complete
-    trigger: build_validation_pass
-    requires_validation_report: schema-generation/validation-reports/hospice-annex-v01-build-release-01.md
-    requires_all_deliverables_present: true
-    set_phase_to: graph_or_build
-    transition_authorized_only_when_current_phase_allows_next_stage: true
-    execution_mode: autonomous_downstream
-    notes:
-      - "Successful build validation authorizes the agent to mark the milestone chain complete."
-      - "Completion does not retroactively authorize any earlier skipped execution."
-  - from: branching_planning_02
-    to: branching_prose_02
-    trigger: planning_validation_pass
-    requires_validation_report: schema-generation/validation-reports/hospice-annex-v01-branching-planning-02.md
-    requires_all_deliverables_present: true
-    set_phase_to: prose_generation
-    transition_authorized_only_when_current_phase_allows_next_stage: true
-    execution_mode: autonomous_downstream
-    notes:
-      - "If current phase is engine_revision, this transition remains blocked pending human phase change."
-      - "Otherwise, successful branching-planning validation authorizes the agent to continue into branching prose generation."
-  - from: branching_prose_02
-    to: branching_graph_02
-    trigger: prose_validation_pass
-    requires_validation_report: schema-generation/validation-reports/hospice-annex-v01-branching-prose-02.md
-    requires_all_deliverables_present: true
-    set_phase_to: graph_or_build
-    transition_authorized_only_when_current_phase_allows_next_stage: true
-    execution_mode: autonomous_downstream
-    notes:
-      - "Successful branching prose validation authorizes the agent to continue into branching graph compilation."
-  - from: branching_graph_02
-    to: branching_build_02
-    trigger: graph_validation_pass
-    requires_validation_report: schema-generation/validation-reports/hospice-annex-v01-branching-graph-02.md
-    requires_all_deliverables_present: true
-    set_phase_to: graph_or_build
-    transition_authorized_only_when_current_phase_allows_next_stage: true
-    execution_mode: autonomous_downstream
-    notes:
-      - "Successful branching graph validation authorizes the agent to continue into branching build release."
-  - from: branching_build_02
-    to: complete
-    trigger: build_validation_pass
-    requires_validation_report: schema-generation/validation-reports/hospice-annex-v01-branching-build-02.md
-    requires_all_deliverables_present: true
-    set_phase_to: graph_or_build
-    transition_authorized_only_when_current_phase_allows_next_stage: true
-    execution_mode: autonomous_downstream
-    notes:
-      - "Successful branching build validation authorizes the agent to mark the revised milestone chain complete."
-
-execution_history:
-  - from_milestone: branching_build_02
-    to_milestone: complete
-    from_phase: graph_or_build
-    to_phase: graph_or_build
-    trigger_validation_report: schema-generation/validation-reports/hospice-annex-v01-branching-build-02.md
-    timestamp_utc: 2026-03-21T04:00:10Z
-    result: advanced
-    notes:
-      - "Branching build validation report contained result: pass."
-      - "All declared build deliverables existed at transition time."
-      - "A static Astro build and browser click-through completed successfully."
-  - from_milestone: branching_graph_02
-    to_milestone: branching_build_02
-    from_phase: graph_or_build
-    to_phase: graph_or_build
-    trigger_validation_report: schema-generation/validation-reports/hospice-annex-v01-branching-graph-02.md
-    timestamp_utc: 2026-03-21T01:20:01Z
-    result: advanced
-    notes:
-      - "Branching graph validation report contained result: pass."
-      - "All declared graph deliverables existed at transition time."
-      - "No stop conditions from planning_expectations.stop_conditions were active."
-  - from_milestone: branching_prose_02
-    to_milestone: branching_graph_02
-    from_phase: prose_generation
-    to_phase: graph_or_build
-    trigger_validation_report: schema-generation/validation-reports/hospice-annex-v01-branching-prose-02.md
-    timestamp_utc: 2026-03-21T01:16:52Z
-    result: advanced
-    notes:
-      - "Branching prose validation report contained result: pass."
-      - "All 27 declared branching prose deliverables existed at transition time."
-      - "No stop conditions from planning_expectations.stop_conditions were active."
-  - from_milestone: branching_planning_02
-    to_milestone: branching_prose_02
-    from_phase: planning_compilation
-    to_phase: prose_generation
-    trigger_validation_report: schema-generation/validation-reports/hospice-annex-v01-branching-planning-02.md
-    timestamp_utc: 2026-03-21T01:05:25Z
-    result: advanced
-    notes:
-      - "Branching planning validation report contained result: pass."
-      - "All 29 declared branching-planning deliverables existed at transition time."
-      - "No stop conditions from planning_expectations.stop_conditions were active."
-  - from_milestone: planning_parity_01
-    to_milestone: prose_generation_01
-    from_phase: planning_compilation
-    to_phase: prose_generation
-    trigger_validation_report: schema-generation/validation-reports/hospice-annex-v01-planning-parity-01.md
-    timestamp_utc: 2026-03-20T21:25:01Z
-    result: advanced
-    notes:
-      - "Planning validation report contained result: pass."
-      - "All 18 declared planning deliverables existed at transition time."
-      - "No stop conditions from planning_expectations.stop_conditions were active."
-  - from_milestone: prose_generation_01
-    to_milestone: graph_compilation_01
-    from_phase: prose_generation
-    to_phase: graph_or_build
-    trigger_validation_report: schema-generation/validation-reports/hospice-annex-v01-prose-generation-01.md
-    timestamp_utc: 2026-03-20T22:37:14Z
-    result: advanced
-    notes:
-      - "Prose validation report contained result: pass."
-      - "All 17 declared prose deliverables existed at transition time."
-      - "No stop conditions from planning_expectations.stop_conditions were active."
-  - from_milestone: graph_compilation_01
-    to_milestone: build_release_01
-    from_phase: graph_or_build
-    to_phase: graph_or_build
-    trigger_validation_report: schema-generation/validation-reports/hospice-annex-v01-graph-compilation-01.md
-    timestamp_utc: 2026-03-20T22:37:14Z
-    result: advanced
-    notes:
-      - "Graph validation report contained result: pass."
-      - "All declared graph deliverables existed at transition time."
-      - "No stop conditions from planning_expectations.stop_conditions were active."
-  - from_milestone: build_release_01
-    to_milestone: complete
-    from_phase: graph_or_build
-    to_phase: graph_or_build
-    trigger_validation_report: schema-generation/validation-reports/hospice-annex-v01-build-release-01.md
-    timestamp_utc: 2026-03-20T22:48:22Z
-    result: advanced
-    notes:
-      - "Build validation report contained result: pass."
-      - "All declared build deliverables existed at transition time."
-      - "A full static Astro build completed successfully."
-
-decision_status:
-  resolved_by_policy:
-    - patient_identity
-    - metaphysical_visibility
-    - contamination_scaling
-    - route_length_variation
-    - retraction_scope
-    - introduction_sequence_shape
-    - opening_choice_hub_shape
-    - decision_cardinality
-    - hesitation_surface_requirements
-    - start_over_navigation_semantics
-  deferred_until_scope_expansion:
-    - contamination_ending_surface_rules
-    - ending_level_contamination_behavior
-    - post_v0_1_retraction_expansion
-  requires_human_override_only_if:
-    - claimant_roster_changes
-    - ontology_changes
-    - central_transgression_class_changes
-    - milestone_scope_changes
-    - explicit_naming_specificity_request
-    - validation_failure_shows_policy_envelope_is_insufficient
-
-assumption_registry:
-  source_priority:
-    - authorial_directive
-    - canonical_engine_rule
-    - work_instance_policy
-    - compiled_artifact_selection
-  active_assumptions:
-    - id: patient_identity_concreteness
-      status: resolved
-      source: generation_resolution_policy.patient_identity_policy
-      summary: "Use one stable released resident identity; keep external naming minimal in v0.1."
-    - id: metaphysical_visibility_v0_1
-      status: resolved
-      source: generation_resolution_policy.metaphysical_visibility_policy
-      summary: "Keep metaphysics legible through residue and drift, not exposition."
-    - id: contamination_scaling
-      status: resolved
-      source: generation_resolution_policy.contamination_policy
-      summary: "Spotlight on claimant determines contamination intensity."
-    - id: route_length_variation
-      status: resolved
-      source: generation_resolution_policy.route_architecture_policy
-      summary: "Routes may vary in length and pacing within bounded architecture."
-    - id: introduction_and_opening_hub
-      status: resolved
-      source: branching_experience_model.introduction_sequence
-      summary: "The story begins with a reader-perspective introduction of 3 to 5 scene-pages before an exact three-option opening hub."
-    - id: decision_cardinality_and_hesitation
-      status: resolved
-      source: branching_experience_model.decision_option_policy
-      summary: "Meaningful choices require 2 to 5 live options, and major commitments require a hesitation/reconsideration surface."
-    - id: reconvergence_and_redirects
-      status: resolved
-      source: branching_experience_model.branch_topology
-      summary: "Branches may reconverge or redirect into new beginnings without collapsing prior state consequences."
-    - id: five_claimant_work_specific_roster
-      status: resolved
-      source: claimants.roster_source_path
-      summary: "This work uses five active claimants from a work-specific roster with locked, bounded-variation, and slot-generated modes."
-    - id: retraction_v0_1_scope
-      status: resolved
-      source: generation_resolution_policy.retraction_policy
-      summary: "Retraction exists as damaging state logic, not a standalone route family or ending family in v0.1."
-
-authorial_intent:
-  summary: >
-    This work uses AI as a constrained execution medium for a nonlinear literary form
-    whose scale, recursive variation, and ontological branching would be difficult to
-    build manually. The artistic act lies in designing the laws, pressures, state
-    logic, and symbolic recurrence that generate the work, not in outsourcing all
-    judgment to the model.
-
-scene_length_policy:
-  measurement: words
-  soft_min: 500
-  soft_max: 1100
-  hard_max: 3000
-  notes:
-    - "Scenes should usually read like roughly 3 to 4 manuscript-style pages."
-    - "Exceptionally dramatic scenes may exceed the soft max but must not exceed the hard max."
-    - "Introductory scene-pages should accumulate to 3 to 5 pages before the first live choice hub."
-    - "Reflection or hesitation interstitials should remain brief enough that they deepen pressure rather than stall motion."
+  client_side_state_only: true
+  live_ai_at_runtime: false
+  generated_work_location: generation_branch_or_release
+  main_branch_contains_generated_work: false
+  quality_contract: engine/docs/build-contract.md

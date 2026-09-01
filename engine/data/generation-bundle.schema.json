@@ -1,0 +1,495 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cathedrals.local/schemas/generation-bundle-v1.json",
+  "title": "Cathedrals single-transaction generation bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "bundle_version",
+    "provenance",
+    "work_canon",
+    "claimants",
+    "characters",
+    "arcs",
+    "scenes",
+    "artifacts",
+    "endings",
+    "formal_compositions",
+    "decision_graph"
+  ],
+  "properties": {
+    "bundle_version": { "const": "1.0" },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "work_canon": { "$ref": "#/$defs/workCanon" },
+    "claimants": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/claimant" }
+    },
+    "characters": {
+      "type": "array",
+      "maxItems": 12,
+      "items": { "$ref": "#/$defs/character" }
+    },
+    "arcs": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/arc" }
+    },
+    "scenes": {
+      "type": "array",
+      "minItems": 14,
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/scene" }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "endings": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 7,
+      "items": { "$ref": "#/$defs/ending" }
+    },
+    "formal_compositions": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 4,
+      "items": { "$ref": "#/$defs/formalComposition" }
+    },
+    "decision_graph": { "$ref": "#/$defs/decisionGraph" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "stringList": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/nonEmptyString" }
+    },
+    "idList": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/id" }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generation_id",
+        "work_seed",
+        "engine_commit_sha",
+        "engine_config_hashes",
+        "provider",
+        "model",
+        "generation_parameters",
+        "threshold_geomancy_seed",
+        "threshold_geomancy_config_hash",
+        "structural_generation_seed",
+        "structural_generation_config_hash",
+        "generation_timestamp_utc",
+        "creative_transaction_count"
+      ],
+      "properties": {
+        "generation_id": { "$ref": "#/$defs/id" },
+        "work_seed": { "$ref": "#/$defs/nonEmptyString" },
+        "engine_commit_sha": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
+        "engine_config_hashes": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        },
+        "provider": { "$ref": "#/$defs/nonEmptyString" },
+        "model": { "$ref": "#/$defs/nonEmptyString" },
+        "generation_parameters": { "type": "object" },
+        "threshold_geomancy_seed": { "$ref": "#/$defs/nonEmptyString" },
+        "threshold_geomancy_config_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "structural_generation_seed": { "$ref": "#/$defs/nonEmptyString" },
+        "structural_generation_config_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "generation_timestamp_utc": { "type": "string", "format": "date-time" },
+        "creative_transaction_count": { "const": 1 }
+      }
+    },
+    "workCanon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "work_id",
+        "generated_title",
+        "premise",
+        "central_incident",
+        "chronology",
+        "claimant_relationships",
+        "generated_motifs",
+        "environmental_mutation_law",
+        "ending_logic"
+      ],
+      "properties": {
+        "work_id": { "const": "hospice-annex-v01" },
+        "generated_title": { "$ref": "#/$defs/nonEmptyString" },
+        "premise": { "$ref": "#/$defs/nonEmptyString" },
+        "central_incident": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["event", "subjects", "circumstances", "culpability", "competing_interpretations"],
+          "properties": {
+            "event": { "$ref": "#/$defs/nonEmptyString" },
+            "subjects": { "$ref": "#/$defs/idList" },
+            "circumstances": { "$ref": "#/$defs/nonEmptyString" },
+            "culpability": { "$ref": "#/$defs/nonEmptyString" },
+            "competing_interpretations": { "$ref": "#/$defs/stringList" }
+          }
+        },
+        "chronology": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["event_id", "relative_order", "event", "certainty"],
+            "properties": {
+              "event_id": { "$ref": "#/$defs/id" },
+              "relative_order": { "type": "integer", "minimum": 1 },
+              "event": { "$ref": "#/$defs/nonEmptyString" },
+              "certainty": { "enum": ["established", "contested", "incompatible"] }
+            }
+          }
+        },
+        "claimant_relationships": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 10,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["claimant_ids", "relationship", "dramatic_pressure"],
+            "properties": {
+              "claimant_ids": {
+                "type": "array",
+                "minItems": 2,
+                "items": { "$ref": "#/$defs/id" }
+              },
+              "relationship": { "$ref": "#/$defs/nonEmptyString" },
+              "dramatic_pressure": { "$ref": "#/$defs/nonEmptyString" }
+            }
+          }
+        },
+        "generated_motifs": { "$ref": "#/$defs/stringList" },
+        "environmental_mutation_law": { "$ref": "#/$defs/nonEmptyString" },
+        "ending_logic": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "claimant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claimant_id",
+        "technical_slot_id",
+        "name",
+        "incident_role",
+        "annex_relationship",
+        "personality",
+        "epistemic_regime",
+        "relationship_to_responsibility",
+        "evidence_logic",
+        "emotional_pressure",
+        "rhetorical_behavior",
+        "diction",
+        "cadence",
+        "contradiction_mode",
+        "artifact_affinity",
+        "environmental_pressure",
+        "literary_effect",
+        "accusation_consequence",
+        "retraction_consequence",
+        "differentiation_notes"
+      ],
+      "properties": {
+        "claimant_id": { "$ref": "#/$defs/id" },
+        "technical_slot_id": {
+          "enum": [
+            "claimant_slot_01",
+            "claimant_slot_02",
+            "claimant_slot_03",
+            "claimant_slot_04",
+            "claimant_slot_05"
+          ]
+        },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "incident_role": { "$ref": "#/$defs/nonEmptyString" },
+        "annex_relationship": { "$ref": "#/$defs/nonEmptyString" },
+        "occupation": { "type": ["string", "null"] },
+        "personality": { "$ref": "#/$defs/nonEmptyString" },
+        "epistemic_regime": { "$ref": "#/$defs/nonEmptyString" },
+        "relationship_to_responsibility": { "$ref": "#/$defs/nonEmptyString" },
+        "evidence_logic": { "$ref": "#/$defs/nonEmptyString" },
+        "emotional_pressure": { "$ref": "#/$defs/nonEmptyString" },
+        "rhetorical_behavior": { "$ref": "#/$defs/nonEmptyString" },
+        "diction": { "$ref": "#/$defs/nonEmptyString" },
+        "cadence": { "$ref": "#/$defs/nonEmptyString" },
+        "contradiction_mode": { "$ref": "#/$defs/nonEmptyString" },
+        "artifact_affinity": { "$ref": "#/$defs/nonEmptyString" },
+        "environmental_pressure": { "$ref": "#/$defs/nonEmptyString" },
+        "literary_effect": { "$ref": "#/$defs/nonEmptyString" },
+        "accusation_consequence": { "$ref": "#/$defs/nonEmptyString" },
+        "retraction_consequence": { "$ref": "#/$defs/nonEmptyString" },
+        "differentiation_notes": { "$ref": "#/$defs/stringList" }
+      }
+    },
+    "character": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["character_id", "name", "role", "relationships", "dramatic_function"],
+      "properties": {
+        "character_id": { "$ref": "#/$defs/id" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "role": { "$ref": "#/$defs/nonEmptyString" },
+        "relationships": { "$ref": "#/$defs/stringList" },
+        "dramatic_function": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "arc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "arc_id",
+        "purpose",
+        "branch_role",
+        "required_beats",
+        "claimant_pressures",
+        "entry_conditions",
+        "exit_conditions",
+        "state_pressure",
+        "scene_ids"
+      ],
+      "properties": {
+        "arc_id": { "$ref": "#/$defs/id" },
+        "purpose": { "$ref": "#/$defs/nonEmptyString" },
+        "branch_role": { "enum": ["introduction", "splinter", "reconvergence", "redirective", "contamination", "mixed"] },
+        "required_beats": { "$ref": "#/$defs/stringList" },
+        "claimant_pressures": { "$ref": "#/$defs/idList" },
+        "entry_conditions": { "$ref": "#/$defs/stringList" },
+        "exit_conditions": { "$ref": "#/$defs/stringList" },
+        "state_pressure": { "$ref": "#/$defs/nonEmptyString" },
+        "scene_ids": { "$ref": "#/$defs/idList" }
+      }
+    },
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scene_id",
+        "arc_id",
+        "title",
+        "scene_type",
+        "beat_jobs",
+        "branch_depth",
+        "claimant_focus_ids",
+        "threshold_figure",
+        "threshold_resultant",
+        "state_inputs",
+        "state_effects",
+        "artifact_ids",
+        "choice_edge_ids",
+        "major_decision",
+        "hesitation_consequence",
+        "prose_mdx"
+      ],
+      "properties": {
+        "scene_id": { "$ref": "#/$defs/id" },
+        "arc_id": { "$ref": "#/$defs/id" },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "scene_type": { "enum": ["introduction", "hub", "exploration", "interview", "artifact_encounter", "threshold", "hesitation", "reconvergence", "aftershock", "residue"] },
+        "beat_jobs": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "branch_depth": { "type": "integer", "minimum": 0 },
+        "claimant_focus_ids": { "$ref": "#/$defs/idList" },
+        "threshold_figure": { "type": "string", "pattern": "^[123]-[123]-[123]-[123]$" },
+        "threshold_resultant": { "type": ["string", "null"], "pattern": "^[123]-[123]-[123]-[123]$" },
+        "state_inputs": { "$ref": "#/$defs/stateConditions" },
+        "state_effects": { "type": "array", "items": { "$ref": "#/$defs/stateEffect" } },
+        "artifact_ids": { "$ref": "#/$defs/idList" },
+        "choice_edge_ids": { "$ref": "#/$defs/idList" },
+        "major_decision": { "type": "boolean" },
+        "hesitation_consequence": { "type": ["string", "null"] },
+        "prose_mdx": { "type": "string", "minLength": 1, "maxLength": 12000 }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "title",
+        "artifact_type",
+        "physical_form",
+        "provenance_in_story",
+        "claimant_relevance_ids",
+        "interpretive_function",
+        "contradiction",
+        "presentation_mode",
+        "preview_excerpt",
+        "body_mdx"
+      ],
+      "properties": {
+        "artifact_id": { "$ref": "#/$defs/id" },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "artifact_type": { "$ref": "#/$defs/nonEmptyString" },
+        "physical_form": { "$ref": "#/$defs/nonEmptyString" },
+        "provenance_in_story": { "$ref": "#/$defs/nonEmptyString" },
+        "claimant_relevance_ids": { "$ref": "#/$defs/idList" },
+        "interpretive_function": { "$ref": "#/$defs/nonEmptyString" },
+        "contradiction": { "$ref": "#/$defs/nonEmptyString" },
+        "presentation_mode": { "enum": ["inline_expandable", "standalone_route"] },
+        "preview_excerpt": { "$ref": "#/$defs/nonEmptyString" },
+        "body_mdx": { "type": "string", "minLength": 1, "maxLength": 8000 }
+      }
+    },
+    "ending": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ending_id",
+        "title",
+        "ending_type",
+        "claimant_pressure_ids",
+        "entry_conditions",
+        "state_effects",
+        "redirect_target_scene_id",
+        "prose_mdx"
+      ],
+      "properties": {
+        "ending_id": { "$ref": "#/$defs/id" },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "ending_type": { "enum": ["commitment", "foreclosure", "contamination", "release", "redirective", "other"] },
+        "claimant_pressure_ids": { "$ref": "#/$defs/idList" },
+        "entry_conditions": { "$ref": "#/$defs/stateConditions" },
+        "state_effects": { "type": "array", "items": { "$ref": "#/$defs/stateEffect" } },
+        "redirect_target_scene_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "prose_mdx": { "type": "string", "minLength": 1, "maxLength": 9000 }
+      }
+    },
+    "formalComposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["composition_id", "container_id", "form", "dramatic_function", "anchor"],
+      "properties": {
+        "composition_id": { "$ref": "#/$defs/id" },
+        "container_id": { "$ref": "#/$defs/id" },
+        "form": { "$ref": "#/$defs/nonEmptyString" },
+        "dramatic_function": { "$ref": "#/$defs/nonEmptyString" },
+        "anchor": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "stateConditions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "operator", "value"],
+        "properties": {
+          "key": { "$ref": "#/$defs/stateKey" },
+          "operator": { "enum": ["equals", "not_equals", "gte", "lte", "contains", "not_contains"] },
+          "value": {}
+        }
+      }
+    },
+    "stateEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "key", "value"],
+      "properties": {
+        "operation": { "enum": ["set", "increment", "add", "remove"] },
+        "key": { "$ref": "#/$defs/stateKey" },
+        "value": {}
+      }
+    },
+    "stateKey": {
+      "enum": [
+        "accused_claimant_id",
+        "dominant_regime_id",
+        "contamination",
+        "indecision_count",
+        "retraction_count",
+        "claimants_seen",
+        "artifacts_seen",
+        "world_scars",
+        "hidden_route_unlocked"
+      ]
+    },
+    "decisionGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entry_scene_id", "opening_decision_group_id", "nodes", "edges"],
+      "properties": {
+        "entry_scene_id": { "$ref": "#/$defs/id" },
+        "opening_decision_group_id": { "$ref": "#/$defs/id" },
+        "nodes": {
+          "type": "array",
+          "minItems": 19,
+          "maxItems": 23,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["node_id", "node_type", "content_id"],
+            "properties": {
+              "node_id": { "$ref": "#/$defs/id" },
+              "node_type": { "enum": ["scene", "ending"] },
+              "content_id": { "$ref": "#/$defs/id" }
+            }
+          }
+        },
+        "edges": {
+          "type": "array",
+          "minItems": 18,
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "edge_id",
+              "from_node_id",
+              "to_node_id",
+              "label",
+              "kind",
+              "availability",
+              "decision_group_id",
+              "major_decision",
+              "state_conditions",
+              "state_effects"
+            ],
+            "properties": {
+              "edge_id": { "$ref": "#/$defs/id" },
+              "from_node_id": { "$ref": "#/$defs/id" },
+              "to_node_id": { "$ref": "#/$defs/id" },
+              "label": { "$ref": "#/$defs/nonEmptyString" },
+              "kind": { "enum": ["progression", "decision", "ending", "redirect"] },
+              "availability": { "enum": ["playable", "reserved"] },
+              "decision_group_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+              "major_decision": { "type": "boolean" },
+              "state_conditions": { "$ref": "#/$defs/stateConditions" },
+              "state_effects": { "type": "array", "items": { "$ref": "#/$defs/stateEffect" } }
+            }
+          }
+        }
+      }
+    }
+  }
+}

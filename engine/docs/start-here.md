@@ -1,90 +1,51 @@
 # Start Here
 
-## Purpose
-
-This document is the cold-start entrypoint for operators working on `hospice-annex-v01`.
-
-Read this when you are entering the repo without prior chat context.
-Its job is to tell you what to read first, what not to guess, and what the first lawful unit of execution is.
-
 ## Read Order
 
-Read these files in order:
-
-1. `engine/llm-instructions.md`
-2. `engine/docs/artistic-constitution.md`
-3. `engine/docs/specs.md`
+1. root `README.md`
+2. `engine/llm-instructions.md`
+3. `engine/docs/artistic-constitution.md`
 4. `engine/docs/repo-contract.md`
 5. `engine/data/work-instance.yaml`
-6. `engine/data/claimant-rosters/hospice-annex-v01.yaml`
+6. `engine/data/claimants.yaml`
 7. `engine/docs/branching-architecture-contract.md`
-8. `engine/docs/human-decision-contract.md`
-9. `engine/docs/content-schema-contract.md`
-10. `engine/docs/validation-runbook.md`
-11. `engine/docs/build-contract.md`
-12. `engine/prompts/execution-contract.md`
-13. `engine/prompts/planning-compiler.md`
-14. `engine/prompts/linear-ops-contract.md`
+8. `engine/canon/arc-grammar.md`
+9. `engine/canon/ontology.md`
+10. `engine/canon/style-rules.md`
+11. `engine/canon/acceptance-tests.md`
+12. `engine/data/state-model.yaml`
+13. `engine/data/threshold-geomancy.yaml`
+14. `engine/docs/generation-workflow-contract.md`
+15. `engine/docs/content-schema-contract.md`
+16. `engine/docs/validation-runbook.md`
+17. `engine/docs/build-contract.md`
+18. `engine/prompts/single-transaction-generation.md`
 
-If any lower file conflicts with a higher file, the higher file wins.
+The root README governs the artistic experiment. Implementation contracts cannot
+quietly redefine it.
 
-## What This Repo Is For
+## Current Truth
 
-This repo defines and will eventually render a static, build-time-generated literary mystery set in a snowbound hospice annex.
+- work: `hospice-annex-v01`
+- phase: `engine_revision`
+- generated work present: no
+- claimant positions: five semantically blank slots
+- creative transaction count per generation: exactly one
+- renderer: static Astro with client-side state only
+- stale historical outputs: noncanonical and absent
 
-The immediate goal is narrower:
+Read the live values from `engine/data/work-instance.yaml`; this summary is only an
+entrypoint.
 
-- make the repo blind-executable for the current work-instance phase and milestone
-- keep canon in repo files
-- treat the invoked directory as the full project boundary
-- do not inspect parent or sibling directories unless the human explicitly authorizes it
-- obey `engine/data/work-instance.yaml` as the single operational scope controller
-- keep the final reader experience static and Astro-based
+## If Asked to Continue
 
-## Default First Task
+Do not generate fiction from a vague continuation request. Report that the engine is
+ready for an explicit generation-test instruction and identify the configured model
+output minimum. A generation test must create a generation branch, pass deterministic
+budget preparation, and make exactly one creative call.
 
-If the user says "continue" or gives a broad execution instruction, start here:
+## Never Infer
 
-1. audit repo truth against the read order above
-2. resolve machine-selectable decisions from `engine/data/work-instance.yaml`
-3. treat the invoked directory as the complete project root and do not inspect parent or sibling directories
-4. check the current phase gate in `engine/data/work-instance.yaml`
-5. check `milestone_control.active_milestone_id` and the corresponding `execution_milestones` record
-6. if the phase is `engine_revision`, mutate only `engine/` files even when downstream milestones are canonized
-7. use `engine/docs/human-decision-contract.md` only if repo policy explicitly requires human override
-8. if phase is `engine_revision`, treat milestone auto-advance as blocked pending human repo truth change
-9. if phase is already downstream and transition criteria pass, update repo truth and continue automatically
-10. update build code only after the phase gate allows downstream work
-11. mirror execution state into Linear only after repo artifacts are current
-12. validate engine-side contract consistency using `engine/docs/validation-runbook.md`
-
-## Do Not Guess
-
-Stop and ask for human review if:
-
-- canon files conflict
-- a required planning artifact would need new ontology
-- a threshold geomancy rule is required but undefined
-- route differentiation collapses into cosmetic variation
-- a build choice would move important story truth out of repo files
-
-## Current Scope Lock
-
-The live operational scope is controlled by `engine/data/work-instance.yaml`.
-
-Read these sections there instead of relying on stale summaries:
-
-- `execution_phase`
-- `milestone_control`
-- `execution_milestones`
-- `milestone_transitions`
-- `branching_experience_model`
-- `generation_resolution_policy`
-- `decision_status`
-- `assumption_registry`
-
-Project-wide guardrails remain:
-
-- work id is `hospice-annex-v01`
-- current claimant roster is `operative`, `haunter`, `curator`, `witness`, `contrast_slot`
-- parent/sibling directory inspection remains forbidden unless the human explicitly authorizes it
+Do not infer claimant identities, the exact incident, evidence, scene events,
+artifacts, choices, or endings from examples, historical records, geomancy figure
+names, or prior generations.

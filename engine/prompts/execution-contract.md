@@ -1,120 +1,48 @@
 # Execution Contract
 
-## 1. Source of Truth
+## Current Gate
 
-The source of truth is:
+Read `engine/data/work-instance.yaml`. During `engine_revision`, change only the
+engine. Do not create generated work or mutate downstream projections.
 
-- engine/docs/artistic-constitution.md
-- engine/docs/specs.md
-- engine/docs/repo-contract.md
-- engine/data/work-instance.yaml if present
-- the file named by `claimants.roster_source_path` in `engine/data/work-instance.yaml`, if present
-- engine/docs/branching-architecture-contract.md if present
-- engine/docs/human-decision-contract.md if present, as escalation-only guidance
-- engine/docs/content-schema-contract.md if present
-- engine/docs/build-contract.md if present
-- engine/docs/validation-runbook.md if present
-- engine/canon/ontology.md
-- engine/canon/arc-grammar.md
-- engine/canon/style-rules.md
-- engine/canon/acceptance-tests.md
-- engine/data/state-model.yaml
-- engine/data/claimants.yaml
-- engine/data/threshold-geomancy.yaml if present
+## Compliant Generation
 
-## 2. Allowed Actions
+When an explicit future instruction activates a generation test:
 
-The agent may:
+1. create a generation branch
+2. deterministically calculate scope, budget, abstract topology, state constraints,
+   threshold figures, resultants, provenance, and context hashes
+3. fail before generation if the selected model cannot fit the declared budget
+4. assemble the complete engine context and JSON Schema
+5. make exactly one creative model request using
+   `engine/prompts/single-transaction-generation.md`
+6. preserve the one complete response as the generation bundle
+7. parse, validate, project, hash, and build deterministically
+8. accept with `PASS` or reject with `FAIL GENERATION`
 
-- mutate `engine/` files that revise canon, data, prompts, docs, and templates
-- compile claimant-profile artifacts when the phase gate allows it
-- generate scene specs when the phase gate allows it
-- generate scene prose when the phase gate allows it
-- generate artifacts when the phase gate allows it
-- compile decision-graph.json from planning outputs when the phase gate allows it
-- generate page variants or static site components when the phase gate allows it
-- generate validation reports
+## Allowed Deterministic Actions
 
-## 3. Forbidden Actions
+- seed and hash calculation
+- abstract structural preparation
+- threshold-geomancy calculation
+- prompt assembly
+- schema and graph validation
+- file projection and frontmatter creation
+- checksums and manifest creation
+- Astro static compilation
 
-The agent may not:
+## Forbidden Actions
 
-- invent new core metaphysics
-- add new claimants without approval
-- resolve central truths not permitted by the current canon
-- weaken static-build constraints
-- ignore style rules or acceptance tests
-- write to `schema-generation/` when `execution_phase.current_phase` forbids it
-- write to `prose/` when `execution_phase.current_phase` forbids it
+- pre-author claimant identities, incident facts, scene events, artifacts, or endings
+- select fictional archetypes for technical slots
+- use separate creative planning, profiling, prose, critique, or repair calls
+- creatively fill a truncated or invalid bundle
+- edit generated literary content after the call
+- publish a failed generation
+- place a generated work on `main`
 
-## 4. Generation Order
+## Failure
 
-1. Read source-of-truth files
-2. Read and obey `execution_phase.current_phase` in `engine/data/work-instance.yaml`
-3. Apply `milestone_control.active_milestone_id`, the matching `execution_milestones` record, and machine-selectable decisions from `engine/data/work-instance.yaml`; consult the human-decision contract only for true escalation triggers
-4. If phase is `engine_revision`, mutate only `engine/` and stop before downstream output generation
-5. Compile claimant profiles when claimant generation is enabled and the phase gate allows planning compilation
-6. Produce the planning outputs required by the current milestone in `schema-generation/` only when the phase gate allows it
-7. Advance only when the next milestone is canonized, the current milestone validation passes, all required deliverables exist, and no stop condition is active
-8. Produce prose and artifacts from specs in `prose/` only when the active milestone requires it and the phase gate allows it
-9. Validate outputs against canon and tests
-10. Compile `schema-generation/decision-graph.json` only when graph work is in scope and the phase gate allows it
-11. Render static pages only when build work is in scope and the phase gate allows it
-
-If the current phase is `engine_revision`, canonized milestone transitions do not authorize exit without a human repo edit.
-If the current phase is already downstream, passed validation authorizes the agent to update `milestone_control.active_milestone_id`, `execution_phase.current_phase`, and `execution_history`, then continue automatically.
-
-## 5. Validation Order
-
-Validate:
-
-- claimant-profile integrity
-- claimant-profile separation
-- introduction sequence integrity
-- opening hub integrity
-- decision cardinality
-- hesitation surface integrity
-- ontology consistency
-- claimant consistency
-- scene function
-- style compliance
-- mobile readability assumptions
-- route differentiation
-- build-surface hierarchy and restraint when build work is in scope
-- route-sensitive visual differentiation when build work is in scope
-
-## 6. Stop Conditions
-
-The agent must stop and flag for human review if:
-
-- canon files conflict
-- a scene cannot satisfy both ontology and style rules
-- a route collapses into cosmetic variation
-- no valid claimant-profile set satisfies both hard constraints and expressive separation
-- the build requires a new world rule not already present
-- the build remains technically functional but so visually generic that it weakens the art
-- the requested action would violate the current phase gate
-
-## 7. Graph and Path Trace Implementation
-
-- every scene spec must have a stable scene_id
-- every branch or decision option must have a stable edge_id
-- every ending must have a stable ending_id
-- every compiled route must be graph-exportable into decision-graph.json
-- every meaningful decision set must preserve 2 to 5 live options
-- the opening hub must preserve exactly 3 live options
-- ending-page decision visuals must be derivable from the full graph plus the reader's recorded path
-- the rendered ending-page view must show the taken path as the primary spine and rejected sibling options at each decision point
-- in debug mode, rejected sibling options may also display their destination scene titles
-- reserved sibling edges may exist for alternatives that are structurally preserved but not yet playable
-- no scene, branch, or ending may be considered complete unless its graph links are valid and its local path-trace relationships can be derived
-
-## 8. Scene generation must obey the scene spec length budget.
-
-Rules:
-
-- aim for target_min to target_soft_max by default
-- do not exceed target_hard_max
-- if a scene would exceed target_soft_max, compress before expanding
-- only exceed target_soft_max when the scene’s structural role explicitly justifies it
-- if the scene cannot satisfy its required outputs within budget, flag for review rather than silently bloating
+Mechanical and artistic validation produce verdicts, not repair tasks. A failed work
+may be followed only by an entirely new generation ID and a new single creative
+transaction after explicit instruction.

@@ -1,56 +1,35 @@
 # Human Decision Contract
 
-## Purpose
-
-This document defines when the human must be asked because repo policy cannot lawfully derive the answer.
-
-Normal project defaults do not live here.
-Machine-resolvable decisions must be encoded in `engine/data/work-instance.yaml`.
-This file exists to prevent chat-only canon from replacing repo truth.
-
 ## Rule
 
-Ask the human only when the answer cannot be derived from:
+Escalate only when a decision changes the instrument rather than the burn pattern.
+Creative underdetermination is not a blocker.
 
-- authored canon
-- claimant law
-- state law
-- work-instance scope and milestone truth
-- generation-resolution policy in `engine/data/work-instance.yaml`
+## Ask the Human For
 
-Escalate only when the missing answer would materially change:
+- artistic doctrine or thematic-gravity changes
+- engine-level ontology changes
+- branching, state, threshold, validation, or rendering mechanic changes
+- project-scope or output-budget changes
+- technical constraints the repository cannot determine
+- safety or legal decisions
+- a conflict or impossibility in the README constraints
 
-- lawful planning structure
-- prose truth
-- build behavior
-- validation acceptance
+Record any approved engine change in repo truth before generation.
 
-Do not resolve repo-truth gaps in chat alone.
+## Do Not Ask the Human For
 
-## Escalation Triggers
+- claimant identities, occupations, personalities, or incident roles
+- the exact incident, chronology, responsibility, or hidden relationships
+- voices, evidence families, contradiction motifs, or environmental mutations
+- artifacts, clues, scene events, branch purposes, or choices
+- what happens after a decision
+- endings, poetry, dialogue, or prose
 
-Ask the human if the change would require:
+The single creative transaction decides those matters.
 
-- claimant roster change
-- ontology change
-- central transgression class change
-- milestone expansion beyond canonical deliverables
-- explicit named-character specificity beyond current work-instance policy
-- validation-proven widening of policy envelopes
+## Validation Is Not Escalation
 
-## Forbidden Shortcuts
-
-Do not:
-
-- invent new defaults here instead of updating `engine/data/work-instance.yaml`
-- treat chat memory as canon
-- answer unresolved canon questions only in Linear
-- bypass work-instance policy because a generated output "seems fine"
-
-## Recording Rule
-
-When escalation is necessary:
-
-- update `engine/data/work-instance.yaml` first
-- then regenerate or revise downstream artifacts as needed
-- note the change in validation or tracking only after repo truth is current
+A mechanical or artistic failure rejects the generation. Do not ask the human how to
+repair the same fictional universe. A future attempt may create an entirely new
+generation after a new explicit instruction.

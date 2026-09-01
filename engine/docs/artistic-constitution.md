@@ -8,7 +8,7 @@ This project is a static, build-time-generated literary artwork that combines no
 
 1. Nonlinear mystery narrative
 2. Static-site artifact experience
-3. AI-assisted generation and coherence pipeline
+3. One creative model transaction followed by deterministic validation and building
 
 All three pillars must remain present. If one disappears, the work has become a different thing.
 
@@ -47,23 +47,23 @@ The project must not become:
 The human authors:
 
 - doctrine
-- ontology
-- state model
+- ontology at the level of world law
+- state and branching mechanics
 - arc grammar
 - style law
 - acceptance criteria
-- claimant structure
+- five semantically blank claimant positions
+- setting envelope, scope, budgets, threshold geomancy, and build behavior
 
-AI authors:
+The single creative transaction authors:
 
-- non-claimant characters
-- claimant instantiations
-- scenes
-- artifacts
-- local phrasing
-- variant expressions within constraints
+- all claimant and non-claimant identities and relationships
+- the exact incident, chronology, evidence, contradictions, and culpability
+- all arcs, scenes, artifacts, choices, endings, poetry, and prose
+- the complete generated-work canon
 
-AI must not invent new metaphysics, claimants, or core truths.
+The model may instantiate but may not replace engine metaphysics or formal law. No
+earlier creative call may plan material for a later creative call.
 
 ## 7. MVP Boundary
 
@@ -71,7 +71,7 @@ The MVP is one short work with:
 
 - one surface setting
 - five claimants in the current `hospice-annex-v01` work instance
-- one central transgression
+- one generated incident inside an authored threshold-event class
 - one hidden contamination route
 - static build only
 
@@ -80,8 +80,15 @@ The MVP is one short work with:
 The MVP succeeds if:
 
 - accusation visibly alters reality
-- claimant routes feel genuinely different
+- claimant pressures produce genuinely different dramatic and linguistic effects
 - indecision has observable cost
 - at least one hidden route reframes reader behavior
 - the prose is good enough that the work would still matter if AI involvement were unknown
 - the build looks intentionally designed, not merely rendered
+
+## 9. Authorship Test
+
+Before generation, `main` must not reveal enough particular fiction to reconstruct an
+important character, route, revelation, artifact, or ending. When formal control and
+generative freedom conflict, strengthen relational constraints rather than prewriting
+the work.

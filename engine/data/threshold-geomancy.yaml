@@ -1,4 +1,12 @@
 version: 0.1
+usage_boundary:
+  role: deterministic_compositional_pressure
+  figure_names_are_claimant_identities: false
+  object_actions_are_required_fictional_objects: false
+  rules:
+    - "Assign figures and compute resultants before the creative transaction."
+    - "Treat names, archetypes, and object-actions as symbolic readings, not required plot, character, artifact, or diction values."
+    - "Do not reinterpret figures through a later creative model call after generation."
 dot_values:
   1:
     label: manifest

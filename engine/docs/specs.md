@@ -42,13 +42,17 @@ A merely functional reader shell is insufficient if it looks like a generic star
 - Confusion may be aesthetic, but not logistical.
 - Choices must be visually separate enough that each option reads as its own action.
 - The default interaction pattern should make each playable option read like a full button or equivalent strong action surface, not a cluster of adjacent links.
-- A consistent back action should be present in normal reading flow.
+- A prior-page action may appear only when it restores actual prior navigation state.
+- A global reset must be labeled `start_over`, never `back` or `return`.
 - High-pressure choices should feel consequential through spacing, hierarchy, and copy treatment rather than decorative noise alone.
 - After a long scene, the reader should meet the primary decision block at the bottom of the narrative flow rather than needing to scroll back to a sidebar action area.
 
 ## 6. State Representation
 
 Because the final build is static, route/state must be represented through prebuilt page variants, URL structure, local client-side state, or both. State must be minimal and inspectable by the system even if the reader does not fully understand it.
+
+All route structure and reader-facing content come from one accepted generation bundle
+and deterministic projections. Runtime code may not invent story structure.
 
 ## 7. Mobile / Responsive Constraints
 
@@ -122,3 +126,10 @@ Requirements:
 - The ending page should feel ceremonial and consequential rather than like a neutral recap screen.
 - On mobile, the view may collapse into a stacked or simplified path-trace layout.
 - Debug detail may be hidden behind a subtle debug affordance in production.
+
+## 13. Generated Content Integrity
+
+- Generated literary files are human-readable but immutable.
+- The build must verify accepted hashes before publication.
+- Engine defects may be fixed in engine code; generated prose and fictional facts may
+  not be edited to make a build pass.
