@@ -3,6 +3,8 @@
 Use only after preflight has frozen the run manifest. Return exactly one `genesis`
 record conforming to `engine/data/generation-protocol.schema.json`; no Markdown fence,
 commentary, candidate alternatives, placeholders, or omitted content.
+Treat every seed in frozen context and request metadata as an opaque string. Do not
+convert it to a number or add an undeclared `seed` field to the genesis record.
 
 You are authoring the generated root canon for one autonomous Cathedrals run. Generate
 all five claimants simultaneously from the five semantically blank technical slots.

@@ -143,6 +143,41 @@ def constraint_event(sequence, kind, data, constraint_class="past_constraint", s
     }
 
 
+def genesis_ledger(seed="12345"):
+    return {
+        "record_type": "ledger_entry",
+        "protocol_version": "3.0",
+        "generation_id": "generation_test",
+        "ledger_sequence": 1,
+        "planned_step_id": "genesis",
+        "attempt": 1,
+        "step_type": "creative",
+        "step_phase": "genesis",
+        "previous_entry_hash": None,
+        "entry_hash": "a" * 64,
+        "parent_canonical_state_hash": "b" * 64,
+        "prompt_hash": "c" * 64,
+        "context_hash": "d" * 64,
+        "provider": "LM Studio",
+        "model": "model",
+        "parameters": {"seed": seed},
+        "seed": seed,
+        "started_at": "2026-01-01T00:00:00Z",
+        "completed_at": "2026-01-01T00:00:01Z",
+        "output_hash": "e" * 64,
+        "generated_artifact_ids": ["commit_genesis"],
+        "past_constraint_delta_ids": [],
+        "future_obligation_delta_ids": [],
+        "motif_pressure_delta_ids": [],
+        "prospective_plan_hash_after": None,
+        "branch_path_relation": "generated_root_canon",
+        "commit_status": "COMMITTED",
+        "canonical_state_hash_after": "f" * 64,
+        "failure_class": "none",
+        "token_accounting": {"input_tokens": 10, "output_tokens": 20, "cost": None, "currency": None},
+    }
+
+
 class CathedralsRunnerTests(unittest.TestCase):
     def test_four_inputs_and_defaults(self):
         output = []
@@ -220,6 +255,41 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertNotIsInstance(raised.exception, RUNNER.IntegrityError)
         self.assertIn("provider_response", RUNNER.request_record.__code__.co_names)
         self.assertIn("provider_response", RUNNER.request_analysis.__code__.co_names)
+
+    def test_numeric_genesis_seed_has_structured_schema_error(self):
+        protocol = RUNNER.load_protocol()
+        self.assertIsInstance(RUNNER.step_seed("generation-seed", "genesis"), str)
+        with self.assertRaises(RUNNER.SchemaError) as raised:
+            RUNNER.validate_json_schema(genesis_ledger(12345), protocol)
+        self.assertEqual(
+            str(raised.exception),
+            "Genesis failed schema validation with 1 problem:\n\n"
+            "1. $.seed\n"
+            "   Expected: string\n"
+            "   Received: integer (12345)",
+        )
+
+    def test_schema_validation_reports_all_problems_together(self):
+        protocol = RUNNER.load_protocol()
+        invalid = genesis_ledger(12345)
+        del invalid["model"]
+        invalid["failure_class"] = "build_failure"
+        invalid["token_accounting"]["input_tokens"] = -1
+        with self.assertRaises(RUNNER.SchemaError) as raised:
+            RUNNER.validate_json_schema(invalid, protocol)
+        reason = str(raised.exception)
+        self.assertIn("Genesis failed schema validation with 4 problems:", reason)
+        self.assertIn("$.seed\n   Expected: string\n   Received: integer (12345)", reason)
+        self.assertIn("$.model\n   Expected: required field\n   Received: missing", reason)
+        self.assertIn('$.failure_class\n   Expected: "none"\n   Received: "build_failure"', reason)
+        self.assertIn("$.token_accounting.input_tokens\n   Expected: number greater than or equal to 0\n   Received: -1", reason)
+
+    def test_valid_schema_record_passes_unchanged(self):
+        protocol = RUNNER.load_protocol()
+        valid = genesis_ledger()
+        original = json.loads(json.dumps(valid))
+        RUNNER.validate_json_schema(valid, protocol)
+        self.assertEqual(valid, original)
 
     def test_scope_is_dynamic_not_clamped_to_profiles(self):
         scope = RUNNER.derive_scope(150)["scope"]

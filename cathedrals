@@ -168,83 +168,161 @@ def _matches_type(value, expected: str) -> bool:
     }[expected]
 
 
-def validate_json_schema(value, schema, root=None, path: str = "$") -> None:
-    """Validate the JSON-Schema subset used by the repository protocol."""
-    root = root or schema
+def _json_type(value) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+
+def _json_value(value) -> str:
+    rendered = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return rendered if len(rendered) <= 160 else rendered[:157] + "..."
+
+
+def _received_type(value) -> str:
+    return f"{_json_type(value)} ({_json_value(value)})"
+
+
+def _child_path(path: str, key: str) -> str:
+    return f"{path}.{key}" if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) else f"{path}[{json.dumps(key)}]"
+
+
+def _deduplicate_schema_errors(errors: list[tuple[str, str, str, str]]) -> list[tuple[str, str, str, str]]:
+    result = []
+    seen = set()
+    for error in errors:
+        key = error[:2]
+        if key not in seen:
+            seen.add(key)
+            result.append(error)
+    return result
+
+
+def _schema_record_type(schema, root):
+    while "$ref" in schema:
+        schema = _resolve_pointer(root, schema["$ref"])
+    return schema.get("properties", {}).get("record_type", {}).get("const")
+
+
+def _collect_schema_errors(value, schema, root, path: str) -> list[tuple[str, str, str, str]]:
+    errors = []
     if "$ref" in schema:
-        validate_json_schema(value, _resolve_pointer(root, schema["$ref"]), root, path)
+        errors.extend(_collect_schema_errors(value, _resolve_pointer(root, schema["$ref"]), root, path))
     for branch in schema.get("allOf", []):
-        validate_json_schema(value, branch, root, path)
-    if "anyOf" in schema:
-        if not any(_schema_matches(value, branch, root, path) for branch in schema["anyOf"]):
-            raise SchemaError(f"{path} does not match any allowed schema")
-    if "oneOf" in schema:
-        matches = sum(_schema_matches(value, branch, root, path) for branch in schema["oneOf"])
-        if matches != 1:
-            raise SchemaError(f"{path} must match exactly one record schema; matched {matches}")
+        errors.extend(_collect_schema_errors(value, branch, root, path))
+    for keyword in ("anyOf", "oneOf"):
+        if keyword not in schema:
+            continue
+        branch_errors = [
+            _deduplicate_schema_errors(_collect_schema_errors(value, branch, root, path))
+            for branch in schema[keyword]
+        ]
+        matches = sum(not failures for failures in branch_errors)
+        candidates = list(range(len(branch_errors)))
+        if isinstance(value, dict) and isinstance(value.get("record_type"), str):
+            matching = [index for index, branch in enumerate(schema[keyword]) if _schema_record_type(branch, root) == value["record_type"]]
+            candidates = matching or candidates
+        closest = min(candidates, key=lambda index: len(branch_errors[index]))
+        if keyword == "anyOf" and not matches:
+            errors.extend(branch_errors[closest])
+        elif keyword == "oneOf" and matches == 0:
+            errors.extend(branch_errors[closest])
+        elif keyword == "oneOf" and matches != 1:
+            errors.append((path, "oneOf", "exactly one allowed schema", f"value matching {matches} schemas"))
     if "if" in schema:
-        branch = schema.get("then") if _schema_matches(value, schema["if"], root, path) else schema.get("else")
+        condition_matches = not _collect_schema_errors(value, schema["if"], root, path)
+        branch = schema.get("then") if condition_matches else schema.get("else")
         if branch:
-            validate_json_schema(value, branch, root, path)
+            errors.extend(_collect_schema_errors(value, branch, root, path))
     expected = schema.get("type")
     if expected:
         types = expected if isinstance(expected, list) else [expected]
         if not any(_matches_type(value, item) for item in types):
-            raise SchemaError(f"{path} must be {' or '.join(types)}")
+            errors.append((path, "type", " or ".join(types), _received_type(value)))
+            return _deduplicate_schema_errors(errors)
     if "const" in schema and value != schema["const"]:
-        raise SchemaError(f"{path} must equal {schema['const']!r}")
+        errors.append((path, "const", _json_value(schema["const"]), _json_value(value)))
     if "enum" in schema and value not in schema["enum"]:
-        raise SchemaError(f"{path} must be one of {schema['enum']!r}")
+        errors.append((path, "enum", f"one of {_json_value(schema['enum'])}", _json_value(value)))
     if isinstance(value, dict):
         required = schema.get("required", [])
         missing = [key for key in required if key not in value]
-        if missing:
-            raise SchemaError(f"{path} is missing required fields: {', '.join(missing)}")
+        errors.extend((_child_path(path, key), "required", "required field", "missing") for key in missing)
         properties = schema.get("properties", {})
         for key, child in value.items():
+            child_path = _child_path(path, key)
             if key in properties:
-                validate_json_schema(child, properties[key], root, f"{path}.{key}")
+                errors.extend(_collect_schema_errors(child, properties[key], root, child_path))
             elif schema.get("additionalProperties") is False:
-                raise SchemaError(f"{path}.{key} is not allowed")
+                errors.append((child_path, "additionalProperties", "field not allowed", "present"))
             elif isinstance(schema.get("additionalProperties"), dict):
-                validate_json_schema(child, schema["additionalProperties"], root, f"{path}.{key}")
-        if len(value) < schema.get("minProperties", 0):
-            raise SchemaError(f"{path} has too few properties")
+                errors.extend(_collect_schema_errors(child, schema["additionalProperties"], root, child_path))
+        if len(value) < schema.get("minProperties", 0) and not missing:
+            errors.append((path, "minProperties", f"at least {schema['minProperties']} properties", f"object with {len(value)} properties"))
     if isinstance(value, list):
         if len(value) < schema.get("minItems", 0):
-            raise SchemaError(f"{path} has too few items")
+            errors.append((path, "minItems", f"at least {schema['minItems']} items", f"array with {len(value)} items"))
         if "maxItems" in schema and len(value) > schema["maxItems"]:
-            raise SchemaError(f"{path} has too many items")
+            errors.append((path, "maxItems", f"at most {schema['maxItems']} items", f"array with {len(value)} items"))
         if "items" in schema:
             for index, child in enumerate(value):
-                validate_json_schema(child, schema["items"], root, f"{path}[{index}]")
+                errors.extend(_collect_schema_errors(child, schema["items"], root, f"{path}[{index}]"))
         if schema.get("uniqueItems") and len({json.dumps(item, sort_keys=True) for item in value}) != len(value):
-            raise SchemaError(f"{path} contains duplicate items")
+            errors.append((path, "uniqueItems", "unique items", "array containing duplicates"))
     if isinstance(value, str):
         if len(value) < schema.get("minLength", 0):
-            raise SchemaError(f"{path} is empty")
+            errors.append((path, "minLength", f"string length of at least {schema['minLength']}", f"string with length {len(value)}"))
         if "maxLength" in schema and len(value) > schema["maxLength"]:
-            raise SchemaError(f"{path} is too long")
+            errors.append((path, "maxLength", f"string length of at most {schema['maxLength']}", f"string with length {len(value)}"))
         if "pattern" in schema and not re.search(schema["pattern"], value):
-            raise SchemaError(f"{path} does not match {schema['pattern']}")
+            errors.append((path, "pattern", f"string matching {_json_value(schema['pattern'])}", _json_value(value)))
         if schema.get("format") == "date-time":
             try:
                 dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-            except ValueError as error:
-                raise SchemaError(f"{path} is not an ISO date-time") from error
+            except ValueError:
+                errors.append((path, "format", "ISO date-time", _json_value(value)))
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if "minimum" in schema and value < schema["minimum"]:
-            raise SchemaError(f"{path} is below its minimum")
+            errors.append((path, "minimum", f"number greater than or equal to {schema['minimum']}", _json_value(value)))
         if "maximum" in schema and value > schema["maximum"]:
-            raise SchemaError(f"{path} is above its maximum")
+            errors.append((path, "maximum", f"number less than or equal to {schema['maximum']}", _json_value(value)))
+    return _deduplicate_schema_errors(errors)
+
+
+def _validation_subject(value) -> str:
+    if isinstance(value, dict):
+        name = value.get("step_phase") if value.get("record_type") == "ledger_entry" else value.get("record_type")
+        if isinstance(name, str):
+            return name.replace("_", " ").capitalize()
+    return "Value"
+
+
+def validate_json_schema(value, schema, root=None, path: str = "$") -> None:
+    """Validate the JSON-Schema subset used by the repository protocol."""
+    errors = _collect_schema_errors(value, schema, root or schema, path)
+    if not errors:
+        return
+    count = len(errors)
+    lines = [f"{_validation_subject(value)} failed schema validation with {count} {'problem' if count == 1 else 'problems'}:", ""]
+    for index, (error_path, _keyword, expected, received) in enumerate(errors, 1):
+        lines.extend((f"{index}. {error_path}", f"   Expected: {expected}", f"   Received: {received}", ""))
+    raise SchemaError("\n".join(lines).rstrip())
 
 
 def _schema_matches(value, schema, root, path: str) -> bool:
-    try:
-        validate_json_schema(value, schema, root, path)
-        return True
-    except SchemaError:
-        return False
+    return not _collect_schema_errors(value, schema, root, path)
 
 
 def snapshot_root(run_dir: Path) -> Path:
@@ -1445,8 +1523,8 @@ def provider_response(transport, url: str, payload: dict, timeout: float, *, sta
     return response, normalize_provider_response(response)
 
 
-def step_seed(generation_seed: str, step_id: str) -> int:
-    return int.from_bytes(hashlib.sha256(f"{generation_seed}:{step_id}".encode()).digest()[:4], "big")
+def step_seed(generation_seed: str, step_id: str) -> str:
+    return str(int.from_bytes(hashlib.sha256(f"{generation_seed}:{step_id}".encode()).digest()[:4], "big"))
 
 
 def request_record(
