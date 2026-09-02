@@ -66,7 +66,6 @@
         "generation_timestamp",
         "lm_studio_base_url",
         "model",
-        "engine_commit",
         "generation_seed"
       ],
       "properties": {
@@ -80,7 +79,6 @@
         "generation_timestamp": { "$ref": "#/$defs/timestamp" },
         "lm_studio_base_url": { "type": "string", "pattern": "^https?://" },
         "model": { "$ref": "#/$defs/nonEmptyString" },
-        "engine_commit": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
         "generation_seed": { "$ref": "#/$defs/nonEmptyString" }
       }
     },
@@ -115,24 +113,14 @@
           "additionalProperties": false,
           "required": [
             "work_id",
-            "engine_base_branch",
-            "engine_base_commit",
-            "engine_commit_sha",
-            "engine_config_hashes",
+            "path",
             "work_seed",
             "structural_seed",
             "geomancy_seed"
           ],
           "properties": {
             "work_id": { "const": "hospice-annex-v01" },
-            "engine_base_branch": { "$ref": "#/$defs/nonEmptyString" },
-            "engine_base_commit": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
-            "engine_commit_sha": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
-            "engine_config_hashes": {
-              "type": "object",
-              "minProperties": 1,
-              "additionalProperties": { "$ref": "#/$defs/hash" }
-            },
+            "path": { "const": "engine-snapshot" },
             "work_seed": { "$ref": "#/$defs/nonEmptyString" },
             "structural_seed": { "$ref": "#/$defs/nonEmptyString" },
             "geomancy_seed": { "$ref": "#/$defs/nonEmptyString" }
@@ -1284,7 +1272,7 @@
         "step_phase": {
           "enum": [
             "preflight",
-            "engine_freeze",
+            "engine_snapshot",
             "genesis",
             "architecture",
             "literary_packet",

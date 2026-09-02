@@ -8,9 +8,9 @@ Committed genesis, architecture, and packet records collectively form generated-
 canon. `schema-generation/` and `prose/` are deterministic projections, never later
 creative inputs except as retrieval views of their immutable sources.
 
-## Generation-Branch Layout
+## Generated-Work Layout
 
-`main` keeps downstream directories empty. A generation branch or release may contain:
+A successful generation may publish:
 
 ```text
 generated-work/<generation-id>/
@@ -136,7 +136,7 @@ JSON Schema cannot enforce the whole run. Deterministic validation must also con
 - generation IDs, protocol versions, sequences, hash chains, and canonical-state
   parent hashes agree
 - the run manifest and generation brief never changed
-- engine hashes remain identical to the preflight snapshot
+- all generation-time engine reads resolve inside the run-local snapshot
 - every committed creative record still matches its ledger output hash
 - all technical claimant slots appear exactly once in genesis
 - all IDs are unique and every claimant, character, arc, scene, artifact, ending,

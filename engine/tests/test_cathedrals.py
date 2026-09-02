@@ -5,6 +5,7 @@ import dataclasses
 import importlib.machinery
 import importlib.util
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -193,6 +194,33 @@ class CathedralsRunnerTests(unittest.TestCase):
         with self.assertRaises(RUNNER.CathedralsError):
             RUNNER.choose_model(["writer"], override="missing")
 
+    def test_provider_response_normalization_is_shared_and_strict(self):
+        def response(message, finish_reason="stop"):
+            return {"choices": [{"finish_reason": finish_reason, "message": message}]}
+
+        self.assertEqual(
+            RUNNER.normalize_provider_response(response({"content": '{"source":"content"}', "reasoning": "{}", "reasoning_content": "[]"})),
+            '{"source":"content"}',
+        )
+        for field in ("reasoning", "reasoning_content"):
+            self.assertEqual(RUNNER.normalize_provider_response(response({"content": "", field: '{"result":"PASS"}'})), '{"result":"PASS"}')
+        with self.assertRaisesRegex(RUNNER.SchemaError, "conflicting reasoning"):
+            RUNNER.normalize_provider_response(response({"content": "", "reasoning": "{}", "reasoning_content": "[]"}))
+        with self.assertRaisesRegex(RUNNER.SchemaError, "complete JSON"):
+            RUNNER.normalize_provider_response(response({"content": None, "reasoning": 'notes {"result":"PASS"}'}))
+        with self.assertRaisesRegex(RUNNER.SchemaError, "truncated"):
+            RUNNER.normalize_provider_response(response({"content": "{}"}, "length"))
+        for empty in (None, response({"content": "", "reasoning": "", "reasoning_content": None})):
+            with self.assertRaises(RUNNER.CathedralsError) as raised:
+                RUNNER.normalize_provider_response(empty)
+            self.assertNotIsInstance(raised.exception, RUNNER.IntegrityError)
+            self.assertEqual(raised.exception.failure_class, "provider_before_creative_output")
+        with self.assertRaises(RUNNER.CathedralsError) as raised:
+            RUNNER.provider_response(lambda *_args, **_kwargs: None, "http://offline.invalid", {}, 1)
+        self.assertNotIsInstance(raised.exception, RUNNER.IntegrityError)
+        self.assertIn("provider_response", RUNNER.request_record.__code__.co_names)
+        self.assertIn("provider_response", RUNNER.request_analysis.__code__.co_names)
+
     def test_scope_is_dynamic_not_clamped_to_profiles(self):
         scope = RUNNER.derive_scope(150)["scope"]
         self.assertEqual(scope["possible_scene_count"], 150)
@@ -215,82 +243,104 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(node, Path("/usr/bin/node"))
         self.assertEqual(npm, Path("/usr/bin/npm"))
 
-    def test_new_generation_branches_from_configured_engine_base(self):
-        calls = []
-
-        def fake_git(*args, check=True):
-            calls.append(args)
-            if args[:2] == ("rev-parse", "--show-toplevel"):
-                return str(ROOT)
-            if args[:2] == ("status", "--porcelain"):
-                return ""
-            if args[:2] == ("show-ref", "--verify"):
-                return "base exists" if args[-1] == "refs/heads/main" else ""
-            if args[:2] == ("rev-parse", "HEAD"):
-                return "a" * 40
-            return ""
-
-        with mock.patch.object(RUNNER, "git", side_effect=fake_git):
-            branch, base = RUNNER.prepare_generation_branch("run_fixture")
-        self.assertEqual((branch, base), ("generation/run_fixture", "a" * 40))
-        self.assertIn(("switch", "main"), calls)
-        self.assertIn(("switch", "-c", "generation/run_fixture", "a" * 40), calls)
-
-    def test_resume_switches_to_frozen_generation_branch(self):
+    def test_snapshots_accept_zip_dirty_and_untracked_installations(self):
         with tempfile.TemporaryDirectory() as temporary:
-            run = Path(temporary)
-            (run / "state").mkdir()
-            state = RUNNER.initial_run_state("generation_test", "generation/frozen", "a" * 64, "b" * 64, "model")
-            RUNNER.save_state(run, state)
-            RUNNER.write_json(run / "generation-brief.json", {"lm_studio_base_url": "http://127.0.0.1:1234", "model": "model"})
-            calls = []
+            root = Path(temporary) / "zip-install"
+            run = Path(temporary) / "run"
+            (root / "engine/.git").mkdir(parents=True)
+            (root / "cathedrals").write_text("locally modified launcher\n")
+            (root / "engine/prompt.md").write_text("locally modified engine\n")
+            (root / "engine/untracked.md").write_text("new local engine file\n")
+            (root / "engine/.git/HEAD").write_text("arbitrary branch\n")
+            run.mkdir()
+            with mock.patch.object(RUNNER, "ROOT", root):
+                RUNNER.copy_engine_snapshot(run)
+            snapshot = run / "engine-snapshot"
+            self.assertEqual((snapshot / "cathedrals").read_text(), "locally modified launcher\n")
+            self.assertEqual((snapshot / "engine/untracked.md").read_text(), "new local engine file\n")
+            self.assertFalse((snapshot / "engine/.git").exists())
+            self.assertFalse((root / ".git").exists())
 
-            def fake_git(*args, check=True):
-                calls.append(args)
-                return ""
+    def test_multiple_new_runs_use_their_own_local_engine_snapshots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shutil.copy2(ROOT / "cathedrals", root / "cathedrals")
+            shutil.copytree(ROOT / "engine", root / "engine")
+            (root / "engine/local-new.md").write_text("local engine input\n")
+            runtime = root / ".cathedrals"
+            runs = runtime / "runs"
+            with mock.patch.object(RUNNER, "ROOT", root), \
+                 mock.patch.object(RUNNER, "RUNTIME_ROOT", runtime), \
+                 mock.patch.object(RUNNER, "RUNS_ROOT", runs), \
+                 mock.patch.object(RUNNER, "generation_id", side_effect=("generation_a", "generation_b")):
+                run_a = RUNNER.create_run(RUNNER.FrozenInputs(possible_scene_count=1), "http://offline.invalid", "offline", lambda _line: None)
+                (root / "engine/added-between-runs.md").write_text("later local engine input\n")
+                run_b = RUNNER.create_run(RUNNER.FrozenInputs(possible_scene_count=1), "http://offline.invalid", "offline", lambda _line: None)
+            snapshot_a = run_a / "engine-snapshot"
+            snapshot_b = run_b / "engine-snapshot"
+            self.assertTrue((snapshot_a / "engine/local-new.md").exists())
+            self.assertFalse((snapshot_a / "engine/added-between-runs.md").exists())
+            self.assertTrue((snapshot_b / "engine/added-between-runs.md").exists())
+            self.assertEqual(
+                set(RUNNER.read_json(run_a / "run-manifest.json")["engine_snapshot"]),
+                {"work_id", "path", "work_seed", "structural_seed", "geomancy_seed"},
+            )
+            RUNNER.verify_engine_snapshot(run_a)
+            RUNNER.verify_engine_snapshot(run_b)
 
-            with mock.patch.object(RUNNER, "current_branch", return_value="generation/older"), \
-                 mock.patch.object(RUNNER, "git", side_effect=fake_git), \
-                 mock.patch.object(RUNNER, "reconcile_run"), \
-                 mock.patch.object(RUNNER, "preflight_model_capacity"), \
-                 mock.patch.object(RUNNER, "http_json", return_value={"data": [{"id": "model"}]}):
-                RUNNER.ensure_resume_ready(run, transport=RUNNER.http_json)
-        self.assertIn(("switch", "generation/frozen"), calls)
+    def test_repeated_generations_keep_independent_engine_snapshots_and_ignore_branch_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "engine").mkdir()
+            (root / ".git").mkdir()
+            (root / ".git/HEAD").write_text("branch one\n")
+            (root / "cathedrals").write_text("launcher A\n")
+            (root / "engine/prompt.md").write_text("engine A\n")
+            run_a, run_b = root / "run-a", root / "run-b"
+            run_a.mkdir()
+            run_b.mkdir()
+            with mock.patch.object(RUNNER, "ROOT", root):
+                RUNNER.copy_engine_snapshot(run_a)
+                (root / ".git/HEAD").write_text("branch two\n")
+                (root / "cathedrals").write_text("launcher B\n")
+                (root / "engine/prompt.md").write_text("engine B\n")
+                (root / "engine/new.md").write_text("new in B\n")
+                RUNNER.copy_engine_snapshot(run_b)
+            self.assertEqual((run_a / "engine-snapshot/engine/prompt.md").read_text(), "engine A\n")
+            self.assertFalse((run_a / "engine-snapshot/engine/new.md").exists())
+            self.assertEqual((run_b / "engine-snapshot/engine/prompt.md").read_text(), "engine B\n")
+            self.assertTrue((run_b / "engine-snapshot/engine/new.md").exists())
+            self.assertNotIn("branch", RUNNER.initial_run_state("generation_test", "a" * 64, "b" * 64, "model"))
 
-    def test_publication_stages_only_generation_output_and_creates_one_commit(self):
+    def test_resume_and_publication_do_not_invoke_repository_tools(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             run = root / ".cathedrals/runs/generation_test"
-            destination = root / "generated-work/generation_test"
+            project = run / "projection/web"
             (run / "state").mkdir(parents=True)
-            (destination / "web").mkdir(parents=True)
-            (destination / "web/index.html").write_text("fixture", encoding="utf-8")
-            RUNNER.save_state(run, RUNNER.initial_run_state("generation_test", "generation/generation_test", "a" * 64, "b" * 64, "model"))
-            calls = []
-
-            def fake_git(*args, check=True):
-                calls.append(args)
-                if args[:3] == ("diff", "--cached", "--name-only"):
-                    return "generated-work/generation_test/web/index.html"
-                if args[:2] == ("rev-parse", "HEAD"):
-                    return "c" * 40
-                return ""
-
+            project.mkdir(parents=True)
+            (project / "index.html").write_text("fixture")
+            RUNNER.save_state(run, RUNNER.initial_run_state("generation_test", "a" * 64, "b" * 64, "model"))
+            RUNNER.write_json(run / "generation-brief.json", {"lm_studio_base_url": "http://127.0.0.1:1234", "model": "model"})
+            transport = mock.Mock(return_value={"data": [{"id": "model"}]})
             with mock.patch.object(RUNNER, "ROOT", root), \
-                 mock.patch.object(RUNNER, "current_branch", return_value="generation/generation_test"), \
-                 mock.patch.object(RUNNER, "git", side_effect=fake_git):
-                commit = RUNNER.commit_published_generation(run, destination)
-        self.assertEqual(commit, "c" * 40)
-        self.assertIn(("add", "--", "generated-work/generation_test"), calls)
-        self.assertEqual(sum(call[:1] == ("commit",) for call in calls), 1)
-        self.assertNotIn("unrelated.txt", " ".join(" ".join(call) for call in calls))
+                 mock.patch.object(RUNNER, "reconcile_run"), \
+                 mock.patch.object(RUNNER, "preflight_model_capacity"), \
+                 mock.patch.object(RUNNER.subprocess, "run", side_effect=AssertionError("external command invoked")):
+                RUNNER.ensure_resume_ready(run, transport=transport)
+                destination = RUNNER.publish_success(run, project, {"run_status": "READY_TO_PLAY"})
+            self.assertEqual(destination, root / "generated-work/generation_test")
+            self.assertTrue((destination / "web/index.html").exists())
+            launcher = (ROOT / "cathedrals").read_text()
+            self.assertNotIn("def " + "git" + "(", launcher)
+            self.assertNotIn('run_command(["git"', launcher)
 
     def test_failed_generation_does_not_publish_tracked_provenance(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             run = root / ".cathedrals/runs/generation_test"
             (run / "state").mkdir(parents=True)
-            RUNNER.save_state(run, RUNNER.initial_run_state("generation_test", "generation/generation_test", "a" * 64, "b" * 64, "model"))
+            RUNNER.save_state(run, RUNNER.initial_run_state("generation_test", "a" * 64, "b" * 64, "model"))
             failed = {"run_status": "FAILED_GENERATION", "completed_at": "2026-01-01T00:00:00Z"}
             with mock.patch.object(RUNNER, "ROOT", root), mock.patch.object(RUNNER, "make_finalization", return_value=failed):
                 RUNNER.finalize_failure(run, RUNNER.CathedralsError("test", "rejected", "artistic_rejection"))
@@ -400,7 +450,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
             (run / "state").mkdir()
-            RUNNER.save_state(run, RUNNER.initial_run_state("generation_test", "generation/test", "a" * 64, "b" * 64, "model"))
+            RUNNER.save_state(run, RUNNER.initial_run_state("generation_test", "a" * 64, "b" * 64, "model"))
             RUNNER.append_deterministic_step(run, "preflight", "preflight", "c" * 64)
             first = (run / "ledger.jsonl").read_bytes()
             RUNNER.append_deterministic_step(run, "preflight", "preflight", "d" * 64)
@@ -543,7 +593,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             run = Path(temporary) / "generation_test"
             for name in ("state", "committed", "planning"):
                 (run / name).mkdir(parents=True)
-            state = RUNNER.initial_run_state("generation_test", "generation/test", "a" * 64, "b" * 64, "model")
+            state = RUNNER.initial_run_state("generation_test", "a" * 64, "b" * 64, "model")
             RUNNER.save_state(run, state)
             one = constraint_event(1, "obligation", first, "future_obligation")
             two = constraint_event(2, "obligation", second, "future_obligation")
@@ -674,7 +724,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             run = Path(temporary) / "generation_test"
             for name in ("state", "committed/0001-architecture", "planning"):
                 (run / name).mkdir(parents=True)
-            RUNNER.save_state(run, RUNNER.initial_run_state("generation_test", "generation/test", "a" * 64, "b" * 64, "model"))
+            RUNNER.save_state(run, RUNNER.initial_run_state("generation_test", "a" * 64, "b" * 64, "model"))
             RUNNER.write_json(run / "committed/0001-architecture/record.json", architecture)
             debt = constraint_event(1, "obligation", obligation(), "future_obligation")
             _, _, obligations, _, _ = RUNNER.project_constraint_state([debt])

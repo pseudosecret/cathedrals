@@ -9,9 +9,9 @@ engine. Do not create generated work or mutate downstream projections.
 
 After `./cathedrals` collects and freezes one explicit experience request:
 
-1. switch to the configured clean engine base branch, record its commit, and create an independent generation branch and generation ID
+1. create a generation ID and copy the current local launcher and engine into the run directory
 2. freeze the high-level request as `generation_brief.mutable: false`
-3. freeze/hash engine inputs, seeds, explicit scene scope, model, derived budgets, and traversal strategy
+3. use only the run-local engine copy and freeze seeds, explicit scene scope, model, derived budgets, and traversal strategy
 4. preflight every planned call against per-step and cumulative limits
 5. write the immutable run manifest and initialize the hash-chained ledger
 6. generate and commit genesis with `engine/prompts/generation-genesis.md`
@@ -20,7 +20,7 @@ After `./cathedrals` collects and freezes one explicit experience request:
    `generation-ending-packet.md`
 9. after each commit apply constraint deltas and recompute feasibility without changing canon
 10. project and mechanically validate, then build and validate the complete static work
-11. artistically accept or reject; publish and commit only after acceptance
+11. artistically accept or reject; publish only after acceptance
 12. finalize only as `READY_TO_PLAY` or `FAILED_GENERATION`
 
 ## Allowed Actions
@@ -41,7 +41,7 @@ After `./cathedrals` collects and freezes one explicit experience request:
 - treat artistic weakness as technical failure
 - publish or play a partial or failed work
 - generate missing content during play
-- place generated work on `main`
+- publish generated work anywhere except `generated-work/<generation-id>/`
 
 ## Failure
 

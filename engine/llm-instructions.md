@@ -10,7 +10,7 @@ literal README wording remains textually tense with multiple calls.
 
 Use active truth in this order: root README; this file; artistic constitution;
 `engine/canon/`; `work-instance.yaml`; other active engine contracts; immutable
-committed generation records on their generation branch; deterministic projections;
+committed generation records in their run directory; deterministic projections;
 trackers. Historical files are evidence, not executable truth.
 
 ## Authorship Boundary
@@ -112,8 +112,8 @@ build validation has passed. Terminal state is `READY_TO_PLAY` or
 `FAILED_GENERATION`; no partial playable state exists.
 
 A rejected complete work may retain its ignored static build for diagnosis. It remains
-nonplayable and unpublished. Accepted work is published and committed only on its
-independent generation branch created from the configured engine base commit.
+nonplayable and unpublished. Accepted work is copied atomically to its own
+`generated-work/<generation-id>/` directory.
 
 Astro remains static. At play time no LLM, API, database, server-side story state,
 creative generation, branch completion, or prose rewriting occurs. Every choice

@@ -10,7 +10,7 @@ When active files conflict, use:
 4. `engine/canon/`
 5. `engine/data/work-instance.yaml`
 6. other active `engine/docs/`, prompts, and templates
-7. immutable committed generation records on their generation branch
+7. immutable committed generation records in their run directory
 8. deterministic projections in `schema-generation/` and `prose/`
 9. tracker state
 
@@ -32,7 +32,7 @@ particular characters, incident, routes, artifacts, revelations, or endings.
 ## Generated Work Canon
 
 Generated work canon begins when genesis commits and grows only through immutable,
-causally forward architecture and packet commits. On a generation branch it owns
+causally forward architecture and packet commits. Within its run it owns
 exact fictional facts, claimant profiles, characters, arcs, scenes, artifacts,
 choices, endings, poetry, and prose.
 
@@ -48,20 +48,20 @@ engine canon merely because it was accepted once.
 - `.cathedrals/runs/<generation-id>/` is ignored operational state used for atomic
   commits, resume, constraint retrieval, prospective planning, validation,
   pre-publication builds, and rejected-work diagnostic builds.
+- `.cathedrals/runs/<generation-id>/engine-snapshot/` is the run-local copy of the
+  launcher and engine used after the run starts.
 - root `schema-generation/`, `prose/`, and `src/` remain legacy projection scaffolds;
   the executable does not mutate them during an engine revision.
 
 No downstream directory is authoritative during `engine_revision`. Important story
 truth must never live only in an Astro route.
 
-## Main Branch
+## Source and Generated Work
 
-`main` contains the machine, not a canonical generated story. Generated runs and
-their projections belong on independent generation branches created directly from the
-configured engine base commit. Successful publication creates one final commit that
-stages only the new generated-work tree. Failed runs remain ignored and do not publish
-tracked provenance by default. Empty
-downstream directories may remain on `main` as destination scaffolding.
+The current local launcher and engine are legitimate inputs, whether modified or
+unmodified. Each new run copies them into its own run directory and never consults the
+installation again. Successful publication copies only the new generated-work tree.
+Failed runs remain under `.cathedrals/` and do not publish by default.
 
 ## Immutability
 

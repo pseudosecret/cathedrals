@@ -172,11 +172,11 @@ HTML while immutable source bytes remain exact. Genesis art direction must valid
 produce deterministic work-specific CSS through bounded mappings, retain visible
 focus and readable contrast, and expose no arbitrary CSS or script surface.
 
-New generation branches must start from the configured engine base commit, never a
-prior generation branch. Successful publication stages only its own
-`generated-work/<generation-id>/` tree and creates one final generation commit.
-Failed runs remain under ignored `.cathedrals/runs/` by default and leave tracked
-paths clean.
+Each new generation must copy the current local launcher and engine into its own
+run-local snapshot. Installation changes after Run A starts cannot alter Run A, and a
+later Run B receives a new copy. Successful publication writes only its own
+`generated-work/<generation-id>/` tree. Failed runs remain under `.cathedrals/runs/` by
+default.
 
 A complete mechanically valid work must build before whole-work artistic acceptance.
 Artistic rejection remains `FAILED_GENERATION`, `playable: false`, and outside accepted

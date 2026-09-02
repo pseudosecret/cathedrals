@@ -8,7 +8,7 @@ artifacts, prose, a graph, or Astro story pages.
 
 ## End-User Run
 
-From a clean repository, run:
+From the Cathedrals installation, run:
 
 ```bash
 ./cathedrals
@@ -21,9 +21,9 @@ freezes, the executable asks no creative questions.
 
 It then owns this sequence:
 
-1. Return to the configured clean engine base branch, record its exact commit, and
-   create an independent generation branch and generation ID; never generate on `main`.
-2. Verify the clean engine snapshot and record its branch, commit, and config hashes.
+1. Create an independent generation ID and copy the current local launcher and engine
+   into `.cathedrals/runs/<generation-id>/engine-snapshot/`.
+2. Use that run-local snapshot for prompts, schemas, canon, formats, and resume.
 3. Freeze the initial experience request as `generation_brief.mutable: false`.
 4. Derive resource budgets from the explicit possible-scene scope; profile labels are
    guidance and never clamp the requested scope.
@@ -44,7 +44,7 @@ It then owns this sequence:
     graph, technical destinations, state, counts, Markdown, constraint provenance, and budgets.
 14. Compile and validate the complete static Astro site.
 15. Perform whole-work artistic acceptance without a repair prompt.
-16. On success publish and commit only the new generated-work tree. Write
+16. On success publish only the new generated-work tree. Write
     `finalization.json`: `READY_TO_PLAY` only after every barrier passes;
     otherwise `FAILED_GENERATION` with `playable: false`.
 
@@ -56,7 +56,8 @@ completes or dies.
 
 The runner talks directly to LM Studio. It does not invoke Pi, Codex, CrewAI, or an
 agent framework. Interrupted runs are detected under `.cathedrals/runs/`; resuming
-reuses the frozen model, prompt hashes, seeds, ledger, and committed records.
+reuses the run-local engine snapshot, frozen model, prompt hashes, seeds, ledger, and
+committed records.
 
 ## Provenance and Counters
 

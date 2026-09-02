@@ -26,17 +26,15 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-ENGINE = ROOT / "engine"
-PROTOCOL_PATH = ENGINE / "data/generation-protocol.schema.json"
 RUNTIME_ROOT = ROOT / ".cathedrals"
 RUNS_ROOT = RUNTIME_ROOT / "runs"
 DEFAULT_LM_STUDIO_URL = "http://127.0.0.1:1234"
-ENGINE_BASE_BRANCH = "main"
 NODE_VERSION = "22.23.2"
 ASTRO_VERSION = "7.2.9"
 MARKDOWN_IT_VERSION = "14.1.0"
 NODE_MINIMUM = (22, 12, 0)
 TERMINAL_STATES = {"READY_TO_PLAY", "FAILED_GENERATION"}
+RETRYABLE_PROVIDER_FAILURES = {"transport_before_response", "provider_before_creative_output"}
 FORMAT_ALIASES = {
     "web": "web",
     "visualnovel": "visualnovel",
@@ -249,8 +247,17 @@ def _schema_matches(value, schema, root, path: str) -> bool:
         return False
 
 
-def load_protocol():
-    return read_json(PROTOCOL_PATH)
+def snapshot_root(run_dir: Path) -> Path:
+    return run_dir / "engine-snapshot"
+
+
+def engine_root(run_dir: Path | None = None) -> Path:
+    snapshot = snapshot_root(run_dir) / "engine" if run_dir else None
+    return snapshot if snapshot and snapshot.is_dir() else ROOT / "engine"
+
+
+def load_protocol(run_dir: Path | None = None):
+    return read_json(engine_root(run_dir) / "data/generation-protocol.schema.json")
 
 
 def record_schema(record_type: str, protocol=None):
@@ -448,24 +455,6 @@ def run_command(args, *, cwd=ROOT, env=None, capture=True) -> subprocess.Complet
     )
 
 
-def git(*args, check=True) -> str:
-    result = run_command(["git", *args])
-    if check and result.returncode:
-        raise CathedralsError("Git preflight", result.stderr.strip() or result.stdout.strip())
-    return result.stdout.strip()
-
-
-def verify_repo_safe() -> None:
-    top = Path(git("rev-parse", "--show-toplevel")).resolve()
-    if top != ROOT:
-        raise CathedralsError("Git preflight", "Run ./cathedrals from this repository root.")
-    if git("status", "--porcelain"):
-        raise CathedralsError(
-            "Git preflight",
-            "The repository has uncommitted changes. Commit or stash them before starting a new generation.",
-        )
-
-
 def ensure_runtime_layout() -> None:
     for path in (
         RUNTIME_ROOT / "toolchains/node",
@@ -476,17 +465,21 @@ def ensure_runtime_layout() -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
-def engine_hashes() -> dict[str, str]:
-    paths = [ROOT / relative for relative in git("ls-files", "engine", "cathedrals").splitlines()]
-    return {str(path.relative_to(ROOT)): sha256_file(path) for path in sorted(paths)}
+def copy_engine_snapshot(run_dir: Path) -> None:
+    destination = snapshot_root(run_dir)
+    ignore = shutil.ignore_patterns(
+        ".git", ".cathedrals", "generated-work", "__pycache__", "*.pyc", ".DS_Store",
+        "*~", "*.swp", "*.swo", ".#*", "#*#",
+    )
+    destination.mkdir()
+    shutil.copy2(ROOT / "cathedrals", destination / "cathedrals")
+    shutil.copytree(ROOT / "engine", destination / "engine", ignore=ignore)
 
 
-def verify_engine_freeze(run_dir: Path) -> None:
-    frozen = read_json(run_dir / "run-manifest.json")["engine_snapshot"]
-    if git("rev-parse", "HEAD") != frozen["engine_commit_sha"]:
-        raise IntegrityError("The generation branch HEAD changed after engine freeze")
-    if engine_hashes() != frozen["engine_config_hashes"]:
-        raise IntegrityError("Engine canon or the executable changed after generation began")
+def verify_engine_snapshot(run_dir: Path) -> None:
+    root = snapshot_root(run_dir)
+    if not (root / "cathedrals").is_file() or not (root / "engine/data/generation-protocol.schema.json").is_file():
+        raise IntegrityError("The run-local engine snapshot is missing")
 
 
 def generation_id(project_name: str, timestamp: str | None = None) -> str:
@@ -494,31 +487,9 @@ def generation_id(project_name: str, timestamp: str | None = None) -> str:
     return f"{slugify(project_name)}_{stamp}_{secrets.token_hex(3)}"
 
 
-def create_generation_branch(identifier: str, base_commit: str) -> str:
-    branch = f"generation/{identifier}"
-    if git("show-ref", "--verify", f"refs/heads/{branch}", check=False):
-        raise CathedralsError("Git preflight", f"Generation branch already exists: {branch}")
-    git("switch", "-c", branch, base_commit)
-    return branch
-
-
-def prepare_generation_branch(identifier: str) -> tuple[str, str]:
-    verify_repo_safe()
-    if not git("show-ref", "--verify", f"refs/heads/{ENGINE_BASE_BRANCH}", check=False):
-        raise CathedralsError("Git preflight", f"Configured engine base branch does not exist: {ENGINE_BASE_BRANCH}")
-    git("switch", ENGINE_BASE_BRANCH)
-    verify_repo_safe()
-    base_commit = git("rev-parse", "HEAD")
-    return create_generation_branch(identifier, base_commit), base_commit
-
-
-def current_branch() -> str:
-    return git("branch", "--show-current")
-
-
 def active_format_contract(requested_format: str) -> Path:
     normalize_requested_format(requested_format)
-    return ENGINE / "formats/web.md"
+    return ROOT / "engine/formats/web.md"
 
 
 def renderer_for(requested_format: str) -> str:
@@ -526,12 +497,11 @@ def renderer_for(requested_format: str) -> str:
     return "astro"
 
 
-def initial_run_state(identifier: str, branch: str, brief_hash: str, manifest_hash: str, model: str) -> dict:
+def initial_run_state(identifier: str, brief_hash: str, manifest_hash: str, model: str) -> dict:
     return {
         "generation_id": identifier,
-        "branch": branch,
         "status": "RUNNING",
-        "stage": "ENGINE_FROZEN",
+        "stage": "ENGINE_SNAPSHOTTED",
         "brief_hash": brief_hash,
         "manifest_hash": manifest_hash,
         "ledger_sequence": 0,
@@ -577,7 +547,7 @@ def compute_entry_hash(entry: dict) -> str:
 
 
 def append_ledger_entry(run_dir: Path, entry: dict) -> None:
-    protocol = load_protocol()
+    protocol = load_protocol(run_dir)
     validate_json_schema(entry, protocol["$defs"]["ledgerEntry"], protocol)
     entries = ledger_entries(run_dir)
     expected_sequence = len(entries) + 1
@@ -707,22 +677,18 @@ def append_deterministic_step(
 
 def create_run(frozen: FrozenInputs, base_url: str, model: str, output_fn=print) -> Path:
     identifier = generation_id(frozen.project_name)
-    branch, base_commit = prepare_generation_branch(identifier)
     ensure_runtime_layout()
     run_dir = RUNS_ROOT / identifier
     for child in ("raw", "committed", "constraints", "planning", "state", "logs", "validation", ".staging"):
         (run_dir / child).mkdir(parents=True, exist_ok=False)
+    copy_engine_snapshot(run_dir)
     timestamp = utc_now()
     seed = secrets.token_hex(16)
-    commit = git("rev-parse", "HEAD")
-    if commit != base_commit:
-        raise IntegrityError("Generation branch did not start from the configured engine base commit")
     brief = dataclasses.asdict(frozen) | {
         "generation_id": identifier,
         "generation_timestamp": timestamp,
         "lm_studio_base_url": base_url,
         "model": model,
-        "engine_commit": commit,
         "generation_seed": seed,
     }
     brief_hash = sha256_bytes(canonical_json(brief))
@@ -736,10 +702,7 @@ def create_run(frozen: FrozenInputs, base_url: str, model: str, output_fn=print)
         "generation_brief_hash": brief_hash,
         "engine_snapshot": {
             "work_id": "hospice-annex-v01",
-            "engine_base_branch": ENGINE_BASE_BRANCH,
-            "engine_base_commit": base_commit,
-            "engine_commit_sha": commit,
-            "engine_config_hashes": engine_hashes(),
+            "path": "engine-snapshot",
             "work_seed": seed,
             "structural_seed": sha256_bytes(f"structure:{seed}".encode()),
             "geomancy_seed": sha256_bytes(f"geomancy:{seed}".encode()),
@@ -772,18 +735,17 @@ def create_run(frozen: FrozenInputs, base_url: str, model: str, output_fn=print)
             "playable_status": "READY_TO_PLAY",
         },
     }
-    protocol = load_protocol()
+    protocol = load_protocol(run_dir)
     validate_json_schema(manifest, protocol["$defs"]["runManifest"], protocol)
     manifest_hash = sha256_bytes(canonical_json(manifest))
     write_json(run_dir / "generation-brief.json", brief, mode=0o444, exclusive=True)
     write_json(run_dir / "run-manifest.json", manifest, mode=0o444, exclusive=True)
     frozen_context = run_dir / "state/frozen-engine-context.txt"
-    write_atomic(frozen_context, engine_context().encode(), mode=0o444, exclusive=True)
-    run_state = initial_run_state(identifier, branch, brief_hash, manifest_hash, model)
-    run_state["frozen_engine_context_hash"] = sha256_file(frozen_context)
+    write_atomic(frozen_context, engine_context(run_dir).encode(), mode=0o444, exclusive=True)
+    run_state = initial_run_state(identifier, brief_hash, manifest_hash, model)
     save_state(run_dir, run_state)
     append_deterministic_step(run_dir, "preflight", "preflight", brief_hash)
-    append_deterministic_step(run_dir, "engine_freeze", "engine_freeze", manifest_hash)
+    append_deterministic_step(run_dir, "engine_snapshot", "engine_snapshot", manifest_hash)
     output_fn(f"Generation: {identifier}")
     output_fn("Format: web")
     output_fn(f"Model: {model}")
@@ -888,7 +850,7 @@ def make_constraint_events(run_dir: Path, record: dict, commit_id: str, record_h
         source_index[identifier] = {"commit_id": commit_id, "hash": record_hash}
     current_events = run_dir / "constraints/constraint-events.jsonl"
     sequence = len(current_events.read_text(encoding="utf-8").splitlines()) if current_events.exists() else 0
-    protocol = load_protocol()
+    protocol = load_protocol(run_dir)
     events = []
     definitions = (
         ("canonical_facts", "past_constraint", "canonical_fact", "fact_id", "sources"),
@@ -993,10 +955,9 @@ def verify_immutable_file(path: Path, expected_hash: str) -> None:
 
 def reconcile_run(run_dir: Path) -> None:
     state = load_state(run_dir)
-    verify_engine_freeze(run_dir)
+    verify_engine_snapshot(run_dir)
     verify_immutable_file(run_dir / "generation-brief.json", state["brief_hash"])
     verify_immutable_file(run_dir / "run-manifest.json", state["manifest_hash"])
-    verify_immutable_file(run_dir / "state/frozen-engine-context.txt", state["frozen_engine_context_hash"])
     entries = ledger_entries(run_dir)
     previous = None
     for index, entry in enumerate(entries, 1):
@@ -1009,7 +970,7 @@ def reconcile_run(run_dir: Path) -> None:
     prospective_plans = [
         json.loads(line) for line in prospective_history.read_text(encoding="utf-8").splitlines()
     ] if prospective_history.exists() else []
-    protocol = load_protocol()
+    protocol = load_protocol(run_dir)
     for index, plan in enumerate(prospective_plans, 1):
         validate_json_schema(plan, protocol["$defs"]["prospectivePlan"], protocol)
         if plan["plan_id"] != f"prospective_plan_{index:04d}":
@@ -1119,7 +1080,7 @@ def commit_record(
 ) -> Path:
     reconcile_run(run_dir)
     state = load_state(run_dir)
-    protocol = load_protocol()
+    protocol = load_protocol(run_dir)
     definition = protocol["$defs"][RECORD_DEFS[record["record_type"]]]
     validate_json_schema(record, definition, protocol)
     if record["generation_id"] != state["generation_id"]:
@@ -1312,10 +1273,10 @@ def retrieve_original_sources(
     return retrieved
 
 
-def geomancy_figures() -> list[dict]:
+def geomancy_figures(run_dir: Path | None = None) -> list[dict]:
     figures = []
     current = None
-    for line in (ENGINE / "data/threshold-geomancy.yaml").read_text(encoding="utf-8").splitlines():
+    for line in (engine_root(run_dir) / "data/threshold-geomancy.yaml").read_text(encoding="utf-8").splitlines():
         match = re.match(r"  - id: ([123]-[123]-[123]-[123])$", line)
         if match:
             if current:
@@ -1333,8 +1294,8 @@ def geomancy_figures() -> list[dict]:
     return figures
 
 
-def precompute_geomancy(seed: str, possible_scene_count: int) -> dict:
-    figures = geomancy_figures()
+def precompute_geomancy(seed: str, possible_scene_count: int, run_dir: Path | None = None) -> dict:
+    figures = geomancy_figures(run_dir)
     assignments = []
     for number in range(1, possible_scene_count + 1):
         slot = f"scene_slot_{number:04d}"
@@ -1363,6 +1324,7 @@ def ensure_frozen_geomancy(run_dir: Path) -> dict:
     value = precompute_geomancy(
         manifest["engine_snapshot"]["geomancy_seed"],
         manifest["scope"]["possible_scene_count"],
+        run_dir,
     )
     write_json(path, value, mode=0o444, exclusive=True)
     state = load_state(run_dir)
@@ -1371,16 +1333,16 @@ def ensure_frozen_geomancy(run_dir: Path) -> dict:
     return value
 
 
-def engine_context() -> str:
+def engine_context(run_dir: Path | None = None) -> str:
     sections = []
     for relative in ENGINE_CONTEXT_FILES:
-        path = ENGINE / relative
+        path = engine_root(run_dir) / relative
         sections.append(f"===== engine/{relative} =====\n{path.read_text(encoding='utf-8')}")
     return "\n\n".join(sections)
 
 
-def render_prompt(name: str, replacements: dict[str, str]) -> str:
-    value = (ENGINE / "prompts" / name).read_text(encoding="utf-8")
+def render_prompt(run_dir: Path, name: str, replacements: dict[str, str]) -> str:
+    value = (engine_root(run_dir) / "prompts" / name).read_text(encoding="utf-8")
     for key, replacement in replacements.items():
         value = value.replace("{{" + key + "}}", replacement)
     if re.search(r"\{\{[A-Z0-9_]+\}\}", value):
@@ -1422,14 +1384,65 @@ def parse_structured_content(content: str):
             raise SchemaError("LM Studio returned malformed JSON inside deterministic code-fence framing") from error
 
 
-def _response_content(response: dict) -> str:
+def normalize_provider_response(response) -> str:
+    if response is None:
+        raise CathedralsError(
+            "LM Studio response",
+            "LM Studio request completed without a provider response",
+            "provider_before_creative_output",
+        )
     try:
-        content = response["choices"][0]["message"]["content"]
+        choice = response["choices"][0]
+        message = choice["message"]
     except (KeyError, IndexError, TypeError) as error:
-        raise SchemaError("LM Studio response has no choices[0].message.content") from error
-    if not isinstance(content, str) or not content.strip():
-        raise SchemaError("LM Studio returned empty structured content")
-    return content
+        raise CathedralsError(
+            "LM Studio response",
+            "LM Studio returned no usable response message",
+            "provider_before_creative_output",
+        ) from error
+    if not isinstance(choice, dict) or not isinstance(message, dict):
+        raise CathedralsError(
+            "LM Studio response",
+            "LM Studio returned no usable response message",
+            "provider_before_creative_output",
+        )
+    if choice.get("finish_reason") in {"length", "max_tokens"}:
+        raise SchemaError(f"LM Studio response was truncated ({choice['finish_reason']})")
+    content = message.get("content")
+    reasoning = message.get("reasoning")
+    reasoning_content = message.get("reasoning_content")
+    if isinstance(content, str) and content.strip():
+        return content
+    if content is not None and not isinstance(content, str):
+        raise SchemaError("LM Studio message.content is not text")
+    if any(value is not None and not isinstance(value, str) for value in (reasoning, reasoning_content)):
+        raise SchemaError("LM Studio reasoning fields are not text")
+    populated_reasoning = [
+        value for value in (reasoning, reasoning_content)
+        if isinstance(value, str) and value.strip()
+    ]
+    if populated_reasoning:
+        try:
+            parsed_reasoning = [json.loads(value) for value in populated_reasoning]
+        except json.JSONDecodeError as error:
+            raise SchemaError("LM Studio reasoning fallback is not a complete JSON value") from error
+        if len(parsed_reasoning) == 2 and parsed_reasoning[0] != parsed_reasoning[1]:
+            raise SchemaError("LM Studio returned conflicting reasoning and reasoning_content fields")
+        return populated_reasoning[0]
+    raise CathedralsError(
+        "LM Studio response",
+        "LM Studio returned a truly empty provider response",
+        "provider_before_creative_output",
+    )
+
+
+def provider_response(transport, url: str, payload: dict, timeout: float, *, started_at=None, preserve=None):
+    response = transport("POST", url, payload, timeout=timeout)
+    if isinstance(response, dict) and started_at:
+        response = response | {"_cathedrals_started_at": started_at}
+    if response is not None and preserve:
+        preserve(response)
+    return response, normalize_provider_response(response)
 
 
 def step_seed(generation_seed: str, step_id: str) -> int:
@@ -1455,7 +1468,8 @@ def request_record(
     if len(prompt) // 4 > read_json(run_dir / "run-manifest.json")["budgets"]["max_prepared_context_tokens"]:
         raise CathedralsError("Context assembly", f"Prepared prompt for {step_id} exceeds the frozen context budget", "budget_exhaustion")
     seed = step_seed(brief["generation_seed"], step_id)
-    schema = record_schema(expected_record_type)
+    protocol = load_protocol(run_dir)
+    schema = record_schema(expected_record_type, protocol)
     parameters = {"temperature": temperature, "max_tokens": max_tokens, "seed": seed, "stream": False}
     payload = {
         "model": state["model"],
@@ -1494,18 +1508,19 @@ def request_record(
     inflight = read_json(inflight_path)
     response_path = run_dir / "raw" / f"{step_id}-attempt{attempt}.api.json"
     response = read_json(response_path) if response_path.exists() else None
+    content = normalize_provider_response(response) if response is not None else None
     if response is None:
         failures = 0
         while failures < 3:
             try:
-                response = transport(
-                    "POST",
+                response, content = provider_response(
+                    transport,
                     api_url(brief["lm_studio_base_url"], "/v1/chat/completions"),
                     payload,
-                    timeout=float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "3600")),
+                    float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "3600")),
+                    started_at=inflight["started_at"],
+                    preserve=lambda value: write_json(response_path, value, mode=0o444, exclusive=True),
                 )
-                response["_cathedrals_started_at"] = inflight["started_at"]
-                write_json(response_path, response, mode=0o444, exclusive=True)
                 break
             except CathedralsError as error:
                 append_failed_attempt(
@@ -1520,7 +1535,7 @@ def request_record(
                     failure_class=error.failure_class,
                 )
                 failures += 1
-                if failures == 3:
+                if error.failure_class not in RETRYABLE_PROVIDER_FAILURES or failures == 3:
                     inflight_path.unlink(missing_ok=True)
                     raise
                 attempt += 1
@@ -1528,10 +1543,8 @@ def request_record(
                 inflight["started_at"] = utc_now()
                 write_json(inflight_path, inflight)
                 response_path = run_dir / "raw" / f"{step_id}-attempt{attempt}.api.json"
-    content = _response_content(response)
     try:
         record = parse_structured_content(content)
-        protocol = load_protocol()
         validate_json_schema(record, protocol["$defs"][RECORD_DEFS[expected_record_type]], protocol)
         validate_declared_id_uniqueness(record)
         duplicate_ids = set(generated_ids(record)) & set(_source_index(run_dir))
@@ -2165,7 +2178,7 @@ def recompute_prospective_plan(run_dir: Path, recomputed_after_commit_id: str) -
     if step_is_committed(run_dir, step_id):
         return _read_state_map(run_dir, "prospective-plan.json")
     plan = build_prospective_plan(run_dir, architecture, recomputed_after_commit_id)
-    protocol = load_protocol()
+    protocol = load_protocol(run_dir)
     validate_json_schema(plan, protocol["$defs"]["prospectivePlan"], protocol)
     history = run_dir / "planning/prospective-plans.jsonl"
     with history.open("ab") as handle:
@@ -2406,8 +2419,8 @@ def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
     validate_packet_against_plan(record, plan)
 
 
-def compact_schema(record_type: str) -> str:
-    return json.dumps(record_schema(record_type), ensure_ascii=False, separators=(",", ":"))
+def compact_schema(run_dir: Path, record_type: str) -> str:
+    return json.dumps(record_schema(record_type, load_protocol(run_dir)), ensure_ascii=False, separators=(",", ":"))
 
 
 def genesis_prompt(run_dir: Path) -> tuple[str, str]:
@@ -2421,8 +2434,9 @@ def genesis_prompt(run_dir: Path) -> tuple[str, str]:
         manifest["budgets"]["max_prepared_context_tokens"] - 14000,
     )
     return render_prompt(
+        run_dir,
         "generation-genesis.md",
-        {"FROZEN_GENESIS_CONTEXT": context, "GENESIS_PROTOCOL_DEFINITIONS": compact_schema("genesis")},
+        {"FROZEN_GENESIS_CONTEXT": context, "GENESIS_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "genesis")},
     ), context
 
 
@@ -2438,10 +2452,11 @@ def architecture_prompt(run_dir: Path) -> tuple[str, str]:
         manifest["budgets"]["max_prepared_context_tokens"] - 16000,
     )
     return render_prompt(
+        run_dir,
         "generation-architecture.md",
         {
             "FROZEN_ARCHITECTURE_CONTEXT": context,
-            "ARCHITECTURE_PROTOCOL_DEFINITIONS": compact_schema("architecture"),
+            "ARCHITECTURE_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "architecture"),
         },
     ), context
 
@@ -2457,20 +2472,20 @@ def packet_prompt(run_dir: Path, architecture: dict, plan: dict) -> tuple[str, s
         replacements = {
             "PACKET_CONTEXT": context,
             "PACKET_OBLIGATIONS": obligations,
-            "PACKET_PROTOCOL_DEFINITIONS": compact_schema("creative_packet"),
+            "PACKET_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "creative_packet"),
         }
     else:
         name = "generation-ending-packet.md"
         replacements = {
             "ENDING_PACKET_CONTEXT": context,
             "ENDING_PACKET_OBLIGATIONS": obligations,
-            "ENDING_PROTOCOL_DEFINITIONS": compact_schema("creative_packet"),
+            "ENDING_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "creative_packet"),
         }
-    return render_prompt(name, replacements), context
+    return render_prompt(run_dir, name, replacements), context
 
 
 def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json) -> None:
-    verify_engine_freeze(run_dir)
+    verify_engine_snapshot(run_dir)
     ensure_frozen_geomancy(run_dir)
     if not committed_record(run_dir, "genesis"):
         output_fn("[03] Genesis                       …")
@@ -2959,10 +2974,22 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
     attempt = 1 + sum(entry["planned_step_id"] == step_id for entry in ledger_entries(run_dir))
     started_at = utc_now()
     response = None
+    content = None
     current_attempt = attempt
     for retry in range(3):
         try:
-            response = transport("POST", api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), payload, timeout=float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "3600")))
+            response, content = provider_response(
+                transport,
+                api_url(brief["lm_studio_base_url"], "/v1/chat/completions"),
+                payload,
+                float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "3600")),
+                preserve=lambda value: write_json(
+                    run_dir / "validation" / f"{step_id}-attempt{current_attempt}.api.json",
+                    value,
+                    mode=0o444,
+                    exclusive=True,
+                ),
+            )
             break
         except CathedralsError as error:
             append_failed_attempt(
@@ -2977,10 +3004,9 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
                 failure_class=error.failure_class,
                 step_type="analysis",
             )
-            if retry == 2:
+            if error.failure_class not in RETRYABLE_PROVIDER_FAILURES or retry == 2:
                 raise
             current_attempt += 1
-    content = _response_content(response)
     try:
         verdict = parse_structured_content(content)
         validate_json_schema(verdict, ARTISTIC_SCHEMA)
@@ -3036,7 +3062,7 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
 
 def artistic_acceptance(run_dir: Path, *, transport=http_json) -> dict:
     packet_verdicts = []
-    acceptance_law = (ENGINE / "canon/acceptance-tests.md").read_text(encoding="utf-8")
+    acceptance_law = (engine_root(run_dir) / "canon/acceptance-tests.md").read_text(encoding="utf-8")
     for packet in [record for record in all_committed_records(run_dir) if record.get("record_type") == "creative_packet"]:
         step_id = f"artistic_review_{packet['packet_slot_id']}"
         prompt = bounded_context(
@@ -3336,7 +3362,7 @@ def make_finalization(run_dir: Path, status: str, failure_class: str, reason: st
         "playable": ready,
         "failure_class": failure_class,
     }
-    protocol = load_protocol()
+    protocol = load_protocol(run_dir)
     validate_json_schema(finalization, protocol["$defs"]["finalization"], protocol)
     return finalization
 
@@ -3369,32 +3395,10 @@ def publish_success(run_dir: Path, project: Path, finalization: dict) -> Path:
     return destination
 
 
-def commit_published_generation(run_dir: Path, destination: Path) -> str:
-    if current_branch() != load_state(run_dir)["branch"]:
-        raise CathedralsError("Publication", "Successful work can only commit on its frozen generation branch.", "build_failure")
-    relative = destination.relative_to(ROOT)
-    try:
-        git("add", "--", str(relative))
-        staged = git("diff", "--cached", "--name-only").splitlines()
-        prefix = f"{relative}/"
-        if not staged or any(path != str(relative) and not path.startswith(prefix) for path in staged):
-            raise CathedralsError("Publication", "Publication staging included unexpected repository files.", "build_failure")
-        git("commit", "-m", f"Cathedrals generation {run_dir.name}: READY_TO_PLAY")
-        return git("rev-parse", "HEAD")
-    except Exception:
-        git("restore", "--staged", "--", str(relative), check=False)
-        if destination.exists():
-            shutil.rmtree(destination)
-        raise
-
-
 def finalize_success(run_dir: Path, project: Path) -> tuple[Path, dict]:
     reconcile_run(run_dir)
-    if git("status", "--porcelain"):
-        raise CathedralsError("Publication", "The generation branch became dirty before publication.", "build_failure")
     finalization = make_finalization(run_dir, "READY_TO_PLAY", "none")
     destination = publish_success(run_dir, project, finalization)
-    publication_commit = commit_published_generation(run_dir, destination)
     write_json(run_dir / "finalization.json", finalization, mode=0o444, exclusive=True)
     build_path = destination / "web/dist"
     state = load_state(run_dir)
@@ -3402,7 +3406,6 @@ def finalize_success(run_dir: Path, project: Path) -> tuple[Path, dict]:
     state["stage"] = "READY_TO_PLAY"
     state["completed_at"] = finalization["completed_at"]
     state["build_path"] = str(build_path)
-    state["publication_commit"] = publication_commit
     save_state(run_dir, state)
     return build_path, finalization
 
@@ -3427,10 +3430,6 @@ def finalize_failure(run_dir: Path, error: CathedralsError) -> dict:
 
 def ensure_resume_ready(run_dir: Path, output_fn=print, transport=http_json) -> None:
     state = load_state(run_dir)
-    if current_branch() != state["branch"]:
-        if git("status", "--porcelain"):
-            raise CathedralsError("Resume preflight", "The worktree has changes; cannot switch to the frozen generation branch.")
-        git("switch", state["branch"])
     reconcile_run(run_dir)
     brief = read_json(run_dir / "generation-brief.json")
     payload = transport("GET", api_url(brief["lm_studio_base_url"], "/v1/models"), timeout=10.0)
@@ -3496,7 +3495,7 @@ def main(argv=None, *, input_fn=input, output_fn=print, transport=http_json) -> 
             brief = read_json(run_dir / "generation-brief.json")
             output_fn(f"Generation: {run_dir.name}\nFormat: web\nModel: {brief['model']}\nRequested scope: up to {brief['possible_scene_count']} scenes\n")
             output_fn("[01] Preflight                     ✓ resumed")
-            output_fn("[02] Engine frozen                ✓ verified")
+            output_fn("[02] Engine snapshot              ✓ verified")
         else:
             frozen = collect_inputs(input_fn, output_fn)
             base_url = configured_lm_studio_url()
@@ -3504,7 +3503,7 @@ def main(argv=None, *, input_fn=input, output_fn=print, transport=http_json) -> 
             preflight_model_capacity(base_url, model, output_fn, transport)
             run_dir = create_run(frozen, base_url, model, output_fn)
             output_fn("[01] Preflight                     ✓")
-            output_fn("[02] Engine frozen                ✓")
+            output_fn("[02] Engine snapshot              ✓")
         build_path, counts, brief = execute_run(run_dir, output_fn, transport)
         print_success(run_dir, build_path, counts, brief, output_fn)
         return 0

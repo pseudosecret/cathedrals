@@ -32,7 +32,7 @@ endings, or scene activity. Set `generation_brief.mutable` to `false` before the
 Freeze and hash:
 
 - the brief and generation ID
-- engine commit and all active engine inputs
+- the run-local copy of all active engine inputs
 - work, structural, traversal, and geomancy seeds
 - explicit possible-scene scope, profile-derived guidance, and cumulative run limits
 - provider/model parameters and documented context/output limits
@@ -112,8 +112,7 @@ Project committed records without literary change, validate the entire graph and
 content set, compile and validate Astro, then perform whole-work artistic acceptance.
 An artistic rejection may retain the valid build under ignored run storage for
 diagnosis, but remains nonplayable and unpublished. On full success, publish only the
-new generated-work tree and create one final commit on the independent generation
-branch before crossing the complete-work barrier.
+new generated-work tree before crossing the complete-work barrier.
 
 ## 3. Commit Semantics
 
@@ -188,10 +187,9 @@ The only terminal states exposed to the user are `READY_TO_PLAY` and
 `FAILED_GENERATION`. A failed run follows its frozen retention policy. Any later
 attempt starts from frozen inputs under a new generation ID.
 
-Every new attempt first returns to the configured engine base branch, records its
-exact commit, and creates `generation/<generation-id>` from that commit. Resume instead
-returns to the original frozen generation branch. Generation branches never descend
-from one another.
+Every new attempt copies the current local launcher and engine into
+`.cathedrals/runs/<generation-id>/engine-snapshot/`. Resume uses that run-local copy and
+does not inspect the installation. Runs never descend from or modify one another.
 
 ## 7. Complete-Work Barrier
 

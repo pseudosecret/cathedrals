@@ -5,7 +5,6 @@ import copy
 import importlib.machinery
 import importlib.util
 import json
-import subprocess
 import sys
 import tempfile
 import time
@@ -341,7 +340,7 @@ class ScaleRehearsalTests(unittest.TestCase):
             self.assertEqual(len(obligations), 120)
             self.assertEqual(len(motifs), 12)
 
-            RUNNER.save_state(run, RUNNER.initial_run_state("synthetic_scale", "generation/synthetic_scale", "a" * 64, "b" * 64, "offline"))
+            RUNNER.save_state(run, RUNNER.initial_run_state("synthetic_scale", "a" * 64, "b" * 64, "offline"))
             RUNNER.write_json(run / "state/obligations.json", obligations)
             RUNNER.write_json(run / "state/foreclosure-candidates.json", {})
             committed = []
@@ -452,7 +451,7 @@ class ScaleRehearsalTests(unittest.TestCase):
             run = Path(temporary) / "synthetic_resume"
             (run / "state").mkdir(parents=True)
             (run / "planning").mkdir()
-            RUNNER.save_state(run, RUNNER.initial_run_state("synthetic_resume", "generation/synthetic_resume", "a" * 64, "b" * 64, "offline"))
+            RUNNER.save_state(run, RUNNER.initial_run_state("synthetic_resume", "a" * 64, "b" * 64, "offline"))
             RUNNER.write_json(run / "state/obligations.json", obligations)
             RUNNER.write_json(run / "state/foreclosure-candidates.json", {})
             for checkpoint in checkpoints:
@@ -478,7 +477,7 @@ class ScaleRehearsalTests(unittest.TestCase):
         stale = RUNNER.project_constraint_state(events[:90])
         reconciled = RUNNER.project_constraint_state(events[:99])
         self.assertGreater(len(reconciled[0]), len(stale[0]))
-        state = RUNNER.initial_run_state("synthetic_scale", "generation/synthetic_scale", "a" * 64, "b" * 64, "offline")
+        state = RUNNER.initial_run_state("synthetic_scale", "a" * 64, "b" * 64, "offline")
         self.assertEqual([state[key] for key in ("committed_rewrite_count", "committed_regeneration_count", "backtrack_count")], [0, 0, 0])
 
     def test_diagnostic_failure_remains_nonplayable_and_unpublished(self):
@@ -489,63 +488,19 @@ class ScaleRehearsalTests(unittest.TestCase):
                 (run / name).mkdir(parents=True)
             (run / "projection/web/dist/index.html").write_text("synthetic diagnostic")
             RUNNER.write_json(run / "run-manifest.json", {"synthetic": True})
-            state = RUNNER.initial_run_state("synthetic_scale", "generation/synthetic_scale", "a" * 64, RUNNER.sha256_file(run / "run-manifest.json"), "offline")
+            state = RUNNER.initial_run_state("synthetic_scale", "a" * 64, RUNNER.sha256_file(run / "run-manifest.json"), "offline")
             RUNNER.save_state(run, state)
             RUNNER.append_deterministic_step(run, "synthetic_complete", "validation", "c" * 64)
             for name, result in (("mechanical", "PASS"), ("build", "PASS"), ("artistic", "FAIL GENERATION")):
                 RUNNER.write_json(run / f"validation/{name}.json", {"result": result, "reasons": ["synthetic verdict"]})
-            with mock.patch.object(RUNNER, "ROOT", root):
+            protocol = RUNNER.load_protocol()
+            with mock.patch.object(RUNNER, "ROOT", root), mock.patch.object(RUNNER, "load_protocol", return_value=protocol):
                 finalization = RUNNER.finalize_failure(run, RUNNER.CathedralsError("Whole-work artistic acceptance", "synthetic rejection", "artistic_rejection"))
             self.assertEqual(finalization["run_status"], "FAILED_GENERATION")
             self.assertFalse(finalization["playable"])
             self.assertFalse(finalization["complete_work_barrier_satisfied"])
             self.assertTrue((run / "projection/web/dist/index.html").exists())
             self.assertFalse((root / "generated-work").exists())
-
-    def test_disposable_git_generations_share_main_parent_and_publish_only_their_work(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            repo = Path(temporary)
-
-            def command(*args, check=True):
-                result = subprocess.run(args, cwd=repo, text=True, capture_output=True)
-                if check and result.returncode:
-                    self.fail(result.stderr or result.stdout)
-                return result.stdout.strip()
-
-            command("git", "init", "-b", "main")
-            command("git", "config", "user.name", "Synthetic Rehearsal")
-            command("git", "config", "user.email", "synthetic@example.invalid")
-            (repo / ".gitignore").write_text(".cathedrals/\nnode_modules/\n")
-            (repo / "engine.txt").write_text("synthetic engine\n")
-            command("git", "add", ".gitignore", "engine.txt")
-            command("git", "commit", "-m", "synthetic engine base")
-            base = command("git", "rev-parse", "HEAD")
-
-            def run_command(args, *, cwd=None, env=None, capture=True):
-                return subprocess.run([str(item) for item in args], cwd=cwd or repo, env=env, text=True, capture_output=capture)
-
-            with mock.patch.object(RUNNER, "ROOT", repo), mock.patch.object(RUNNER, "run_command", side_effect=run_command):
-                for identifier in ("synthetic_a", "synthetic_b"):
-                    branch, branch_base = RUNNER.prepare_generation_branch(identifier)
-                    self.assertEqual(branch_base, base)
-                    run = repo / f".cathedrals/runs/{identifier}"
-                    (run / "state").mkdir(parents=True)
-                    RUNNER.save_state(run, RUNNER.initial_run_state(identifier, branch, "a" * 64, "b" * 64, "offline"))
-                    destination = repo / f"generated-work/{identifier}"
-                    destination.mkdir(parents=True)
-                    (destination / "index.html").write_text("synthetic publication\n")
-                    if identifier == "synthetic_b":
-                        (repo / "unrelated.txt").write_text("must remain untracked\n")
-                        (repo / ".cathedrals/cache.bin").write_text("ignored runtime cache\n")
-                    RUNNER.commit_published_generation(run, destination)
-                    self.assertEqual(command("git", "rev-parse", f"{branch}^"), base)
-                    changed = command("git", "diff-tree", "--no-commit-id", "--name-only", "-r", branch).splitlines()
-                    self.assertEqual(changed, [f"generated-work/{identifier}/index.html"])
-            self.assertEqual(command("git", "rev-list", "--count", "main..generation/synthetic_a"), "1")
-            self.assertEqual(command("git", "rev-list", "--count", "main..generation/synthetic_b"), "1")
-            self.assertIn("?? unrelated.txt", command("git", "status", "--short"))
-            self.assertEqual(command("git", "check-ignore", ".cathedrals/cache.bin"), ".cathedrals/cache.bin")
-
 
 if __name__ == "__main__":
     unittest.main()

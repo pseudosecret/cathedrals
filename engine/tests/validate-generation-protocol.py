@@ -48,9 +48,9 @@ record_types = {
 }
 assert len(record_types) == 8
 assert schema["$defs"]["runManifest"]["properties"]["protocol_version"]["const"] == "3.0"
-assert {"engine_base_branch", "engine_base_commit"} <= set(
-    schema["$defs"]["runManifest"]["properties"]["engine_snapshot"]["required"]
-)
+engine_snapshot = schema["$defs"]["runManifest"]["properties"]["engine_snapshot"]
+assert "path" in engine_snapshot["required"]
+assert set(engine_snapshot["properties"]) == {"work_id", "path", "work_seed", "structural_seed", "geomancy_seed"}
 assert "web_art_direction" in schema["$defs"]["genesis"]["required"]
 assert schema["$defs"]["genesis"]["properties"]["web_art_direction"]["$ref"] == "#/$defs/webArtDirection"
 assert schema["$defs"]["decisionEdge"]["required"] == [

@@ -21,7 +21,7 @@ Produce deterministic data only:
 - major-decision slots with hesitation edges
 - state keys and permitted operations
 - threshold figures, resultants, transition tendencies, and ending pressure
-- engine/config/prompt/schema hashes
+- run-local engine snapshot location
 - immutable run manifest
 
 Use stable synthetic IDs. Technical IDs carry no fictional meaning.

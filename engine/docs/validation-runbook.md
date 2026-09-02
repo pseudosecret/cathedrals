@@ -7,8 +7,8 @@ a creative revision loop.
 
 ## 1. Preflight
 
-Pass only when one instruction authorizes a generation branch, the generation brief
-is frozen, engine/prompt/schema hashes and seeds are recorded, every selected model can
+Pass only when one instruction authorizes a generation, the generation brief is
+frozen, the run-local engine snapshot and seeds exist, every selected model can
 fit its planned context/output, total derived scope budgets fit cumulative limits, topology
 capacity and geomancy are deterministic, and preparation authored no fiction.
 
@@ -69,9 +69,8 @@ call.
 
 ## 6. Publication and Barrier
 
-After artistic acceptance, publish only the new generated-work tree and commit it once
-on the frozen generation branch. Failed runs remain untracked under `.cathedrals/` by
-default.
+After artistic acceptance, publish only the new generated-work tree. Failed runs remain
+under `.cathedrals/` by default.
 
 Only a complete mechanical pass, artistic pass, and build pass may finalize
 `READY_TO_PLAY` with `playable: true`. Every failure finalizes `FAILED_GENERATION`
