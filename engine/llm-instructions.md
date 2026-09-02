@@ -31,17 +31,18 @@ artifact, or ending reconstructable from engine files.
 ## One Autonomous Append-Only Run
 
 One human experience request becomes a frozen, immutable generation brief. The run
-may make multiple creative and analysis/index calls, but it proceeds only forward
-from frozen inputs. It asks no human creative question after start, samples no
+may make multiple creative and noncreative analysis calls, but authors creative work
+only forward from frozen inputs. Planning may reason backward through causality. It asks no human creative question after start, samples no
 fictional candidates, and never revises committed material.
 
 The root `./cathedrals` executable is the active orchestration harness. It connects
-directly to LM Studio and owns phase order, commits, memory, validation, resume, and
+directly to LM Studio and owns phase order, commits, constraint propagation, validation, resume, and
 the static build. Current visual-novel aliases resolve to the active web contract;
 Ren'Py is deferred.
 
-Commit genesis, then generated architecture, then literary packets in frozen
-dependency order, then prerequisite-satisfied ending packets. A valid commit is
+Commit genesis, then generated architecture, then literary packets selected by
+current constraint pressure while respecting frozen dependencies, then prerequisite-
+satisfied ending packets. A valid commit is
 immutable source evidence. Later calls may read and react to it, including lawful
 perspectival or diegetic contradiction, but may not replace, improve, regenerate,
 silently retcon, or discard it.
@@ -79,26 +80,28 @@ reinterpret earlier prose to improve geomantic fit. All reader-facing prose rema
 readable, inspectable, renderable, diffable, and immutable. Artifacts must act as
 plausible evidence. Formal composition must do dramatic work.
 
-## Memory and Context
+## Constraint Topology and Context
 
 Immutable genesis, architecture, scenes, artifacts, compositions, and endings are
-authoritative source evidence. Canonical generated state records facts; narrative
-working memory records promises, unresolved threads, callbacks, motifs, questions,
-residue, foreshadowing, thematic pressure, and intentional contradictions. Every
-important memory record cites an immutable source and locator. Prose wins every
-conflict with an index.
+authoritative source evidence. Minimal canonical facts record only constraints on
+future lawful writing. Character knowledge distinguishes truth, knowledge, belief,
+suspicion, explicit ignorance, and claims. Typed obligations record what future work
+is owed. Motif state records meaning pressure, not mere recurrence. Every derived
+record cites immutable source and locator; source wins every conflict.
 
-Assemble bounded context from only relevant frozen law, architecture, current state,
-recent material, obligations, and retrieved original passages. Retrieval selects
-evidence and invents nothing. Analysis/index calls may extract and classify but may
-not author replacement fiction.
+Generate attractors early, backward-chain their causal prerequisites, and generate
+ending prose late. After every creative commit, recompute a mutable noncanonical
+prospective plan without changing history, attractors, or hard architecture. Assemble
+bounded context by constraint relevance, then retrieve original passages. Recency is
+only a small bonus. Noncreative analysis may classify but may not author replacement
+fiction.
 
 ## Failure and Validation
 
 Retry only transport/provider failures before creative output, using the identical
 planned request. Malformed creative output fails the run. Valid artistic weakness
 commits. Unresolvable mechanical continuity fails without retcon. Whole-work artistic
-acceptance occurs after creative generation and returns only `PASS` or
+acceptance occurs after complete projection and a passing diagnostic static build and returns only `PASS` or
 `FAIL GENERATION`, never repair instructions.
 
 ## Generation, Build, and Play Barrier
@@ -108,12 +111,16 @@ ending, graph record, projection, validation, artistic verdict, static build, an
 build validation has passed. Terminal state is `READY_TO_PLAY` or
 `FAILED_GENERATION`; no partial playable state exists.
 
+A rejected complete work may retain its ignored static build for diagnosis. It remains
+nonplayable and unpublished. Accepted work is published and committed only on its
+independent generation branch created from the configured engine base commit.
+
 Astro remains static. At play time no LLM, API, database, server-side story state,
 creative generation, branch completion, or prose rewriting occurs. Every choice
 forecloses preexisting possibilities.
 
 ## Current Phase
 
-Read `engine/data/work-instance.yaml` before writing. During `engine_revision`, mutate
-only `engine/` and do not generate work canon, downstream projections, prose, graphs,
-or story pages.
+Read `engine/data/work-instance.yaml` before writing. During this `engine_revision`,
+mutate only its declared write roots and do not generate work canon, downstream
+projections, prose, graphs, or story pages.

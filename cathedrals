@@ -31,8 +31,10 @@ PROTOCOL_PATH = ENGINE / "data/generation-protocol.schema.json"
 RUNTIME_ROOT = ROOT / ".cathedrals"
 RUNS_ROOT = RUNTIME_ROOT / "runs"
 DEFAULT_LM_STUDIO_URL = "http://127.0.0.1:1234"
+ENGINE_BASE_BRANCH = "main"
 NODE_VERSION = "22.23.2"
 ASTRO_VERSION = "7.2.9"
+MARKDOWN_IT_VERSION = "14.1.0"
 NODE_MINIMUM = (22, 12, 0)
 TERMINAL_STATES = {"READY_TO_PLAY", "FAILED_GENERATION"}
 FORMAT_ALIASES = {
@@ -47,8 +49,8 @@ RECORD_DEFS = {
     "genesis": "genesis",
     "architecture": "architecture",
     "creative_packet": "creativePacket",
-    "index_batch": "indexBatch",
-    "memory_event": "memoryEvent",
+    "constraint_event": "constraintEvent",
+    "prospective_plan": "prospectivePlan",
     "ledger_entry": "ledgerEntry",
     "finalization": "finalization",
 }
@@ -350,11 +352,11 @@ def derive_scope(possible_scene_count: int) -> dict:
             "max_analysis_output_tokens": 4096,
             "context_safety_reserve_tokens": 4096,
             "max_creative_step_count": max_creative_steps,
-            "max_analysis_or_index_step_count": max_analysis_steps,
+            "max_analysis_step_count": max_analysis_steps,
             "max_total_literary_words": count * 600 + artifact_max * 350 + ending_max * 500,
             "max_cumulative_input_tokens": (max_creative_steps + max_analysis_steps) * 49152,
             "max_cumulative_output_tokens": max_creative_steps * 10900 + max_analysis_steps * 4096,
-            "max_memory_records": max(1000, count * 45),
+            "max_constraint_events": max(1000, count * 45),
             "max_retrieved_source_tokens": 12288,
         },
     }
@@ -492,12 +494,22 @@ def generation_id(project_name: str, timestamp: str | None = None) -> str:
     return f"{slugify(project_name)}_{stamp}_{secrets.token_hex(3)}"
 
 
-def create_generation_branch(identifier: str) -> str:
+def create_generation_branch(identifier: str, base_commit: str) -> str:
     branch = f"generation/{identifier}"
     if git("show-ref", "--verify", f"refs/heads/{branch}", check=False):
         raise CathedralsError("Git preflight", f"Generation branch already exists: {branch}")
-    git("switch", "-c", branch)
+    git("switch", "-c", branch, base_commit)
     return branch
+
+
+def prepare_generation_branch(identifier: str) -> tuple[str, str]:
+    verify_repo_safe()
+    if not git("show-ref", "--verify", f"refs/heads/{ENGINE_BASE_BRANCH}", check=False):
+        raise CathedralsError("Git preflight", f"Configured engine base branch does not exist: {ENGINE_BASE_BRANCH}")
+    git("switch", ENGINE_BASE_BRANCH)
+    verify_repo_safe()
+    base_commit = git("rev-parse", "HEAD")
+    return create_generation_branch(identifier, base_commit), base_commit
 
 
 def current_branch() -> str:
@@ -525,7 +537,7 @@ def initial_run_state(identifier: str, branch: str, brief_hash: str, manifest_ha
         "ledger_sequence": 0,
         "canonical_state_hash": manifest_hash,
         "creative_step_count": 0,
-        "analysis_or_index_step_count": 0,
+        "analysis_step_count": 0,
         "human_intervention_count": 0,
         "committed_rewrite_count": 0,
         "committed_regeneration_count": 0,
@@ -599,9 +611,10 @@ def new_ledger_entry(
     started_at: str,
     output_hash: str | None,
     generated_ids: list[str],
-    canonical_delta_ids: list[str],
-    unresolved_ids: list[str],
+    past_constraint_ids: list[str],
+    future_obligation_ids: list[str],
     motif_ids: list[str],
+    prospective_plan_hash: str | None = None,
     branch_relation: str | None,
     commit_status: str,
     state_hash_after: str,
@@ -612,7 +625,7 @@ def new_ledger_entry(
     usage = usage or {}
     entry = {
         "record_type": "ledger_entry",
-        "protocol_version": "2.0",
+        "protocol_version": "3.0",
         "generation_id": load_state(run_dir)["generation_id"],
         "ledger_sequence": len(entries) + 1,
         "planned_step_id": planned_step_id,
@@ -632,9 +645,10 @@ def new_ledger_entry(
         "completed_at": utc_now(),
         "output_hash": output_hash,
         "generated_artifact_ids": sorted(set(generated_ids)),
-        "canonical_state_delta_ids": sorted(set(canonical_delta_ids)),
-        "unresolved_thread_delta_ids": sorted(set(unresolved_ids)),
-        "motif_delta_ids": sorted(set(motif_ids)),
+        "past_constraint_delta_ids": sorted(set(past_constraint_ids)),
+        "future_obligation_delta_ids": sorted(set(future_obligation_ids)),
+        "motif_pressure_delta_ids": sorted(set(motif_ids)),
+        "prospective_plan_hash_after": prospective_plan_hash,
         "branch_path_relation": branch_relation,
         "commit_status": commit_status,
         "canonical_state_hash_after": state_hash_after,
@@ -650,7 +664,14 @@ def new_ledger_entry(
     return entry
 
 
-def append_deterministic_step(run_dir: Path, step_id: str, phase: str, output_hash: str) -> None:
+def append_deterministic_step(
+    run_dir: Path,
+    step_id: str,
+    phase: str,
+    output_hash: str,
+    *,
+    prospective_plan_hash: str | None = None,
+) -> None:
     if step_is_committed(run_dir, step_id):
         return
     state = load_state(run_dir)
@@ -670,9 +691,10 @@ def append_deterministic_step(run_dir: Path, step_id: str, phase: str, output_ha
         started_at=utc_now(),
         output_hash=output_hash,
         generated_ids=[],
-        canonical_delta_ids=[],
-        unresolved_ids=[],
+        past_constraint_ids=[],
+        future_obligation_ids=[],
         motif_ids=[],
+        prospective_plan_hash=prospective_plan_hash,
         branch_relation=None,
         commit_status="COMMITTED",
         state_hash_after=state["canonical_state_hash"],
@@ -684,16 +706,17 @@ def append_deterministic_step(run_dir: Path, step_id: str, phase: str, output_ha
 
 
 def create_run(frozen: FrozenInputs, base_url: str, model: str, output_fn=print) -> Path:
-    verify_repo_safe()
     identifier = generation_id(frozen.project_name)
-    branch = create_generation_branch(identifier)
+    branch, base_commit = prepare_generation_branch(identifier)
     ensure_runtime_layout()
     run_dir = RUNS_ROOT / identifier
-    for child in ("raw", "committed", "memory", "state", "logs", "validation", ".staging"):
+    for child in ("raw", "committed", "constraints", "planning", "state", "logs", "validation", ".staging"):
         (run_dir / child).mkdir(parents=True, exist_ok=False)
     timestamp = utc_now()
     seed = secrets.token_hex(16)
     commit = git("rev-parse", "HEAD")
+    if commit != base_commit:
+        raise IntegrityError("Generation branch did not start from the configured engine base commit")
     brief = dataclasses.asdict(frozen) | {
         "generation_id": identifier,
         "generation_timestamp": timestamp,
@@ -706,13 +729,15 @@ def create_run(frozen: FrozenInputs, base_url: str, model: str, output_fn=print)
     derived = derive_scope(frozen.possible_scene_count)
     manifest = {
         "record_type": "run_manifest",
-        "protocol_version": "2.0",
+        "protocol_version": "3.0",
         "generation_id": identifier,
         "created_at": timestamp,
         "generation_brief": brief,
         "generation_brief_hash": brief_hash,
         "engine_snapshot": {
             "work_id": "hospice-annex-v01",
+            "engine_base_branch": ENGINE_BASE_BRANCH,
+            "engine_base_commit": base_commit,
             "engine_commit_sha": commit,
             "engine_config_hashes": engine_hashes(),
             "work_seed": seed,
@@ -726,18 +751,19 @@ def create_run(frozen: FrozenInputs, base_url: str, model: str, output_fn=print)
             "backward_canon_mutation_allowed": False,
             "candidate_cherry_picking_allowed": False,
             "append_only": True,
-            "causally_forward": True,
+            "creative_authorship_forward_only": True,
+            "planning_may_reason_backward": True,
         },
         "scope": derived["scope"],
         "budgets": derived["budgets"],
         "traversal": {
-            "strategy": "dependency_topological",
+            "strategy": "constraint_relevance",
             "seed": sha256_bytes(f"traversal:{seed}".encode()),
-            "mutable_after_architecture_commit": False,
+            "prospective_plan_mutable": True,
         },
         "models": [
             {"purpose": purpose, "provider": "LM Studio", "model": model, "parameters": {"structured_output": True}}
-            for purpose in ("creative", "analysis_or_index", "artistic_acceptance")
+            for purpose in ("creative", "analysis", "artistic_acceptance")
         ],
         "retention_policy": "preserve_failed",
         "complete_work_barrier": {
@@ -800,7 +826,7 @@ def choose_resume(input_fn=input, output_fn=print) -> Path | None:
 
 
 def generated_ids(record: dict) -> list[str]:
-    ids = [record.get("commit_id"), record.get("index_batch_id")]
+    ids = [record.get("commit_id")]
     if record.get("record_type") == "genesis":
         ids += [record["work_canon"]["work_id"]]
         ids += [item["event_id"] for item in record["work_canon"]["chronology"]]
@@ -810,29 +836,44 @@ def generated_ids(record: dict) -> list[str]:
         ids += [item["arc_id"] for item in record["arcs"]]
         ids += [item["node_id"] for item in record["topology"]["nodes"]]
         ids += [item["edge_id"] for item in record["topology"]["edges"]]
-        ids += [item["promise_id"] for item in record["narrative_promises"]]
-        ids += [item["obligation_id"] for item in record["hard_obligations"]]
-        ids += [item["ending_family_id"] for item in record["ending_families"]]
-        ids += [item["packet_slot_id"] for item in record["traversal_plan"]]
+        ids += [item["obligation_id"] for item in record["obligation_graph"]]
+        ids += [item["attractor_id"] for item in record["attractors"]]
+        ids += [item["packet_slot_id"] for item in record["packet_plans"]]
     if record.get("record_type") == "creative_packet":
         ids += [item["scene_id"] for item in record["scenes"]]
         ids += [item["artifact_id"] for item in record["artifacts"]]
         ids += [item["ending_id"] for item in record["endings"]]
         ids += [item["composition_id"] for item in record["formal_compositions"]]
         ids += [item["edge_id"] for item in record["decision_edges"]]
+    delta = record.get("constraint_delta", {})
+    ids += [item["fact_id"] for item in delta.get("canonical_facts", [])]
+    ids += [item["knowledge_id"] for item in delta.get("knowledge_changes", [])]
+    ids += [item["obligation_id"] for item in delta.get("new_obligations", [])]
+    ids += [item["update_id"] for item in delta.get("obligation_updates", [])]
+    ids += [item["motif_event_id"] for item in delta.get("motif_events", [])]
+    ids += [item["foreclosure_id"] for item in delta.get("potential_foreclosures", [])]
     return sorted({item for item in ids if item})
 
 
-def observation_deltas(record: dict):
-    observations = record.get("memory_delta", record.get("observations", []))
-    canonical = [item["memory_id"] for item in observations if item["memory_class"] == "canonical_state"]
-    unresolved = [
-        item["memory_id"]
-        for item in observations
-        if item["memory_kind"] in {"unresolved_thread", "promise", "question", "branch_residue", "foreshadowing"}
-    ]
-    motifs = [item["memory_id"] for item in observations if item["memory_kind"] == "motif"]
-    return observations, canonical, unresolved, motifs
+def constraint_deltas(record: dict) -> tuple[dict, list[str], list[str], list[str]]:
+    delta = record.get("constraint_delta", {})
+    groups = {
+        "canonical_facts": list(delta.get("canonical_facts", [])),
+        "knowledge_changes": list(delta.get("knowledge_changes", [])),
+        "new_obligations": list(delta.get("new_obligations", [])),
+        "obligation_updates": list(delta.get("obligation_updates", [])),
+        "motif_events": list(delta.get("motif_events", [])),
+        "potential_foreclosures": list(delta.get("potential_foreclosures", [])),
+    }
+    if record.get("record_type") == "architecture":
+        groups["new_obligations"] = list(record["obligation_graph"]) + groups["new_obligations"]
+    past = [item["fact_id"] for item in groups["canonical_facts"]]
+    past += [item["knowledge_id"] for item in groups["knowledge_changes"]]
+    future = [item["obligation_id"] for item in groups["new_obligations"]]
+    future += [item["update_id"] for item in groups["obligation_updates"]]
+    future += [item["foreclosure_id"] for item in groups["potential_foreclosures"]]
+    motifs = [item["motif_event_id"] for item in groups["motif_events"]]
+    return groups, past, future, motifs
 
 
 def _source_index(run_dir: Path) -> dict:
@@ -840,21 +881,30 @@ def _source_index(run_dir: Path) -> dict:
     return read_json(path) if path.exists() else {}
 
 
-def make_memory_events(run_dir: Path, record: dict, commit_id: str, record_hash: str, step_id: str) -> list[dict]:
-    observations, _, _, _ = observation_deltas(record)
+def make_constraint_events(run_dir: Path, record: dict, commit_id: str, record_hash: str, step_id: str) -> list[dict]:
+    groups, _, _, _ = constraint_deltas(record)
     source_index = _source_index(run_dir)
     for identifier in generated_ids(record):
         source_index[identifier] = {"commit_id": commit_id, "hash": record_hash}
-    current_events = run_dir / "memory/memory-events.jsonl"
+    current_events = run_dir / "constraints/constraint-events.jsonl"
     sequence = len(current_events.read_text(encoding="utf-8").splitlines()) if current_events.exists() else 0
     protocol = load_protocol()
     events = []
-    for observation in observations:
+    definitions = (
+        ("canonical_facts", "past_constraint", "canonical_fact", "fact_id", "sources"),
+        ("knowledge_changes", "past_constraint", "knowledge_state", "knowledge_id", "sources"),
+        ("new_obligations", "future_obligation", "obligation", "obligation_id", "sources"),
+        ("obligation_updates", "future_obligation", "obligation_update", "update_id", "evidence_sources"),
+        ("motif_events", "motif_pressure", "motif_state", "motif_event_id", "sources"),
+        ("potential_foreclosures", "prospective_foreclosure", "foreclosure_candidate", "foreclosure_id", "sources"),
+    )
+    for group, constraint_class, constraint_kind, id_key, source_key in definitions:
+      for item in groups[group]:
         sources = []
-        for source in observation["sources"]:
+        for source in item[source_key]:
             resolved = source_index.get(source["artifact_id"])
             if not resolved:
-                raise SchemaError(f"Memory source does not resolve: {source['artifact_id']}")
+                raise SchemaError(f"Constraint source does not resolve: {source['artifact_id']}")
             sources.append(
                 source
                 | {
@@ -862,26 +912,74 @@ def make_memory_events(run_dir: Path, record: dict, commit_id: str, record_hash:
                     "source_hash": resolved["hash"],
                 }
             )
+        action = item.get("action", "establish")
+        if constraint_kind == "obligation_update":
+            action = {
+                "satisfied": "satisfy",
+                "foreclosed": "foreclose",
+                "impossible": "mark_impossible",
+                "intentionally_unresolved": "resolve_ambiguously",
+            }[item["status"]]
+        elif constraint_kind == "motif_state":
+            action = "establish" if item["action"] == "establish" else "update"
         event = {
-            "record_type": "memory_event",
-            "protocol_version": "2.0",
+            "record_type": "constraint_event",
+            "protocol_version": "3.0",
             "generation_id": record["generation_id"],
-            "memory_event_sequence": sequence + len(events) + 1,
+            "constraint_event_sequence": sequence + len(events) + 1,
             "origin_step_id": step_id,
-            "memory_id": observation["memory_id"],
-            "memory_class": observation["memory_class"],
-            "memory_kind": observation["memory_kind"],
-            "action": observation["action"],
-            "proposition": observation["proposition"],
-            "status": observation["status"],
+            "constraint_id": item[id_key],
+            "constraint_class": constraint_class,
+            "constraint_kind": constraint_kind,
+            "action": action,
+            "data": {key: value for key, value in item.items() if key != source_key},
             "sources": sources,
         }
-        for optional in ("supersedes_memory_id", "branch_scope_ids"):
-            if optional in observation:
-                event[optional] = observation[optional]
-        validate_json_schema(event, protocol["$defs"]["memoryEvent"], protocol)
+        validate_json_schema(event, protocol["$defs"]["constraintEvent"], protocol)
         events.append(event)
     return events
+
+
+def project_constraint_state(events: list[dict]) -> tuple[dict, dict, dict, dict, dict]:
+    facts = {}
+    knowledge = {}
+    obligations = {}
+    motifs = {}
+    foreclosures = {}
+    for event in events:
+        data = event["data"]
+        kind = event["constraint_kind"]
+        if kind == "canonical_fact":
+            if data.get("supersedes_fact_id"):
+                facts.pop(data["supersedes_fact_id"], None)
+            facts[data["fact_id"]] = event
+        elif kind == "knowledge_state":
+            subject = knowledge.setdefault(data["subject_id"], {name: {} for name in ("knows", "believes", "suspects", "explicitly_does_not_know", "claims")})
+            target = subject[data["relation"]]
+            if data["action"] == "retract":
+                target.pop(data["proposition_id"], None)
+            else:
+                target[data["proposition_id"]] = event
+        elif kind == "obligation":
+            obligations[data["obligation_id"]] = event
+        elif kind == "obligation_update":
+            obligation = obligations.get(data["obligation_id"])
+            if not obligation:
+                raise IntegrityError(f"Obligation update references unknown obligation: {data['obligation_id']}")
+            obligation = json.loads(json.dumps(obligation))
+            obligation["data"]["status"] = data["status"]
+            obligation["resolution_event"] = event
+            obligations[data["obligation_id"]] = obligation
+        elif kind == "motif_state":
+            motif = motifs.setdefault(data["motif_id"], {"motif_id": data["motif_id"], "appearances": [], "provenance": []})
+            motif["appearances"].extend(source["artifact_id"] for source in event["sources"])
+            motif["current_function"] = data["current_function"]
+            motif["pressure"] = data["pressure"]
+            motif["overuse_risk"] = data["overuse_risk"]
+            motif["provenance"].append(event["constraint_id"])
+        elif kind == "foreclosure_candidate":
+            foreclosures[event["constraint_id"]] = event
+    return facts, knowledge, obligations, motifs, foreclosures
 
 
 def committed_directories(run_dir: Path) -> list[Path]:
@@ -907,8 +1005,40 @@ def reconcile_run(run_dir: Path) -> None:
         if compute_entry_hash(entry) != entry["entry_hash"]:
             raise IntegrityError(f"Ledger entry {index} was changed")
         previous = entry["entry_hash"]
+    prospective_history = run_dir / "planning/prospective-plans.jsonl"
+    prospective_plans = [
+        json.loads(line) for line in prospective_history.read_text(encoding="utf-8").splitlines()
+    ] if prospective_history.exists() else []
+    protocol = load_protocol()
+    for index, plan in enumerate(prospective_plans, 1):
+        validate_json_schema(plan, protocol["$defs"]["prospectivePlan"], protocol)
+        if plan["plan_id"] != f"prospective_plan_{index:04d}":
+            raise IntegrityError("Prospective plan history was reordered or truncated")
+        step_id = f"prospective_{sha256_bytes(plan['recomputed_after_commit_id'].encode())[:16]}"
+        plan_hash = sha256_bytes(canonical_json(plan))
+        match = next(
+            (
+                entry for entry in entries
+                if entry["planned_step_id"] == step_id and entry["commit_status"] == "COMMITTED"
+            ),
+            None,
+        )
+        if not match:
+            append_deterministic_step(
+                run_dir,
+                step_id,
+                "prospective_plan",
+                plan_hash,
+                prospective_plan_hash=plan_hash,
+            )
+            entries = ledger_entries(run_dir)
+            match = entries[-1]
+        if match["output_hash"] != plan_hash or match["prospective_plan_hash_after"] != plan_hash:
+            raise IntegrityError(f"Prospective plan audit hash changed: {plan['plan_id']}")
+    if prospective_plans:
+        write_json(run_dir / "state/prospective-plan.json", prospective_plans[-1])
     committed_steps = {}
-    expected_memory = []
+    expected_constraints = []
     source_index = {}
     for directory in committed_directories(run_dir):
         meta = read_json(directory / "commit-meta.json")
@@ -931,29 +1061,33 @@ def reconcile_run(run_dir: Path) -> None:
         for identifier in generated_ids(record):
             if identifier in source_index:
                 raise IntegrityError(f"Generated ID was reused: {identifier}")
-            source_index[identifier] = {"commit_id": record.get("commit_id", record.get("index_batch_id")), "hash": meta["record_hash"]}
-        expected_memory.extend(meta["memory_events"])
+            source_index[identifier] = {"commit_id": record["commit_id"], "hash": meta["record_hash"]}
+        expected_constraints.extend(meta["constraint_events"])
     inflight_path = run_dir / "state/inflight.json"
     if inflight_path.exists() and read_json(inflight_path).get("step_id") in committed_steps:
         inflight_path.unlink()
-    memory_bytes = b"".join(canonical_json(event) for event in expected_memory)
-    memory_path = run_dir / "memory/memory-events.jsonl"
-    existing = memory_path.read_bytes() if memory_path.exists() else b""
-    if not memory_bytes.startswith(existing):
-        raise IntegrityError("Memory event history was changed")
-    if len(existing) < len(memory_bytes):
-        with memory_path.open("ab") as handle:
-            handle.write(memory_bytes[len(existing):])
+    for event in expected_constraints:
+        for source in event["sources"]:
+            resolved = source_index.get(source["artifact_id"])
+            if not resolved or resolved != {"commit_id": source["source_commit_id"], "hash": source["source_hash"]}:
+                raise IntegrityError(f"Constraint source provenance changed: {source['artifact_id']}")
+    constraint_bytes = b"".join(canonical_json(event) for event in expected_constraints)
+    constraint_path = run_dir / "constraints/constraint-events.jsonl"
+    existing = constraint_path.read_bytes() if constraint_path.exists() else b""
+    if not constraint_bytes.startswith(existing):
+        raise IntegrityError("Constraint event history was changed")
+    if len(existing) < len(constraint_bytes):
+        with constraint_path.open("ab") as handle:
+            handle.write(constraint_bytes[len(existing):])
             handle.flush()
             os.fsync(handle.fileno())
     write_json(run_dir / "state/source-index.json", source_index)
-    canonical = {}
-    working = {}
-    for event in expected_memory:
-        target = canonical if event["memory_class"] == "canonical_state" else working
-        target[event["memory_id"]] = event
-    write_json(run_dir / "state/canonical-memory.json", canonical)
-    write_json(run_dir / "state/working-memory.json", working)
+    facts, knowledge, obligations, motifs, foreclosures = project_constraint_state(expected_constraints)
+    write_json(run_dir / "state/canonical-facts.json", facts)
+    write_json(run_dir / "state/knowledge-state.json", knowledge)
+    write_json(run_dir / "state/obligations.json", obligations)
+    write_json(run_dir / "state/motifs.json", motifs)
+    write_json(run_dir / "state/foreclosure-candidates.json", foreclosures)
     entries = ledger_entries(run_dir)
     state["ledger_sequence"] = len(entries)
     if entries:
@@ -961,8 +1095,8 @@ def reconcile_run(run_dir: Path) -> None:
     state["creative_step_count"] = sum(
         entry["step_type"] == "creative" and entry["commit_status"] == "COMMITTED" for entry in entries
     )
-    state["analysis_or_index_step_count"] = sum(
-        entry["step_type"] == "analysis_or_index" and entry["commit_status"] == "COMMITTED" for entry in entries
+    state["analysis_step_count"] = sum(
+        entry["step_type"] == "analysis" and entry["commit_status"] == "COMMITTED" for entry in entries
     )
     state["input_tokens"] = sum(entry["token_accounting"]["input_tokens"] or 0 for entry in entries)
     state["output_tokens"] = sum(entry["token_accounting"]["output_tokens"] or 0 for entry in entries)
@@ -1002,17 +1136,17 @@ def commit_record(
     record_hash = sha256_bytes(record_bytes)
     raw_bytes = raw_response.encode("utf-8")
     api_bytes = canonical_json(api_response)
-    observations, canonical_ids, unresolved_ids, motif_ids = observation_deltas(record)
-    commit_id = record.get("commit_id", record.get("index_batch_id"))
-    memory_events = make_memory_events(run_dir, record, commit_id, record_hash, planned_step_id)
-    memory_hash = sha256_bytes(b"".join(canonical_json(item) for item in memory_events))
-    state_after = sha256_bytes(f"{state['canonical_state_hash']}:{record_hash}:{memory_hash}".encode())
+    _, past_ids, future_ids, motif_ids = constraint_deltas(record)
+    commit_id = record["commit_id"]
+    constraint_events = make_constraint_events(run_dir, record, commit_id, record_hash, planned_step_id)
+    constraint_hash = sha256_bytes(b"".join(canonical_json(item) for item in constraint_events))
+    state_after = sha256_bytes(f"{state['canonical_state_hash']}:{record_hash}:{constraint_hash}".encode())
     usage = api_response.get("usage", {}) if isinstance(api_response, dict) else {}
     entry = new_ledger_entry(
         run_dir,
         planned_step_id=planned_step_id,
         attempt=attempt,
-        step_type="creative" if record["record_type"] != "index_batch" else "analysis_or_index",
+        step_type="creative",
         step_phase=step_phase,
         parent_state_hash=state["canonical_state_hash"],
         prompt_hash=sha256_bytes(prompt.encode()),
@@ -1024,8 +1158,8 @@ def commit_record(
         started_at=api_response.get("_cathedrals_started_at", utc_now()),
         output_hash=record_hash,
         generated_ids=generated_ids(record),
-        canonical_delta_ids=canonical_ids,
-        unresolved_ids=unresolved_ids,
+        past_constraint_ids=past_ids,
+        future_obligation_ids=future_ids,
         motif_ids=motif_ids,
         branch_relation=branch_relation,
         commit_status="COMMITTED",
@@ -1045,7 +1179,7 @@ def commit_record(
         "record_hash": record_hash,
         "raw_response_hash": sha256_bytes(raw_bytes),
         "api_response_hash": sha256_bytes(api_bytes),
-        "memory_events": memory_events,
+        "constraint_events": constraint_events,
         "ledger_entry": entry,
     }
     write_json(staging / "commit-meta.json", meta)
@@ -1065,6 +1199,8 @@ def commit_record(
     state["stage"] = step_phase.upper()
     save_state(run_dir, state)
     reconcile_run(run_dir)
+    if record["record_type"] in {"architecture", "creative_packet"}:
+        recompute_prospective_plan(run_dir, record["commit_id"])
     return destination
 
 
@@ -1099,8 +1235,8 @@ def append_failed_attempt(
         started_at=started_at,
         output_hash=output_hash,
         generated_ids=[],
-        canonical_delta_ids=[],
-        unresolved_ids=[],
+        past_constraint_ids=[],
+        future_obligation_ids=[],
         motif_ids=[],
         branch_relation=None,
         commit_status="FAILED_BEFORE_COMMIT",
@@ -1124,17 +1260,26 @@ def all_committed_records(run_dir: Path) -> list[dict]:
     return [read_json(path / "record.json") for path in committed_directories(run_dir)]
 
 
-def retrieve_original_sources(run_dir: Path, memory_records: list[dict], limit: int = 24) -> list[dict]:
+def retrieve_original_sources(
+    run_dir: Path,
+    constraints: list[dict],
+    limit: int = 24,
+    records: list[dict] | None = None,
+) -> list[dict]:
     wanted = []
-    for memory in reversed(memory_records):
-        for source in memory.get("sources", []):
-            if source["artifact_id"] not in wanted:
-                wanted.append(source["artifact_id"])
+    locators = {}
+    for constraint in constraints:
+        for source in constraint.get("sources", []):
+            identifier = source["artifact_id"]
+            if identifier not in wanted:
+                wanted.append(identifier)
+                locators[identifier] = source["source_locator"]
         if len(wanted) >= limit:
             break
     retrieved = []
+    committed = list(reversed(records if records is not None else all_committed_records(run_dir)))
     for identifier in wanted:
-        for record in reversed(all_committed_records(run_dir)):
+        for record in committed:
             candidates = []
             if record.get("record_type") == "creative_packet":
                 candidates = record["scenes"] + record["artifacts"] + record["endings"] + record["formal_compositions"]
@@ -1156,7 +1301,13 @@ def retrieve_original_sources(run_dir: Path, memory_records: list[dict], limit: 
                 candidates[0] if len(candidates) == 1 else None,
             )
             if source is not None:
-                retrieved.append({"source_id": identifier, "immutable_source": source})
+                retrieved.append(
+                    {
+                        "source_id": identifier,
+                        "source_locator": locators[identifier],
+                        "immutable_source": source,
+                    }
+                )
                 break
     return retrieved
 
@@ -1242,16 +1393,19 @@ def bounded_context(sections: list[tuple[str, object]], max_tokens: int) -> str:
     output = []
     used = 0
     for label, value in sections:
-        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2)
-        section = f"===== {label} =====\n{text}\n"
-        if used + len(section) <= maximum:
+        header = f"===== {label} =====\n"
+        separator_size = 1 if output else 0
+        values = value if isinstance(value, list) else [value]
+        packed = []
+        for item in values:
+            text = item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, indent=2)
+            candidate = header + "\n\n".join(packed + [text]) + "\n"
+            if used + separator_size + len(candidate) <= maximum:
+                packed.append(text)
+        if packed:
+            section = header + "\n\n".join(packed) + "\n"
             output.append(section)
-            used += len(section)
-            continue
-        remaining = maximum - used
-        if remaining > 1000:
-            output.append(section[: remaining - 120] + "\n[context section truncated at deterministic budget boundary]\n")
-        break
+            used += separator_size + len(section)
     return "\n".join(output)
 
 
@@ -1417,23 +1571,73 @@ def request_record(
     return record
 
 
-def validate_architecture(architecture: dict, manifest: dict) -> None:
+def validate_obligation_origins(obligations: list[dict], allowed_origins: set[str], label: str) -> None:
+    for obligation in obligations:
+        if not set(obligation["created_by_ids"]).issubset(allowed_origins):
+            raise SchemaError(f"{label} has an unknown origin: {obligation['obligation_id']}")
+
+
+def validate_architecture(architecture: dict, manifest: dict, committed_origin_ids: set[str] | None = None) -> None:
     scope = architecture["scope_commitment"]
     requested = manifest["scope"]["possible_scene_count"]
     if scope["possible_scene_count"] != requested or scope["planned_scene_count"] > requested:
         raise SchemaError("Architecture exceeded or replaced the user's possible scene count")
     if scope["planned_scene_count"] < 8:
         raise SchemaError("Architecture cannot satisfy the Cathedrals opening with fewer than eight scenes")
-    plans = sorted(architecture["traversal_plan"], key=lambda item: item["sequence"])
-    if [item["sequence"] for item in plans] != list(range(1, len(plans) + 1)):
-        raise SchemaError("Architecture packet sequence is not contiguous")
+    plans = architecture["packet_plans"]
     plan_ids = {item["packet_slot_id"] for item in plans}
     if len(plan_ids) != len(plans):
         raise SchemaError("Architecture packet IDs are not unique")
-    seen = set()
     scene_slots = []
     ending_slots = []
-    obligations = {item["obligation_id"] for item in architecture["hard_obligations"]}
+    obligation_records = {item["obligation_id"]: item for item in architecture["obligation_graph"]}
+    obligations = set(obligation_records)
+    attractors = {item["attractor_id"]: item for item in architecture["attractors"]}
+    if len(attractors) != len(architecture["attractors"]):
+        raise SchemaError("Architecture attractor IDs are not unique")
+    if not any(item["kind"] == "ending" for item in attractors.values()):
+        raise SchemaError("Architecture must establish at least one ending attractor")
+    if architecture["constraint_delta"]["new_obligations"]:
+        raise SchemaError("Architecture obligations belong in obligation_graph, not a duplicate delta")
+    obligation_origins = (
+        set(attractors)
+        | plan_ids
+        | {architecture["commit_id"]}
+        | {item["arc_id"] for item in architecture["arcs"]}
+        | {item["node_id"] for item in architecture["topology"]["nodes"]}
+        | {item["edge_id"] for item in architecture["topology"]["edges"]}
+        | (committed_origin_ids or set())
+    )
+    validate_obligation_origins(list(obligation_records.values()), obligation_origins, "Architecture obligation")
+    for obligation in obligation_records.values():
+        if obligation["status"] != "active":
+            raise SchemaError("Architecture obligations must begin active")
+        if not set(obligation["requires"]).issubset(obligations):
+            raise SchemaError(f"Obligation references an unknown prerequisite: {obligation['obligation_id']}")
+        allowed_targets = obligations | set(attractors) | plan_ids
+        if not set(obligation["termination_targets"]).issubset(allowed_targets):
+            raise SchemaError(f"Obligation has an unknown termination target: {obligation['obligation_id']}")
+
+    def assert_acyclic(graph: dict[str, list[str]], label: str) -> None:
+        visiting = set()
+        visited = set()
+
+        def visit(node: str) -> None:
+            if node in visiting:
+                raise SchemaError(f"{label} contains a circular dependency at {node}")
+            if node in visited:
+                return
+            visiting.add(node)
+            for dependency in graph[node]:
+                visit(dependency)
+            visiting.remove(node)
+            visited.add(node)
+
+        for node in graph:
+            visit(node)
+
+    assert_acyclic({key: value["requires"] for key, value in obligation_records.items()}, "Obligation graph")
+    assert_acyclic({item["packet_slot_id"]: item["depends_on_packet_slot_ids"] for item in plans}, "Packet graph")
     nodes = {item["node_id"] for item in architecture["topology"]["nodes"]}
     if architecture["topology"]["entry_segment_id"] not in nodes or architecture["topology"]["opening_branch_node_id"] not in nodes:
         raise SchemaError("Architecture entry or opening-branch node does not resolve")
@@ -1455,17 +1659,27 @@ def validate_architecture(architecture: dict, manifest: dict) -> None:
     for arc in architecture["arcs"]:
         if not set(arc["hard_obligation_ids"]).issubset(obligations):
             raise SchemaError(f"Arc references unknown hard obligation: {arc['arc_id']}")
-    for family in architecture["ending_families"]:
-        if not set(family["prerequisite_obligation_ids"]).issubset(obligations):
-            raise SchemaError(f"Ending family references unknown hard obligation: {family['ending_family_id']}")
+    for attractor in attractors.values():
+        if not set(attractor["prerequisite_obligation_ids"]).issubset(obligations):
+            raise SchemaError(f"Attractor references unknown obligation: {attractor['attractor_id']}")
+        if any(obligation_records[item]["hardness"] != "hard" for item in attractor["prerequisite_obligation_ids"]):
+            raise SchemaError("Attractor prerequisites must be hard obligations")
     for plan in plans:
-        if not set(plan["depends_on_packet_slot_ids"]).issubset(seen):
-            raise SchemaError(f"Packet dependencies are not causally forward: {plan['packet_slot_id']}")
-        if not set(plan["hard_obligation_ids"]).issubset(obligations):
-            raise SchemaError(f"Packet references an unknown hard obligation: {plan['packet_slot_id']}")
-        seen.add(plan["packet_slot_id"])
+        if plan["packet_slot_id"] in plan["depends_on_packet_slot_ids"] or not set(plan["depends_on_packet_slot_ids"]).issubset(plan_ids):
+            raise SchemaError(f"Packet dependency does not resolve: {plan['packet_slot_id']}")
+        if not set(plan["attractor_ids"]).issubset(attractors):
+            raise SchemaError(f"Packet references an unknown constraint: {plan['packet_slot_id']}")
+        if plan["packet_kind"] == "ending" and len(plan["attractor_ids"]) != 1:
+            raise SchemaError("Each ending packet must realize exactly one ending attractor")
         scene_slots += plan["scene_slot_ids"]
         ending_slots += plan["ending_slot_ids"]
+    literary_plan_ids = {item["packet_slot_id"] for item in plans if item["packet_kind"] == "literary"}
+    if any(
+        not literary_plan_ids.issubset(set(item["depends_on_packet_slot_ids"]))
+        for item in plans
+        if item["packet_kind"] == "ending"
+    ):
+        raise SchemaError("Ending packets must depend on every literary packet so ending prose remains late")
     if len(scene_slots) != len(set(scene_slots)) or len(scene_slots) != scope["planned_scene_count"]:
         raise SchemaError("Architecture scene slots are duplicated or do not match planned_scene_count")
     if len(ending_slots) != len(set(ending_slots)) or len(ending_slots) != scope["planned_ending_count"]:
@@ -1478,33 +1692,44 @@ def validate_architecture(architecture: dict, manifest: dict) -> None:
         raise SchemaError("Architecture exceeds the derived artifact budget")
     if scope["planned_ending_count"] > manifest["scope"]["ending_hard_max"]:
         raise SchemaError("Architecture exceeds the derived ending budget")
-    if sum(item["ending_target"] for item in architecture["ending_families"]) != scope["planned_ending_count"]:
-        raise SchemaError("Ending-family targets do not match planned_ending_count")
+    assigned_attractor_slots = [slot for item in attractors.values() if item["kind"] == "ending" for slot in item["ending_slot_ids"]]
+    if set(assigned_attractor_slots) != set(ending_slots) or len(assigned_attractor_slots) != len(set(assigned_attractor_slots)):
+        raise SchemaError("Ending attractors must own every ending slot exactly once")
+    for plan in (item for item in plans if item["packet_kind"] == "ending"):
+        attractor = attractors[plan["attractor_ids"][0]]
+        if attractor["kind"] != "ending" or set(attractor["ending_slot_ids"]) != set(plan["ending_slot_ids"]):
+            raise SchemaError("Ending packet slots must exactly match its ending attractor")
     if 2 + len(plans) > manifest["budgets"]["max_creative_step_count"]:
         raise SchemaError("Architecture exceeds the derived creative-step budget")
 
 
 def validate_declared_id_uniqueness(record: dict) -> None:
-    identifiers = [record.get("commit_id"), record.get("index_batch_id")]
+    identifiers = [record.get("commit_id")]
     if record.get("record_type") == "genesis":
         identifiers += [record["work_canon"]["work_id"]]
         identifiers += [item["event_id"] for item in record["work_canon"]["chronology"]]
         identifiers += [item["claimant_id"] for item in record["claimants"]]
         identifiers += [item["character_id"] for item in record["characters"]]
     elif record.get("record_type") == "architecture":
-        identifiers += [item["obligation_id"] for item in record["hard_obligations"]]
+        identifiers += [item["obligation_id"] for item in record["obligation_graph"]]
         identifiers += [item["arc_id"] for item in record["arcs"]]
         identifiers += [item["node_id"] for item in record["topology"]["nodes"]]
         identifiers += [item["edge_id"] for item in record["topology"]["edges"]]
-        identifiers += [item["promise_id"] for item in record["narrative_promises"]]
-        identifiers += [item["ending_family_id"] for item in record["ending_families"]]
-        identifiers += [item["packet_slot_id"] for item in record["traversal_plan"]]
+        identifiers += [item["attractor_id"] for item in record["attractors"]]
+        identifiers += [item["packet_slot_id"] for item in record["packet_plans"]]
     elif record.get("record_type") == "creative_packet":
         identifiers += [item["scene_id"] for item in record["scenes"]]
         identifiers += [item["artifact_id"] for item in record["artifacts"]]
         identifiers += [item["ending_id"] for item in record["endings"]]
         identifiers += [item["composition_id"] for item in record["formal_compositions"]]
         identifiers += [item["edge_id"] for item in record["decision_edges"]]
+    delta = record.get("constraint_delta", {})
+    identifiers += [item["fact_id"] for item in delta.get("canonical_facts", [])]
+    identifiers += [item["knowledge_id"] for item in delta.get("knowledge_changes", [])]
+    identifiers += [item["obligation_id"] for item in delta.get("new_obligations", [])]
+    identifiers += [item["update_id"] for item in delta.get("obligation_updates", [])]
+    identifiers += [item["motif_event_id"] for item in delta.get("motif_events", [])]
+    identifiers += [item["foreclosure_id"] for item in delta.get("potential_foreclosures", [])]
     identifiers = [identifier for identifier in identifiers if identifier]
     duplicates = sorted({identifier for identifier in identifiers if identifiers.count(identifier) > 1})
     if duplicates:
@@ -1523,49 +1748,461 @@ def validate_packet_against_plan(packet: dict, plan: dict) -> None:
         raise SchemaError(f"Packet {plan['packet_slot_id']} did not fill its assigned technical slots exactly once")
     if len(packet["artifacts"]) != plan["artifact_count"] or len(packet["formal_compositions"]) != plan["formal_composition_count"]:
         raise SchemaError(f"Packet {plan['packet_slot_id']} did not satisfy its frozen artifact/composition allocation")
-    if not set(plan["hard_obligation_ids"]).issubset(packet["obligations_consumed"]):
-        raise SchemaError(f"Packet {plan['packet_slot_id']} omitted a hard architectural obligation")
+    if not set(plan["advance_obligation_ids"]).issubset(packet["obligations_advanced"]):
+        raise SchemaError(f"Packet {plan['packet_slot_id']} omitted an assigned obligation")
+
+
+def technical_slot_map(scenes: list[dict], endings: list[dict]) -> dict[str, str]:
+    slots = {}
+    for item in scenes + endings:
+        slot = item["technical_slot_id"]
+        if slot in slots:
+            raise SchemaError(f"Technical slot is owned more than once: {slot}")
+        slots[slot] = item.get("scene_id") or item["ending_id"]
+    return slots
+
+
+def resolve_destination(destination: dict, slots: dict[str, str], content_ids: set[str]) -> str:
+    identifier = destination["id"]
+    if destination["kind"] == "technical_slot":
+        if identifier not in slots:
+            raise SchemaError(f"Technical destination does not resolve exactly once: {identifier}")
+        return slots[identifier]
+    if identifier not in content_ids:
+        raise SchemaError(f"Content destination does not resolve: {identifier}")
+    return identifier
+
+
+def resolve_cross_packet_links(scenes: list[dict], endings: list[dict], edges: list[dict]) -> tuple[list[dict], list[dict]]:
+    slots = technical_slot_map(scenes, endings)
+    content_ids = set(slots.values())
+    resolved_edges = [
+        edge | {"resolved_content_id": resolve_destination(edge["destination"], slots, content_ids)}
+        for edge in edges
+    ]
+    resolved_endings = [
+        ending | {
+            "resolved_redirect_content_id": resolve_destination(ending["redirect_destination"], slots, content_ids)
+            if ending["redirect_destination"] else None
+        }
+        for ending in endings
+    ]
+    return resolved_edges, resolved_endings
+
+
+def _read_state_map(run_dir: Path, name: str) -> dict:
+    path = run_dir / "state" / name
+    return read_json(path) if path.exists() else {}
+
+
+def _tag_set(value: dict, key: str) -> set[str]:
+    return set(value.get("relevance", {}).get(key, []))
+
+
+def relevance_score(event: dict, plan: dict, architecture: dict, dependency_source_ids: set[str], total_events: int) -> int:
+    data = event["data"]
+    score = 0
+    obligation_ids = set(plan.get("advance_obligation_ids", [])) | set(plan.get("may_satisfy_obligation_ids", []))
+    plan_tags = plan.get("relevance", {})
+    sources = {source["artifact_id"] for source in event.get("sources", [])}
+    if sources & dependency_source_ids:
+        score += 12
+    if event["constraint_kind"] in {"obligation", "obligation_update"}:
+        obligation_id = data.get("obligation_id")
+        original = next((item for item in architecture["obligation_graph"] if item["obligation_id"] == obligation_id), data)
+        if obligation_id in obligation_ids:
+            score += 12 if original.get("hardness") == "hard" else 6
+        if original.get("kind") == "causal_debt" and obligation_id in obligation_ids:
+            score += 8
+        prerequisites = {
+            item
+            for attractor in architecture["attractors"]
+            if attractor["attractor_id"] in plan["attractor_ids"]
+            for item in attractor["prerequisite_obligation_ids"]
+        }
+        if obligation_id in prerequisites:
+            score += 8
+    for key, weight in (
+        ("arc_ids", 10),
+        ("branch_ids", 10),
+        ("claimant_ids", 8),
+        ("technical_slot_ids", 8),
+        ("object_ids", 6),
+        ("location_ids", 6),
+        ("state_keys", 6),
+        ("motif_ids", 5),
+    ):
+        if _tag_set(data, key) & set(plan_tags.get(key, [])):
+            score += weight
+    if event["constraint_kind"] == "knowledge_state" and (
+        data.get("subject_id") in set(plan_tags.get("character_ids", []))
+        or _tag_set(data, "character_ids") & set(plan_tags.get("character_ids", []))
+    ):
+        score += 9
+    words = set(re.findall(r"[a-z0-9_]+", " ".join(plan["soft_guidance"] + plan_tags.get("keywords", [])).lower()))
+    event_words = set(re.findall(r"[a-z0-9_]+", json.dumps(data, ensure_ascii=False).lower()))
+    score += min(5, len(words & event_words))
+    if total_events:
+        score += min(2, 2 * event["constraint_event_sequence"] // total_events)
+    return score
+
+
+def select_relevant_constraints(
+    run_dir: Path,
+    architecture: dict,
+    plan: dict,
+    limit: int = 96,
+    records: list[dict] | None = None,
+) -> list[dict]:
+    path = run_dir / "constraints/constraint-events.jsonl"
+    events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+    committed = records if records is not None else all_committed_records(run_dir)
+    packets = {record.get("packet_slot_id"): record for record in committed if record.get("record_type") == "creative_packet"}
+    dependencies = [packets.get(item) for item in plan["depends_on_packet_slot_ids"]]
+    dependency_ids = {identifier for record in dependencies if record for identifier in generated_ids(record)}
+    scored = [(relevance_score(event, plan, architecture, dependency_ids, len(events)), event) for event in events]
+    return [event for score, event in sorted(scored, key=lambda item: (-item[0], item[1]["constraint_event_sequence"])) if score > 0][:limit]
+
+
+def _within_record_budget(records: list[dict], max_tokens: int) -> list[dict]:
+    maximum = max_tokens * 4
+    output = []
+    used = 0
+    for record in records:
+        size = len(json.dumps(record, ensure_ascii=False, indent=2))
+        if used + size <= maximum:
+            output.append(record)
+            used += size
+    return output
 
 
 def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict) -> str:
     manifest = read_json(run_dir / "run-manifest.json")
     genesis = committed_record(run_dir, "genesis")
+    records = all_committed_records(run_dir)
+    packets = {record.get("packet_slot_id"): record for record in records if record.get("record_type") == "creative_packet"}
     dependency_records = [
-        committed_record(run_dir, "creative_packet", dependency)
+        packets.get(dependency)
         for dependency in plan["depends_on_packet_slot_ids"]
     ]
     dependency_records = [record for record in dependency_records if record]
-    recent = [record for record in all_committed_records(run_dir) if record.get("record_type") == "creative_packet"][-2:]
-    canonical = read_json(run_dir / "state/canonical-memory.json") if (run_dir / "state/canonical-memory.json").exists() else {}
-    working = read_json(run_dir / "state/working-memory.json") if (run_dir / "state/working-memory.json").exists() else {}
-    relevant_memory = list(canonical.values())[-80:] + list(working.values())[-80:]
-    retrieved_sources = bounded_context(
-        [("SOURCE-GROUNDED PASSAGES", retrieve_original_sources(run_dir, relevant_memory))],
-        manifest["budgets"]["max_retrieved_source_tokens"],
+    recent = [record for record in records if record.get("record_type") == "creative_packet"][-2:]
+    selected = select_relevant_constraints(run_dir, architecture, plan, records=records)
+    selected_fact_ids = {
+        event["data"]["fact_id"] for event in selected if event["constraint_kind"] == "canonical_fact"
+    }
+    fact_state = _read_state_map(run_dir, "canonical-facts.json")
+    past = [event for key, event in fact_state.items() if key in selected_fact_ids]
+    selected_motif_ids = {
+        event["data"]["motif_id"] for event in selected if event["constraint_kind"] == "motif_state"
+    }
+    motif_state = _read_state_map(run_dir, "motifs.json")
+    motifs = [value for key, value in motif_state.items() if key in selected_motif_ids]
+    retrieved_sources = _within_record_budget(
+        retrieve_original_sources(run_dir, selected, records=records), manifest["budgets"]["max_retrieved_source_tokens"]
     )
     geomancy = ensure_frozen_geomancy(run_dir)
     slots = set(plan["scene_slot_ids"])
     relevant_geomancy = [item for item in geomancy["assignments"] if item["technical_slot_id"] in slots]
-    obligations = [
-        item for item in architecture["hard_obligations"] if item["obligation_id"] in plan["hard_obligation_ids"]
+    obligation_state = _read_state_map(run_dir, "obligations.json")
+    selected_knowledge_ids = {
+        event["constraint_id"] for event in selected if event["constraint_kind"] == "knowledge_state"
+    }
+    knowledge_state = _read_state_map(run_dir, "knowledge-state.json")
+    knowledge = []
+    for subject_id, relations in knowledge_state.items():
+        relevant_relations = {
+            relation: {
+                proposition_id: event
+                for proposition_id, event in propositions.items()
+                if event["constraint_id"] in selected_knowledge_ids
+            }
+            for relation, propositions in relations.items()
+        }
+        if any(relevant_relations.values()):
+            knowledge.append({"subject_id": subject_id, **relevant_relations})
+    selected_obligation_ids = {
+        event["data"].get("obligation_id")
+        for event in selected
+        if event["constraint_class"] == "future_obligation"
+    }
+    active_obligations = [
+        event for key, event in obligation_state.items()
+        if key in selected_obligation_ids and event["data"]["status"] == "active"
     ]
+    hard_obligations = [item for item in active_obligations if item["data"]["hardness"] == "hard"]
+    soft_obligations = [item for item in active_obligations if item["data"]["hardness"] == "soft"]
+    advance = sorted(
+        (obligation_state[item] for item in plan["advance_obligation_ids"] if item in obligation_state),
+        key=lambda item: item["data"]["hardness"] != "hard",
+    )
+    may_satisfy = sorted(
+        (obligation_state[item] for item in plan["may_satisfy_obligation_ids"] if item in obligation_state),
+        key=lambda item: item["data"]["hardness"] != "hard",
+    )
+    attractors = [item for item in architecture["attractors"] if item["attractor_id"] in plan["attractor_ids"]]
+    ending_sections = []
+    if plan["packet_kind"] == "ending":
+        prerequisite_ids = sorted({
+            obligation_id for attractor in attractors for obligation_id in attractor["prerequisite_obligation_ids"]
+        })
+        prerequisite_chain = [obligation_state[item] for item in prerequisite_ids if item in obligation_state]
+        relevant_debts = [obligation_state[item] for item in selected_obligation_ids if item in obligation_state]
+        ending_sections = [
+            ("BACKWARD PREREQUISITE CHAIN", prerequisite_chain),
+            ("SATISFIED PREREQUISITES WITH SOURCES", [item for item in prerequisite_chain if item["data"]["status"] == "satisfied"]),
+            ("RELEVANT UNSATISFIED / AMBIGUOUS PRESSURES", [item for item in relevant_debts if item["data"]["status"] in {"active", "intentionally_unresolved"}]),
+            ("CURRENT READER STATE", [item for item in past if "reader" in item["data"]["subject"] or item["data"].get("relevance", {}).get("state_keys")]),
+            ("BRANCH RESIDUE", [item for item in relevant_debts if item["data"]["kind"] == "branch_residue"]),
+            ("CLAIMANT PRESSURES", [item for item in relevant_debts if item["data"].get("relevance", {}).get("claimant_ids")]),
+        ]
     return bounded_context(
         [
-            ("FROZEN ENGINE CANON", (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
+            ("FROZEN ENGINE LAW", (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
             ("FROZEN GENERATION BRIEF", manifest["generation_brief"]),
-            ("ACTIVE WEB FORMAT CONTRACT", active_format_contract("web").read_text(encoding="utf-8")),
-            ("GENERATED ROOT CANON", genesis),
-            ("PACKET PLAN", plan),
-            ("HARD OBLIGATIONS", obligations),
-            ("DEPENDENCY SOURCE RECORDS", dependency_records),
-            ("RECENT IMMUTABLE SOURCE RECORDS", recent),
-            ("RELEVANT CANONICAL GENERATED STATE", list(canonical.values())[-80:]),
-            ("RELEVANT NARRATIVE WORKING MEMORY", list(working.values())[-80:]),
+            ("IMMUTABLE GENERATED ROOT CANON", genesis),
+            ("CURRENT PACKET STRUCTURAL POSITION", plan),
+            ("IMMUTABLE PAST CONSTRAINTS", past),
+            ("ACTIVE HARD FUTURE OBLIGATIONS", hard_obligations),
+            ("OBLIGATIONS THIS PACKET SHOULD ADVANCE", advance),
+            ("OBLIGATIONS THIS PACKET MAY SATISFY", may_satisfy),
+            ("DIRECT DEPENDENCY SOURCE EVIDENCE", dependency_records),
+            ("CHARACTER KNOWLEDGE / BELIEF CONSTRAINTS", knowledge),
+            ("ENDING ATTRACTOR" if plan["packet_kind"] == "ending" else "ENDING / BRANCH ATTRACTORS EXERTING PRESSURE", attractors),
+            *ending_sections,
             ("RETRIEVED ORIGINAL SOURCE EVIDENCE", retrieved_sources),
+            ("RELEVANT MOTIF PRESSURES", motifs),
             ("FROZEN THRESHOLD GEOMANCY", relevant_geomancy),
+            ("RECENT LOCAL SOURCE", recent),
+            ("SOFT FUTURE PRESSURES", soft_obligations),
         ],
         manifest["budgets"]["max_prepared_context_tokens"] - 14000,
     )
+
+
+def evaluate_feasibility(architecture: dict, obligations: dict, foreclosure_candidates: dict) -> list[dict]:
+    results = []
+    for attractor in architecture["attractors"]:
+        prerequisite_ids = set(attractor["prerequisite_obligation_ids"])
+        prerequisites = [obligations[item]["data"] for item in prerequisite_ids if item in obligations]
+        missing = prerequisite_ids - set(obligations)
+        candidates = [
+            event
+            for event in foreclosure_candidates.values()
+            if event["data"]["attractor_id"] == attractor["attractor_id"]
+        ]
+        universal_impossible = [
+            item for item in prerequisites
+            if item["hardness"] == "hard" and item["universality"] == "universal" and item["status"] == "impossible"
+        ]
+        impossible = [item for item in prerequisites if item["hardness"] == "hard" and item["status"] == "impossible"]
+        lawful = []
+        for candidate in candidates:
+            negated = set(candidate["data"]["negated_prerequisite_obligation_ids"])
+            if (
+                attractor["foreclosable"]
+                and negated
+                and negated.issubset(prerequisite_ids)
+                and all(
+                    item in obligations
+                    and obligations[item]["data"]["status"] == "impossible"
+                    and obligations[item]["data"]["universality"] != "universal"
+                    for item in negated
+                )
+            ):
+                lawful.append(candidate)
+        if missing or universal_impossible or (impossible and not attractor["foreclosable"]):
+            results.append({
+                "attractor_id": attractor["attractor_id"],
+                "status": "universally_required_but_impossible",
+                "reason": "A required obligation is missing or mechanically impossible and cannot be lawfully foreclosed.",
+                "source_ids": [source["artifact_id"] for item in universal_impossible for source in obligations[item["obligation_id"]]["sources"]],
+            })
+        elif lawful:
+            candidate = lawful[-1]
+            results.append({
+                "attractor_id": attractor["attractor_id"],
+                "status": "foreclosed",
+                "reason": candidate["data"]["reason"],
+                "source_ids": [source["artifact_id"] for source in candidate["sources"]],
+            })
+        elif candidates or impossible:
+            results.append({
+                "attractor_id": attractor["attractor_id"],
+                "status": "endangered",
+                "reason": "Committed history threatens this attractor, but lawful foreclosure is not yet established.",
+                "source_ids": [source["artifact_id"] for item in candidates for source in item["sources"]],
+            })
+        else:
+            results.append({
+                "attractor_id": attractor["attractor_id"],
+                "status": "viable",
+                "reason": "No hard prerequisite has been irreversibly negated.",
+                "source_ids": [],
+            })
+    return results
+
+
+def obligation_assignment_score(obligation: dict, plan: dict, architecture: dict) -> int:
+    score = 0
+    targets = set(obligation["termination_targets"])
+    if plan["packet_slot_id"] in targets or set(plan["attractor_ids"]) & targets:
+        score += 12
+    obligation_tags = obligation.get("relevance", {})
+    plan_tags = plan.get("relevance", {})
+    for key, weight in (
+        ("arc_ids", 10), ("branch_ids", 10), ("claimant_ids", 8),
+        ("character_ids", 8), ("technical_slot_ids", 8), ("object_ids", 6),
+        ("location_ids", 6), ("state_keys", 6), ("motif_ids", 5),
+    ):
+        if set(obligation_tags.get(key, [])) & set(plan_tags.get(key, [])):
+            score += weight
+    if any(
+        obligation["obligation_id"] in attractor["prerequisite_obligation_ids"]
+        for attractor in architecture["attractors"]
+        if attractor["attractor_id"] in plan["attractor_ids"]
+    ):
+        score += 8
+    words = set(re.findall(r"[a-z0-9_]+", " ".join(plan["soft_guidance"] + plan_tags.get("keywords", [])).lower()))
+    obligation_words = set(re.findall(r"[a-z0-9_]+", obligation["description"].lower()))
+    return score + min(5, len(words & obligation_words))
+
+
+def build_prospective_plan(run_dir: Path, architecture: dict, recomputed_after_commit_id: str) -> dict:
+    obligations = _read_state_map(run_dir, "obligations.json")
+    foreclosures = _read_state_map(run_dir, "foreclosure-candidates.json")
+    feasibility = evaluate_feasibility(architecture, obligations, foreclosures)
+    feasibility_by_id = {item["attractor_id"]: item["status"] for item in feasibility}
+    committed = {
+        record["packet_slot_id"]
+        for record in all_committed_records(run_dir)
+        if record.get("record_type") == "creative_packet"
+    }
+    uncommitted_plans = [plan for plan in architecture["packet_plans"] if plan["packet_slot_id"] not in committed]
+    obligation_assignments = []
+    for obligation_id, event in obligations.items():
+        obligation = event["data"]
+        if obligation["status"] != "active":
+            continue
+        candidates = [
+            plan for plan in uncommitted_plans
+            if plan["packet_kind"] != "ending"
+            or (
+                obligation["hardness"] == "soft"
+                and all(feasibility_by_id[item] == "viable" for item in plan["attractor_ids"])
+                and all(
+                    obligations[prerequisite]["data"]["status"] == "satisfied"
+                    for attractor_id in plan["attractor_ids"]
+                    for prerequisite in next(
+                        item for item in architecture["attractors"] if item["attractor_id"] == attractor_id
+                    )["prerequisite_obligation_ids"]
+                )
+            )
+        ]
+        if not candidates:
+            continue
+        ranked = sorted(
+            ((obligation_assignment_score(obligation, plan, architecture), plan) for plan in candidates),
+            key=lambda item: (-item[0], item[1]["initial_priority"], item[1]["packet_slot_id"]),
+        )
+        score, assigned = ranked[0]
+        obligation_assignments.append({
+            "obligation_id": obligation_id,
+            "packet_slot_id": assigned["packet_slot_id"],
+            "score": score,
+            "reason": "Best current lawful target by declared termination, structural relevance, and lexical pressure.",
+        })
+    packet_order = []
+    for plan in uncommitted_plans:
+        if plan["packet_slot_id"] in committed or not set(plan["depends_on_packet_slot_ids"]).issubset(committed):
+            continue
+        statuses = [feasibility_by_id[item] for item in plan["attractor_ids"]]
+        if plan["packet_kind"] == "ending":
+            prerequisites = [
+                prerequisite
+                for attractor_id in plan["attractor_ids"]
+                for prerequisite in next(
+                    item for item in architecture["attractors"] if item["attractor_id"] == attractor_id
+                )["prerequisite_obligation_ids"]
+            ]
+            if any(status != "viable" for status in statuses) or any(
+                obligations[item]["data"]["status"] != "satisfied" for item in prerequisites
+            ):
+                continue
+        assigned_ids = [
+            item["obligation_id"] for item in obligation_assignments if item["packet_slot_id"] == plan["packet_slot_id"]
+        ]
+        active = [obligations[item]["data"] for item in assigned_ids]
+        score = sum(12 if item["hardness"] == "hard" else 5 for item in active)
+        score += max(0, 8 - plan["initial_priority"])
+        packet_order.append({
+            "packet_slot_id": plan["packet_slot_id"],
+            "score": score,
+            "reason": "Eligible by committed dependencies; ranked by active constraint pressure and initial priority.",
+        })
+    packet_order.sort(key=lambda item: (-item["score"], item["packet_slot_id"]))
+    history = run_dir / "planning/prospective-plans.jsonl"
+    sequence = len(history.read_text(encoding="utf-8").splitlines()) + 1 if history.exists() else 1
+    return {
+        "record_type": "prospective_plan",
+        "protocol_version": "3.0",
+        "generation_id": run_dir.name,
+        "plan_id": f"prospective_plan_{sequence:04d}",
+        "based_on_canonical_state_hash": load_state(run_dir)["canonical_state_hash"],
+        "recomputed_after_commit_id": recomputed_after_commit_id,
+        "created_at": utc_now(),
+        "feasibility": feasibility,
+        "obligation_assignments": obligation_assignments,
+        "packet_order": packet_order,
+    }
+
+
+def recompute_prospective_plan(run_dir: Path, recomputed_after_commit_id: str) -> dict:
+    architecture = committed_record(run_dir, "architecture")
+    if not architecture:
+        return {}
+    step_id = f"prospective_{sha256_bytes(recomputed_after_commit_id.encode())[:16]}"
+    if step_is_committed(run_dir, step_id):
+        return _read_state_map(run_dir, "prospective-plan.json")
+    plan = build_prospective_plan(run_dir, architecture, recomputed_after_commit_id)
+    protocol = load_protocol()
+    validate_json_schema(plan, protocol["$defs"]["prospectivePlan"], protocol)
+    history = run_dir / "planning/prospective-plans.jsonl"
+    with history.open("ab") as handle:
+        handle.write(canonical_json(plan))
+        handle.flush()
+        os.fsync(handle.fileno())
+    write_json(run_dir / "state/prospective-plan.json", plan)
+    plan_hash = sha256_bytes(canonical_json(plan))
+    append_deterministic_step(run_dir, step_id, "prospective_plan", plan_hash, prospective_plan_hash=plan_hash)
+    return plan
+
+
+def select_next_packet(run_dir: Path, architecture: dict) -> dict | None:
+    prospective = _read_state_map(run_dir, "prospective-plan.json")
+    if not prospective:
+        prospective = recompute_prospective_plan(run_dir, architecture["commit_id"])
+    impossible = [item for item in prospective["feasibility"] if item["status"] == "universally_required_but_impossible"]
+    if impossible:
+        raise CathedralsError("Forward feasibility", impossible[0]["reason"], "continuity_impossibility")
+    plans = {item["packet_slot_id"]: item for item in architecture["packet_plans"]}
+    if not prospective["packet_order"]:
+        return None
+    packet_slot_id = prospective["packet_order"][0]["packet_slot_id"]
+    assignments = [
+        item["obligation_id"]
+        for item in prospective["obligation_assignments"]
+        if item["packet_slot_id"] == packet_slot_id
+    ]
+    obligations = _read_state_map(run_dir, "obligations.json")
+    may_satisfy = [
+        item for item in assignments
+        if all(obligations[required]["data"]["status"] == "satisfied" for required in obligations[item]["data"]["requires"])
+    ]
+    return plans[packet_slot_id] | {
+        "advance_obligation_ids": assignments,
+        "may_satisfy_obligation_ids": may_satisfy,
+    }
 
 
 def step_is_committed(run_dir: Path, step_id: str) -> bool:
@@ -1582,6 +2219,10 @@ def validate_genesis(record: dict, run_dir: Path) -> None:
     slots = [claimant["technical_slot_id"] for claimant in record["claimants"]]
     if sorted(slots) != [f"claimant_slot_{number:02d}" for number in range(1, 6)]:
         raise SchemaError("Genesis must fill each of the five semantically blank claimant slots once")
+    propositions = {item["fact_id"] for item in record["constraint_delta"]["canonical_facts"]}
+    if any(item["proposition_id"] not in propositions for item in record["constraint_delta"]["knowledge_changes"]):
+        raise SchemaError("Genesis knowledge state references an unknown proposition")
+    validate_art_direction(record["web_art_direction"])
 
 
 def validate_architecture_for_run(record: dict, run_dir: Path) -> None:
@@ -1593,7 +2234,34 @@ def validate_architecture_for_run(record: dict, run_dir: Path) -> None:
     claimants = {item["claimant_id"] for item in genesis["claimants"]}
     if any(not set(arc["claimant_pressures"]).issubset(claimants) for arc in record["arcs"]):
         raise SchemaError("Architecture applies pressure from an unknown claimant")
-    validate_architecture(record, read_json(run_dir / "run-manifest.json"))
+    validate_architecture(record, read_json(run_dir / "run-manifest.json"), set(_source_index(run_dir)))
+
+
+def validate_ending_prerequisites(
+    ending: dict,
+    attractors: dict,
+    obligation_state: dict,
+    feasibility: dict,
+    evidence_source_ids: set[str],
+    satisfaction_evidence: dict[str, set[str]] | None = None,
+) -> None:
+    attractor = attractors.get(ending["attractor_id"])
+    if not attractor or attractor["kind"] != "ending" or feasibility.get(ending["attractor_id"]) != "viable":
+        raise SchemaError("Ending cannot realize an absent, non-ending, or nonviable attractor")
+    satisfied = {
+        key for key, value in obligation_state.items() if value["data"]["status"] == "satisfied"
+    }
+    prerequisites = set(attractor["prerequisite_obligation_ids"])
+    if set(ending["satisfied_prerequisite_obligation_ids"]) != prerequisites or not prerequisites.issubset(satisfied):
+        raise SchemaError("Ending cannot commit before every hard attractor prerequisite is satisfied")
+    if not set(ending["prerequisite_evidence_source_ids"]).issubset(evidence_source_ids):
+        raise SchemaError("Ending prerequisite evidence does not resolve to immutable source")
+    satisfaction_evidence = satisfaction_evidence or {}
+    required_evidence = {
+        source_id for obligation_id in prerequisites for source_id in satisfaction_evidence.get(obligation_id, set())
+    }
+    if not required_evidence.issubset(ending["prerequisite_evidence_source_ids"]):
+        raise SchemaError("Ending does not cite the evidence that satisfied its prerequisites")
 
 
 def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
@@ -1602,22 +2270,131 @@ def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
         raise SchemaError("Packet does not descend from the committed architecture")
     if record["generation_id"] != run_dir.name or record["story_format"] != "web":
         raise SchemaError("Packet does not match the frozen run or active web format")
-    if record["packet_sequence"] != plan["sequence"]:
-        raise SchemaError("Packet sequence differs from frozen traversal")
-    obligations = {item["obligation_id"] for item in architecture["hard_obligations"]}
+    committed_packet_count = sum(item.get("record_type") == "creative_packet" for item in all_committed_records(run_dir))
+    if record["packet_sequence"] != committed_packet_count + 1:
+        raise SchemaError("Packet sequence does not match immutable forward commit order")
+    obligation_state = _read_state_map(run_dir, "obligations.json")
+    obligations = set(obligation_state)
     arcs = {item["arc_id"] for item in architecture["arcs"]}
     claimants = {item["claimant_id"] for item in committed_record(run_dir, "genesis")["claimants"]}
-    if not set(record["obligations_consumed"]).issubset(obligations):
-        raise SchemaError("Packet claims an unknown architectural obligation")
+    attractors = {item["attractor_id"]: item for item in architecture["attractors"]}
+    if not set(record["obligations_advanced"]).issubset(obligations):
+        raise SchemaError("Packet claims an unknown obligation")
     if any(scene["arc_id"] not in arcs or not set(scene["claimant_focus_ids"]).issubset(claimants) for scene in record["scenes"]):
         raise SchemaError("Packet scene references an unknown arc or claimant")
     if any(not set(item["claimant_relevance_ids"]).issubset(claimants) for item in record["artifacts"]):
         raise SchemaError("Packet artifact references an unknown claimant")
     if any(not set(item["claimant_pressure_ids"]).issubset(claimants) for item in record["endings"]):
         raise SchemaError("Packet ending references an unknown claimant")
+    for scene in record["scenes"]:
+        validate_markdown_source(scene["prose_mdx"], f"Scene {scene['scene_id']}")
+    for artifact in record["artifacts"]:
+        validate_markdown_source(artifact["body_mdx"], f"Artifact {artifact['artifact_id']}")
+    for ending in record["endings"]:
+        validate_markdown_source(ending["prose_mdx"], f"Ending {ending['ending_id']}")
+    changes = record["constraint_delta"]
+    known_propositions = set(_read_state_map(run_dir, "canonical-facts.json")) | {
+        item["fact_id"] for item in changes["canonical_facts"]
+    }
+    if any(item["proposition_id"] not in known_propositions for item in changes["knowledge_changes"]):
+        raise SchemaError("Knowledge state references an unknown proposition")
+    new_obligation_ids = {item["obligation_id"] for item in changes["new_obligations"]}
+    known_obligation_origins = set(_source_index(run_dir)) | (set(generated_ids(record)) - new_obligation_ids)
+    validate_obligation_origins(changes["new_obligations"], known_obligation_origins, "New obligation")
+    allowed_targets = (
+        obligations
+        | new_obligation_ids
+        | set(attractors)
+        | {item["packet_slot_id"] for item in architecture["packet_plans"] if item["packet_slot_id"] != plan["packet_slot_id"]}
+    )
+    for obligation in changes["new_obligations"]:
+        if not set(obligation["requires"]).issubset(obligations | new_obligation_ids):
+            raise SchemaError("New obligation references an unknown prerequisite")
+        if obligation["range"] == "long_range" and not set(obligation["termination_targets"]).issubset(allowed_targets):
+            raise SchemaError("New long-range obligation has no lawful future termination target")
+    candidate_by_obligation = {
+        obligation_id: candidate
+        for candidate in changes["potential_foreclosures"]
+        for obligation_id in candidate["negated_prerequisite_obligation_ids"]
+    }
+    for update in changes["obligation_updates"]:
+        if update["obligation_id"] not in obligations:
+            raise SchemaError("Obligation update references an unknown obligation")
+        original = obligation_state[update["obligation_id"]]["data"]
+        if update["status"] == "foreclosed" and original["universality"] == "universal" and original["hardness"] == "hard":
+            raise SchemaError("A universal hard obligation cannot be foreclosed")
+        if update["status"] in {"foreclosed", "impossible"}:
+            candidate = candidate_by_obligation.get(update["obligation_id"])
+            if not candidate or candidate["attractor_id"] not in original["termination_targets"]:
+                raise SchemaError("An obligation may become impossible or foreclosed only with a scoped foreclosure candidate")
+    for candidate in changes["potential_foreclosures"]:
+        attractor = attractors.get(candidate["attractor_id"])
+        if not attractor or not set(candidate["negated_prerequisite_obligation_ids"]).issubset(attractor["prerequisite_obligation_ids"]):
+            raise SchemaError("Potential foreclosure does not negate a known attractor prerequisite")
+        if any(
+            obligation_state[item]["data"]["universality"] == "universal"
+            and obligation_state[item]["data"]["hardness"] == "hard"
+            for item in candidate["negated_prerequisite_obligation_ids"]
+        ):
+            raise SchemaError("A universal obligation cannot be used to foreclose an attractor")
+    knowledge = _read_state_map(run_dir, "knowledge-state.json")
+    learned_here = {
+        (item["subject_id"], item["proposition_id"])
+        for item in changes["knowledge_changes"]
+        if item["action"] == "establish" and item["relation"] in {"knows", "believes", "suspects"}
+    }
+    for scene in record["scenes"]:
+        for dependency in scene["epistemic_dependencies"]:
+            unavailable = knowledge.get(dependency["subject_id"], {}).get("explicitly_does_not_know", {})
+            if any(
+                proposition in unavailable and (dependency["subject_id"], proposition) not in learned_here
+                for proposition in dependency["proposition_ids"]
+            ):
+                raise SchemaError("Scene relies on knowledge explicitly unavailable to its character")
+    prospective = _read_state_map(run_dir, "prospective-plan.json")
+    feasibility = {item["attractor_id"]: item["status"] for item in prospective.get("feasibility", [])}
+    satisfaction_evidence = {
+        key: {source["artifact_id"] for source in value["resolution_event"]["sources"]}
+        for key, value in obligation_state.items()
+        if value["data"]["status"] == "satisfied" and "resolution_event" in value
+    }
+    satisfaction_evidence.update({
+        item["obligation_id"]: {source["artifact_id"] for source in item["evidence_sources"]}
+        for item in changes["obligation_updates"]
+        if item["status"] == "satisfied"
+    })
+    for ending in record["endings"]:
+        validate_ending_prerequisites(
+            ending,
+            attractors,
+            obligation_state,
+            feasibility,
+            set(_source_index(run_dir)) | set(generated_ids(record)),
+            satisfaction_evidence,
+        )
     current_content = {item["scene_id"] for item in record["scenes"]} | {item["ending_id"] for item in record["endings"]}
+    committed_content = {
+        identifier
+        for packet in all_committed_records(run_dir)
+        if packet.get("record_type") == "creative_packet"
+        for identifier in [
+            *(item["scene_id"] for item in packet["scenes"]),
+            *(item["ending_id"] for item in packet["endings"]),
+        ]
+    }
+    declared_slots = {
+        slot
+        for packet_plan in architecture["packet_plans"]
+        for slot in packet_plan["scene_slot_ids"] + packet_plan["ending_slot_ids"]
+    }
     if any(edge["from_content_id"] not in current_content for edge in record["decision_edges"]):
         raise SchemaError("A packet cannot retroactively attach an edge to earlier content")
+    destinations = [edge["destination"] for edge in record["decision_edges"]]
+    destinations += [ending["redirect_destination"] for ending in record["endings"] if ending["redirect_destination"]]
+    if any(destination["kind"] == "technical_slot" and destination["id"] not in declared_slots for destination in destinations):
+        raise SchemaError("A packet references a technical destination outside frozen architecture")
+    if any(destination["kind"] == "content" and destination["id"] not in current_content | committed_content for destination in destinations):
+        raise SchemaError("A packet invented an uncommitted future literary content ID")
     geomancy = {item["technical_slot_id"]: item for item in ensure_frozen_geomancy(run_dir)["assignments"]}
     if any(
         scene["technical_slot_id"] not in geomancy
@@ -1671,7 +2448,10 @@ def architecture_prompt(run_dir: Path) -> tuple[str, str]:
 
 def packet_prompt(run_dir: Path, architecture: dict, plan: dict) -> tuple[str, str]:
     context = relevant_packet_context(run_dir, architecture, plan)
-    obligations = json.dumps(plan, ensure_ascii=False, indent=2)
+    packet_sequence = 1 + sum(
+        record.get("record_type") == "creative_packet" for record in all_committed_records(run_dir)
+    )
+    obligations = json.dumps(plan | {"packet_sequence": packet_sequence}, ensure_ascii=False, indent=2)
     if plan["packet_kind"] == "literary":
         name = "generation-packet.md"
         replacements = {
@@ -1729,21 +2509,36 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
     else:
         output_fn("[04] Architecture                  ✓ already committed")
     architecture = committed_record(run_dir, "architecture")
-    plans = sorted(architecture["traversal_plan"], key=lambda item: item["sequence"])
-    literary_total = sum(plan["packet_kind"] == "literary" for plan in plans)
-    ending_total = len(plans) - literary_total
-    literary_index = ending_index = 0
-    for plan in plans:
-        if plan["packet_kind"] == "literary":
-            literary_index += 1
-            label = f"Literary packet {literary_index:02d}/{literary_total:02d}"
-        else:
-            ending_index += 1
-            label = f"Ending packet {ending_index:02d}/{ending_total:02d}"
+    plans = architecture["packet_plans"]
+    while True:
+        committed_slots = {
+            record["packet_slot_id"]
+            for record in all_committed_records(run_dir)
+            if record.get("record_type") == "creative_packet"
+        }
+        pending = [plan for plan in plans if plan["packet_slot_id"] not in committed_slots]
+        if not pending:
+            break
+        plan = select_next_packet(run_dir, architecture)
+        if plan is None:
+            feasibility = {
+                item["attractor_id"]: item["status"]
+                for item in _read_state_map(run_dir, "prospective-plan.json").get("feasibility", [])
+            }
+            if all(
+                item["packet_kind"] == "ending"
+                and all(feasibility.get(attractor) == "foreclosed" for attractor in item["attractor_ids"])
+                for item in pending
+            ):
+                break
+            raise CathedralsError("Prospective planning", "No lawful packet remains while required work is still active.", "continuity_impossibility")
+        completed_kind = sum(
+            item["packet_kind"] == plan["packet_kind"] and item["packet_slot_id"] in committed_slots
+            for item in plans
+        )
+        total_kind = sum(item["packet_kind"] == plan["packet_kind"] for item in plans)
+        label = f"{'Literary' if plan['packet_kind'] == 'literary' else 'Ending'} packet {completed_kind + 1:02d}/{total_kind:02d}"
         step_id = f"packet_{plan['packet_slot_id']}"
-        if committed_record(run_dir, "creative_packet", plan["packet_slot_id"]):
-            output_fn(f"      {label:<31} ✓ already committed")
-            continue
         missing = [dependency for dependency in plan["depends_on_packet_slot_ids"] if not committed_record(run_dir, "creative_packet", dependency)]
         if missing:
             raise CathedralsError("Traversal", f"{plan['packet_slot_id']} has uncommitted dependencies: {', '.join(missing)}", "continuity_impossibility")
@@ -1769,6 +2564,125 @@ def literary_word_count(value: str) -> int:
     return len(re.findall(r"\b[\w’'-]+\b", value, flags=re.UNICODE))
 
 
+HTML_TAG = re.compile(
+    r"<!--.*?-->|<!DOCTYPE\s[^>]*>|<\s*/?\s*[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*|/[^<>]*)?>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def validate_markdown_source(value: str, label: str) -> None:
+    if HTML_TAG.search(value) or re.search(r"(^|\n)\s*(import|export)\b", value, re.IGNORECASE):
+        raise SchemaError(f"{label} contains authored HTML or executable MDX; literary source must be Markdown only")
+
+
+def _rgb(value: str) -> tuple[float, float, float]:
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+        raise SchemaError(f"Invalid art-direction color: {value!r}")
+    channels = [int(value[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+    return tuple(channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4 for channel in channels)
+
+
+def contrast_ratio(left: str, right: str) -> float:
+    first, second = sorted((sum(weight * channel for weight, channel in zip((0.2126, 0.7152, 0.0722), _rgb(value))) for value in (left, right)), reverse=True)
+    return (first + 0.05) / (second + 0.05)
+
+
+def _mix_hex(first: str, second: str, first_weight: float) -> str:
+    channels = [
+        round(int(first[index:index + 2], 16) * first_weight + int(second[index:index + 2], 16) * (1 - first_weight))
+        for index in (1, 3, 5)
+    ]
+    return "#" + "".join(f"{channel:02x}" for channel in channels)
+
+
+def _force_contrast(foreground: str, backgrounds: tuple[str, ...], minimum: float) -> str:
+    for step in range(101):
+        candidate = _mix_hex(foreground, "#000000", 1 - step / 100)
+        if all(contrast_ratio(candidate, background) >= minimum for background in backgrounds):
+            return candidate
+    return "#000000"
+
+
+def light_art_direction_palette(direction: dict) -> dict[str, str]:
+    palette = direction["palette"]
+    background = _mix_hex(palette["background"], "#ffffff", 0.08)
+    surface = _mix_hex(palette["surface"], "#ffffff", 0.05)
+    backgrounds = (background, surface)
+    return {
+        "background": background,
+        "surface": surface,
+        "text": _force_contrast(palette["text"], backgrounds, 4.5),
+        "muted": _force_contrast(palette["muted"], backgrounds, 4.5),
+        "accent": _force_contrast(palette["accent"], backgrounds, 3.0),
+        "danger": _force_contrast(palette["danger"], backgrounds, 3.0),
+    }
+
+
+def validate_art_direction(direction: dict) -> None:
+    palette = direction["palette"]
+    for foreground, background, minimum in (
+        ("text", "background", 4.5),
+        ("text", "surface", 4.5),
+        ("muted", "background", 4.5),
+        ("muted", "surface", 4.5),
+        ("accent", "background", 3.0),
+        ("accent", "surface", 3.0),
+        ("danger", "background", 3.0),
+        ("danger", "surface", 3.0),
+    ):
+        if contrast_ratio(palette[foreground], palette[background]) < minimum:
+            raise SchemaError(f"Web art direction fails contrast: {foreground} on {background} must be at least {minimum}:1")
+
+
+def art_direction_css(direction: dict) -> str:
+    validate_art_direction(direction)
+    palette = direction["palette"]
+    light_palette = light_art_direction_palette(direction)
+    body_fonts = {
+        "archival_serif": "Georgia,'Times New Roman',serif",
+        "literary_serif": "Iowan Old Style,Palatino Linotype,Book Antiqua,serif",
+        "humanist_sans": "Aptos,Segoe UI,system-ui,sans-serif",
+    }
+    heading_fonts = {
+        "severe_sans": "Arial Narrow,Aptos Narrow,Arial,sans-serif",
+        "engraved_serif": "Baskerville,Georgia,serif",
+        "humanist_sans": "Aptos,Segoe UI,system-ui,sans-serif",
+    }
+    density = {"sparse": ("5rem", "2rem"), "balanced": ("3.5rem", "1.5rem"), "compressed": ("2.25rem", "1rem")}
+    scale = {"restrained": "1rem", "balanced": "1.08rem", "expansive": "1.16rem"}
+    tracking = {"narrow": "-.015em", "neutral": "0", "open": ".045em"}
+    border = {"none": "0", "hairline": "1px solid var(--muted)", "institutional": "2px double var(--muted)", "boxed": "2px solid var(--accent)", "ruled": "1px dashed var(--muted)"}
+    surface = {
+        "flat": "none",
+        "paper": "linear-gradient(100deg,transparent 0 49%,color-mix(in srgb,var(--text) 3%,transparent) 50%,transparent 51%)",
+        "clinical": "linear-gradient(180deg,color-mix(in srgb,var(--accent) 5%,transparent),transparent 18rem)",
+        "terminal": "repeating-linear-gradient(0deg,transparent 0 3px,color-mix(in srgb,var(--text) 2%,transparent) 4px)",
+        "archival": "radial-gradient(circle at 18% 0,color-mix(in srgb,var(--accent) 12%,transparent),transparent 42rem)",
+    }
+    artifact = {"file": "0", "transcript": ".02em", "card": ".04em", "ledger": ".08em", "marginalia": "-.01em"}
+    transition = {"quiet": "120ms", "severe": "0ms", "dissolving": "320ms", "segmented": "180ms"}
+    ending = {"ceremonial": "3px double var(--accent)", "abrupt": "6px solid var(--danger)", "clinical": "1px solid var(--muted)", "ruptured": "4px dashed var(--danger)"}
+    route = {"subtle": (".16", "5%"), "moderate": (".32", "10%"), "strong": (".55", "18%")}
+    top, gap = density[direction["spatial_density"]]
+    route_opacity, route_glow = route[direction["route_pressure"]]
+    return (
+        ":root{"
+        f"--bg:{palette['background']};--surface:{palette['surface']};--text:{palette['text']};"
+        f"--muted:{palette['muted']};--accent:{palette['accent']};--danger:{palette['danger']};"
+        f"--body-font:{body_fonts[direction['typography']['body_family_class']]};"
+        f"--heading-font:{heading_fonts[direction['typography']['heading_family_class']]};"
+        f"--prose-size:{scale[direction['typography']['scale']]};--heading-track:{tracking[direction['typography']['tracking']]};"
+        f"--page-top:{top};--space:{gap};--frame:{border[direction['border_language']]};"
+        f"--texture:{surface[direction['surface_language']]};--artifact-track:{artifact[direction['artifact_treatment']]};"
+        f"--transition:{transition[direction['scene_transition_treatment']]};--ending-frame:{ending[direction['ending_treatment']]};"
+        f"--route-pressure:{route_opacity};--route-glow:{route_glow};"
+        f"--light-bg:{light_palette['background']};--light-surface:{light_palette['surface']};"
+        f"--light-text:{light_palette['text']};--light-muted:{light_palette['muted']};"
+        f"--light-accent:{light_palette['accent']};--light-danger:{light_palette['danger']};color-scheme:dark light"
+        "}"
+    )
+
+
 def validate_complete_work(run_dir: Path) -> dict:
     reconcile_run(run_dir)
     manifest = read_json(run_dir / "run-manifest.json")
@@ -1776,11 +2690,21 @@ def validate_complete_work(run_dir: Path) -> dict:
     packets = [record for record in all_committed_records(run_dir) if record.get("record_type") == "creative_packet"]
     if not architecture:
         return {"result": "FAIL", "reasons": ["Architecture is absent."]}
-    plans = architecture["traversal_plan"]
+    plans = architecture["packet_plans"]
+    prospective = _read_state_map(run_dir, "prospective-plan.json")
+    feasibility = {item["attractor_id"]: item["status"] for item in prospective.get("feasibility", [])}
+    required_plans = [
+        plan
+        for plan in plans
+        if plan["packet_kind"] == "literary"
+        or all(feasibility.get(attractor) != "foreclosed" for attractor in plan["attractor_ids"])
+    ]
     by_slot = {packet["packet_slot_id"]: packet for packet in packets}
     reasons = []
-    if set(by_slot) != {plan["packet_slot_id"] for plan in plans}:
-        reasons.append("Not every frozen packet plan has exactly one committed packet.")
+    if set(by_slot) != {plan["packet_slot_id"] for plan in required_plans}:
+        reasons.append("Committed packets do not match the current lawful plan after prospective foreclosure.")
+    if any(status in {"endangered", "universally_required_but_impossible"} for status in feasibility.values()):
+        reasons.append("An ending attractor remains endangered or universally impossible at completion.")
     scenes = [item for packet in packets for item in packet["scenes"]]
     artifacts = [item for packet in packets for item in packet["artifacts"]]
     endings = [item for packet in packets for item in packet["endings"]]
@@ -1794,21 +2718,28 @@ def validate_complete_work(run_dir: Path) -> dict:
         "formal_compositions": len(compositions),
     }
     expected_counts = {
-        "scenes": commitment["planned_scene_count"],
-        "artifacts": commitment["planned_artifact_count"],
-        "endings": commitment["planned_ending_count"],
-        "formal_compositions": commitment["planned_formal_composition_count"],
+        "scenes": sum(len(plan["scene_slot_ids"]) for plan in required_plans),
+        "artifacts": sum(plan["artifact_count"] for plan in required_plans),
+        "endings": sum(len(plan["ending_slot_ids"]) for plan in required_plans),
+        "formal_compositions": sum(plan["formal_composition_count"] for plan in required_plans),
     }
     if actual_counts != expected_counts:
-        reasons.append(f"Projected content counts {actual_counts} do not match frozen counts {expected_counts}.")
+        reasons.append(f"Projected content counts {actual_counts} do not match the lawful feasible envelope {expected_counts}.")
+    if not endings:
+        reasons.append("No viable ending attractor was realized.")
     if len(scenes) > manifest["scope"]["possible_scene_count"]:
         reasons.append("The work exceeds the user's possible-scene scope.")
     content_ids = {item["scene_id"] for item in scenes} | {item["ending_id"] for item in endings}
-    edge_by_id = {edge["edge_id"]: edge for edge in edges}
+    try:
+        resolved_edges, resolved_endings = resolve_cross_packet_links(scenes, endings, edges)
+    except SchemaError as error:
+        reasons.append(error.reason)
+        resolved_edges, resolved_endings = [], []
+    edge_by_id = {edge["edge_id"]: edge for edge in resolved_edges}
     edge_ids = set(edge_by_id)
     artifact_ids = {item["artifact_id"] for item in artifacts}
     for edge in edges:
-        if edge["from_content_id"] not in content_ids or edge["to_content_id"] not in content_ids:
+        if edge["from_content_id"] not in content_ids:
             reasons.append(f"Decision edge {edge['edge_id']} points outside committed content.")
     for scene in scenes:
         if not set(scene["choice_edge_ids"]).issubset(edge_ids):
@@ -1821,21 +2752,24 @@ def validate_complete_work(run_dir: Path) -> dict:
             reasons.append(f"Scene {scene['scene_id']} exceeds the 600-word hard limit.")
         if scene["major_decision"] and not scene["hesitation_consequence"]:
             reasons.append(f"Major decision {scene['scene_id']} has no consequential hesitation.")
-        if re.search(r"(^|\n)\s*(import|export)\s|<\s*(script|iframe)\b|<[A-Z][A-Za-z0-9]*\b", scene["prose_mdx"], re.IGNORECASE):
+        try:
+            validate_markdown_source(scene["prose_mdx"], f"Scene {scene['scene_id']}")
+        except SchemaError:
             reasons.append(f"Scene {scene['scene_id']} contains unsafe generated Markdown.")
     for artifact in artifacts:
         if literary_word_count(artifact["body_mdx"]) > 350:
             reasons.append(f"Artifact {artifact['artifact_id']} exceeds the 350-word hard limit.")
-        if re.search(r"<\s*(script|iframe)\b", artifact["body_mdx"], re.IGNORECASE):
+        try:
+            validate_markdown_source(artifact["body_mdx"], f"Artifact {artifact['artifact_id']}")
+        except SchemaError:
             reasons.append(f"Artifact {artifact['artifact_id']} contains unsafe generated Markdown.")
     for ending in endings:
         if literary_word_count(ending["prose_mdx"]) > 500:
             reasons.append(f"Ending {ending['ending_id']} exceeds the 500-word hard limit.")
-        if re.search(r"<\s*(script|iframe)\b", ending["prose_mdx"], re.IGNORECASE):
+        try:
+            validate_markdown_source(ending["prose_mdx"], f"Ending {ending['ending_id']}")
+        except SchemaError:
             reasons.append(f"Ending {ending['ending_id']} contains unsafe generated Markdown.")
-        target = ending["redirect_target_scene_id"]
-        if target is not None and target not in {scene["scene_id"] for scene in scenes}:
-            reasons.append(f"Ending {ending['ending_id']} redirects to an absent scene.")
     groups = {}
     for edge in edges:
         if edge["decision_group_id"] is not None:
@@ -1854,9 +2788,9 @@ def validate_complete_work(run_dir: Path) -> dict:
         changed = True
         while changed:
             changed = False
-            for edge in edges:
-                if edge["availability"] == "playable" and edge["from_content_id"] in reachable and edge["to_content_id"] not in reachable:
-                    reachable.add(edge["to_content_id"])
+            for edge in resolved_edges:
+                if edge["availability"] == "playable" and edge["from_content_id"] in reachable and edge["resolved_content_id"] not in reachable:
+                    reachable.add(edge["resolved_content_id"])
                     changed = True
         missing_content = content_ids - reachable
         if missing_content:
@@ -1871,15 +2805,81 @@ def validate_complete_work(run_dir: Path) -> dict:
         assignment = geomancy.get(scene["technical_slot_id"])
         if not assignment or scene["threshold_figure"] != assignment["figure"] or scene["threshold_resultant"] != assignment["resultant"]:
             reasons.append(f"Scene {scene['scene_id']} does not preserve frozen threshold geomancy.")
+    obligation_state = _read_state_map(run_dir, "obligations.json")
+    architecture_obligations = {item["obligation_id"] for item in architecture["obligation_graph"]}
+    if not architecture_obligations.issubset(obligation_state):
+        reasons.append("An architectural obligation silently disappeared from derived state.")
+    obligation_graph = {
+        key: value["data"]["requires"] for key, value in obligation_state.items()
+    }
+    if any(not set(dependencies).issubset(obligation_state) for dependencies in obligation_graph.values()):
+        reasons.append("The obligation graph contains an unresolved reference.")
+    visiting = set()
+    visited = set()
+
+    def visit_obligation(identifier: str) -> bool:
+        if identifier in visiting:
+            return False
+        if identifier in visited:
+            return True
+        visiting.add(identifier)
+        valid = all(visit_obligation(item) for item in obligation_graph.get(identifier, []))
+        visiting.remove(identifier)
+        visited.add(identifier)
+        return valid
+
+    if not all(visit_obligation(identifier) for identifier in obligation_graph):
+        reasons.append("The obligation graph contains a circular dependency.")
+    for identifier, event in obligation_state.items():
+        obligation = event["data"]
+        status = obligation["status"]
+        if status == "active":
+            reasons.append(f"Future obligation {identifier} remained active without deliberate resolution.")
+        if obligation["hardness"] == "hard" and obligation["universality"] == "universal" and status in {"foreclosed", "impossible"}:
+            reasons.append(f"Universal hard obligation {identifier} was unlawfully discarded.")
+        if status in {"satisfied", "foreclosed", "impossible", "intentionally_unresolved"} and "resolution_event" not in event:
+            reasons.append(f"Resolved obligation {identifier} lacks an append-only evidence event.")
+        if status == "impossible" and not any(
+            feasibility.get(target) == "foreclosed" for target in obligation["termination_targets"]
+        ):
+            reasons.append(f"Impossible obligation {identifier} is not scoped to a lawfully foreclosed future.")
+    source_index = _source_index(run_dir)
+    known_propositions = set(_read_state_map(run_dir, "canonical-facts.json"))
+    constraint_path = run_dir / "constraints/constraint-events.jsonl"
+    constraint_events = [json.loads(line) for line in constraint_path.read_text(encoding="utf-8").splitlines()] if constraint_path.exists() else []
+    for event in constraint_events:
+        if event["constraint_kind"] == "knowledge_state" and event["data"]["proposition_id"] not in known_propositions:
+            reasons.append(f"Knowledge constraint {event['constraint_id']} references an unknown proposition.")
+        for source in event["sources"]:
+            resolved = source_index.get(source["artifact_id"])
+            if not resolved or resolved["commit_id"] != source["source_commit_id"] or resolved["hash"] != source["source_hash"]:
+                reasons.append(f"Constraint {event['constraint_id']} lost immutable source provenance.")
+    motifs = _read_state_map(run_dir, "motifs.json")
+    if any(not item.get("provenance") or not item.get("appearances") for item in motifs.values()):
+        reasons.append("Motif pressure state lost occurrence provenance.")
+    attractors = {item["attractor_id"]: item for item in architecture["attractors"]}
+    for ending in endings:
+        attractor = attractors[ending["attractor_id"]]
+        if any(obligation_state[item]["data"]["status"] != "satisfied" for item in attractor["prerequisite_obligation_ids"]):
+            reasons.append(f"Ending {ending['ending_id']} committed without a satisfied hard prerequisite.")
+        satisfaction_sources = {
+            source["artifact_id"]
+            for item in attractor["prerequisite_obligation_ids"]
+            for source in obligation_state[item].get("resolution_event", {}).get("sources", [])
+        }
+        if not satisfaction_sources.issubset(ending["prerequisite_evidence_source_ids"]):
+            reasons.append(f"Ending {ending['ending_id']} does not cite its prerequisite satisfaction evidence.")
     state = load_state(run_dir)
     if state["creative_step_count"] > manifest["budgets"]["max_creative_step_count"]:
         reasons.append("Creative-step budget was exceeded.")
+    if state["analysis_step_count"] > manifest["budgets"]["max_analysis_step_count"]:
+        reasons.append("Analysis-step budget was exceeded.")
     if state["input_tokens"] > manifest["budgets"]["max_cumulative_input_tokens"] or state["output_tokens"] > manifest["budgets"]["max_cumulative_output_tokens"]:
         reasons.append("Cumulative token budget was exceeded.")
-    memory_path = run_dir / "memory/memory-events.jsonl"
-    memory_count = len(memory_path.read_text(encoding="utf-8").splitlines()) if memory_path.exists() else 0
-    if memory_count > manifest["budgets"]["max_memory_records"]:
-        reasons.append("Narrative-memory capacity was exceeded.")
+    if len(constraint_events) > manifest["budgets"]["max_constraint_events"]:
+        reasons.append("Constraint-event capacity was exceeded.")
+    if prospective and prospective["based_on_canonical_state_hash"] != state["canonical_state_hash"]:
+        reasons.append("The mutable prospective plan is not based on current immutable canon.")
     total_words = sum(literary_word_count(scene["prose_mdx"]) for scene in scenes)
     total_words += sum(literary_word_count(item["body_mdx"]) for item in artifacts)
     total_words += sum(literary_word_count(item["prose_mdx"]) for item in endings)
@@ -1975,7 +2975,7 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
                 parameters=parameters,
                 started_at=started_at,
                 failure_class=error.failure_class,
-                step_type="analysis_or_index",
+                step_type="analysis",
             )
             if retry == 2:
                 raise
@@ -1996,7 +2996,7 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
             started_at=started_at,
             failure_class="malformed_response",
             output_hash=sha256_bytes(content.encode()),
-            step_type="analysis_or_index",
+            step_type="analysis",
         )
         raise
     output_hash = sha256_bytes(canonical_json(verdict))
@@ -2005,7 +3005,7 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
         run_dir,
         planned_step_id=step_id,
         attempt=current_attempt,
-        step_type="analysis_or_index",
+        step_type="analysis",
         step_phase="artistic_acceptance",
         parent_state_hash=current["canonical_state_hash"],
         prompt_hash=sha256_bytes(prompt.encode()),
@@ -2017,8 +3017,8 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
         started_at=started_at,
         output_hash=output_hash,
         generated_ids=[],
-        canonical_delta_ids=[],
-        unresolved_ids=[],
+        past_constraint_ids=[],
+        future_obligation_ids=[],
         motif_ids=[],
         branch_relation=None,
         commit_status="COMMITTED",
@@ -2054,8 +3054,11 @@ def artistic_acceptance(run_dir: Path, *, transport=http_json) -> dict:
             ("IMMUTABLE GENESIS", committed_record(run_dir, "genesis")),
             ("IMMUTABLE ARCHITECTURE", committed_record(run_dir, "architecture")),
             ("SOURCE-GROUNDED PACKET VERDICTS", packet_verdicts),
-            ("CANONICAL MEMORY INDEX", read_json(run_dir / "state/canonical-memory.json")),
-            ("NARRATIVE WORKING MEMORY", read_json(run_dir / "state/working-memory.json")),
+            ("CANONICAL PAST CONSTRAINTS", _read_state_map(run_dir, "canonical-facts.json")),
+            ("CHARACTER KNOWLEDGE STATE", _read_state_map(run_dir, "knowledge-state.json")),
+            ("FUTURE OBLIGATION STATE", _read_state_map(run_dir, "obligations.json")),
+            ("MOTIF PRESSURE STATE", _read_state_map(run_dir, "motifs.json")),
+            ("PROSPECTIVE FEASIBILITY", _read_state_map(run_dir, "prospective-plan.json")),
             ("INSTRUCTION", "Return the whole-work PASS or FAIL GENERATION verdict. Any packet failure is evidence against acceptance. Do not repair, rewrite, or resample."),
         ],
         42000,
@@ -2072,6 +3075,7 @@ def project_web(run_dir: Path) -> tuple[Path, dict]:
     project = run_dir / "projection/web"
     if project.exists():
         shutil.rmtree(project)
+    (project / "src/lib").mkdir(parents=True)
     (project / "src/pages").mkdir(parents=True)
     (project / "public/source").mkdir(parents=True)
     manifest = read_json(run_dir / "run-manifest.json")
@@ -2082,15 +3086,19 @@ def project_web(run_dir: Path) -> tuple[Path, dict]:
     artifacts = [item for packet in packets for item in packet["artifacts"]]
     endings = [item for packet in packets for item in packet["endings"]]
     edges = [item for packet in packets for item in packet["decision_edges"]]
+    resolved_edges, resolved_endings = resolve_cross_packet_links(scenes, endings, edges)
+    direction = genesis["web_art_direction"]
+    validate_art_direction(direction)
     work = {
         "generation_id": run_dir.name,
         "project_name": manifest["generation_brief"]["project_name"],
         "generated_title": genesis["work_canon"]["generated_title"],
         "entry_content_id": scenes[0]["scene_id"],
+        "web_art_direction": direction,
         "scenes": scenes,
         "artifacts": artifacts,
-        "endings": endings,
-        "decision_edges": edges,
+        "endings": resolved_endings,
+        "decision_edges": resolved_edges,
         "architecture": architecture,
     }
     write_json(project / "public/work.json", work)
@@ -2108,46 +3116,57 @@ def project_web(run_dir: Path) -> tuple[Path, dict]:
             "private": True,
             "type": "module",
             "scripts": {"build": "astro build"},
-            "dependencies": {"astro": ASTRO_VERSION},
+            "dependencies": {"astro": ASTRO_VERSION, "markdown-it": MARKDOWN_IT_VERSION},
         },
     )
     write_atomic(project / "astro.config.mjs", b"import { defineConfig } from 'astro/config';\nexport default defineConfig({ output: 'static' });\n")
-    style = r''':root{color-scheme:dark;font-family:Georgia,serif;background:#11120f;color:#e8e2d2}body{margin:0;background:radial-gradient(circle at 20% 0,#27302c 0,#11120f 46rem);min-height:100vh}main{width:min(48rem,calc(100% - 2rem));margin:auto;padding:4rem 0 8rem}header{border-bottom:1px solid #85816f;margin-bottom:2rem;padding-bottom:1rem}h1,h2{font-weight:400;letter-spacing:.04em}.kicker,.trace{color:#a9aa9d;font:.78rem system-ui,sans-serif;letter-spacing:.12em;text-transform:uppercase}.prose,.artifact-body{white-space:pre-wrap;line-height:1.75;font-size:1.08rem}.choices{display:grid;gap:.75rem;margin-top:2.5rem}.choice,.begin{color:inherit;background:#1b211e;border:1px solid #77786d;padding:1rem;text-decoration:none}.choice:hover,.choice:focus-visible,.begin:hover,.begin:focus-visible{border-color:#e8e2d2;background:#242c27}details{border-left:2px solid #77786d;margin:1.5rem 0;padding:.5rem 1rem}button{font:inherit;color:inherit;background:none;border:0;text-decoration:underline;cursor:pointer}'''
+    markdown_module = r'''import MarkdownIt from 'markdown-it';
+const renderer=new MarkdownIt({html:false,linkify:false,typographer:false,breaks:false});
+export const renderMarkdown=source=>renderer.render(source);
+'''
+    house_style = r'''*{box-sizing:border-box}html{background:var(--bg);color:var(--text);font-family:var(--body-font)}body{margin:0;min-height:100vh;background-color:var(--bg);background-image:var(--texture);transition:background-color var(--transition),color var(--transition)}main{width:min(46rem,calc(100% - 2rem));margin:auto;padding:var(--page-top) 0 8rem}header{border-bottom:var(--frame);margin-bottom:calc(var(--space)*1.35);padding-bottom:var(--space)}h1,h2,h3{font-family:var(--heading-font);font-weight:500;letter-spacing:var(--heading-track);line-height:1.12}.kicker,.trace{color:var(--muted);font:.78rem system-ui,sans-serif;letter-spacing:.12em;text-transform:uppercase}.trace{margin-top:.75rem;opacity:calc(.55 + var(--route-pressure))}.prose,.artifact-body{font-size:var(--prose-size);line-height:1.75;overflow-wrap:anywhere}.prose>*,.artifact-body>*{max-width:68ch}.prose blockquote,.artifact-body blockquote{border-left:3px solid var(--accent);margin-left:0;padding-left:1rem;color:var(--muted)}.prose li+li,.artifact-body li+li{margin-top:.4rem}.choices{display:grid;gap:.75rem;margin-top:calc(var(--space)*1.7)}.choice,.begin{display:block;color:var(--text);background:var(--surface);border:var(--frame);padding:1rem;text-decoration:none;box-shadow:0 0 1.5rem color-mix(in srgb,var(--accent) var(--route-glow),transparent);transition:background var(--transition),border-color var(--transition)}.choice:hover,.choice:focus-visible,.begin:hover,.begin:focus-visible{border-color:var(--accent);outline:3px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:3px}details{background:var(--surface);border:var(--frame);margin:calc(var(--space)*1.2) 0;padding:1rem;letter-spacing:var(--artifact-track)}summary{cursor:pointer;font-family:var(--heading-font)}button{font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--muted);padding:.55rem .75rem;cursor:pointer}.theme-toggle{position:absolute;inset:1rem 1rem auto auto}.ending-surface{border-top:var(--ending-frame);padding-top:var(--space)}:root[data-theme=light]{--bg:var(--light-bg);--surface:var(--light-surface);--text:var(--light-text);--muted:var(--light-muted);--accent:var(--light-accent);--danger:var(--light-danger)}@media(max-width:40rem){main{padding-top:4.5rem}.theme-toggle{inset:.75rem .75rem auto auto}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition-duration:0ms!important}}'''
+    style = art_direction_css(direction) + house_style
     state_script = r'''const body=document.body,key=`cathedrals:${body.dataset.generation}:reader-state:v1`;let state=JSON.parse(localStorage.getItem(key)||'{"path":[],"values":{}}');const apply=effects=>effects.forEach(e=>{const v=state.values[e.key];if(e.operation==='set')state.values[e.key]=e.value;else if(e.operation==='increment')state.values[e.key]=(v||0)+e.value;else if(e.operation==='add')state.values[e.key]=[...new Set([...(v||[]),e.value])];else if(e.operation==='remove')state.values[e.key]=(v||[]).filter(x=>x!==e.value)});const satisfies=c=>{const v=state.values[c.key];return c.operator==='equals'?v===c.value:c.operator==='not_equals'?v!==c.value:c.operator==='gte'?v>=c.value:c.operator==='lte'?v<=c.value:c.operator==='contains'?Array.isArray(v)&&v.includes(c.value):!Array.isArray(v)||!v.includes(c.value)};const current=body.dataset.current;if(state.path.at(-1)!==current){state.path.push(current);apply(JSON.parse(body.dataset.effects||'[]'));localStorage.setItem(key,JSON.stringify(state))}document.querySelector('.trace').textContent=state.path.join(' / ');for(const link of document.querySelectorAll('.choice')){const conditions=JSON.parse(link.dataset.conditions),effects=JSON.parse(link.dataset.effects);link.hidden=!conditions.every(satisfies);link.addEventListener('click',()=>{apply(effects);localStorage.setItem(key,JSON.stringify(state))})}document.querySelector('.reset')?.addEventListener('click',()=>{localStorage.removeItem(key);location.href='/'})'''
+    theme_script = r'''const root=document.documentElement,key='cathedrals:theme';const saved=localStorage.getItem(key);root.dataset.theme=saved||'dark';document.querySelector('.theme-toggle')?.addEventListener('click',()=>{root.dataset.theme=root.dataset.theme==='light'?'dark':'light';localStorage.setItem(key,root.dataset.theme)});'''
     index_page = r'''---
 import fs from 'node:fs';
 const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));
 ---
-<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{work.generated_title}</title></head><body><main><div class="kicker">{work.project_name}</div><h1>{work.generated_title}</h1><p>A complete static Cathedrals work.</p><a class="begin" href={`/scenes/${work.entry_content_id}/`}>Enter the annex</a></main></body></html>
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{work.generated_title}</title></head><body><button class="theme-toggle" aria-label="Switch day or night theme">◐</button><main><div class="kicker">{work.project_name}</div><h1>{work.generated_title}</h1><p>A complete static Cathedrals work.</p><a class="begin" href={`/scenes/${work.entry_content_id}/`}>Enter the work</a></main><script is:inline src="/theme.js"></script></body></html>
 '''
     scene_page = r'''---
 import fs from 'node:fs';
+import {renderMarkdown} from '../../lib/markdown.mjs';
 const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));
-export function getStaticPaths(){return work.scenes.map(scene=>({params:{sceneId:scene.scene_id},props:{scene,artifacts:scene.artifact_ids.map(id=>work.artifacts.find(a=>a.artifact_id===id)).filter(Boolean),edges:scene.choice_edge_ids.map(id=>work.decision_edges.find(e=>e.edge_id===id)).filter(e=>e&&e.availability==='playable')}}))}
+export function getStaticPaths(){const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));return work.scenes.map(scene=>({params:{sceneId:scene.scene_id},props:{scene,artifacts:scene.artifact_ids.map(id=>work.artifacts.find(a=>a.artifact_id===id)).filter(Boolean),edges:scene.choice_edge_ids.map(id=>work.decision_edges.find(e=>e.edge_id===id)).filter(e=>e&&e.availability==='playable')}}))}
 const {scene,artifacts,edges}=Astro.props;
 const pathFor=id=>work.scenes.some(s=>s.scene_id===id)?`/scenes/${id}/`:`/endings/${id}/`;
 ---
-<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{scene.title} · {work.generated_title}</title></head><body data-generation={work.generation_id} data-current={scene.scene_id} data-effects={JSON.stringify(scene.state_effects)}><main><header><div class="kicker">{work.generated_title}</div><h1>{scene.title}</h1><div class="trace"></div></header><article><div class="prose">{scene.prose_mdx}</div>{artifacts.map(a=><details><summary>{a.title}</summary><div class="artifact-body">{a.body_mdx}</div><a href={`/artifacts/${a.artifact_id}/`}>Open as evidence</a></details>)}<nav class="choices" aria-label="Story choices">{edges.map(e=><a class="choice" href={pathFor(e.to_content_id)} data-conditions={JSON.stringify(e.state_conditions)} data-effects={JSON.stringify(e.state_effects)}>{e.label}</a>)}</nav></article></main><script is:inline src="/state.js"></script></body></html>
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{scene.title} · {work.generated_title}</title></head><body data-generation={work.generation_id} data-current={scene.scene_id} data-effects={JSON.stringify(scene.state_effects)}><button class="theme-toggle" aria-label="Switch day or night theme">◐</button><main><header><div class="kicker">{work.generated_title}</div><h1>{scene.title}</h1><div class="trace" aria-live="polite"></div></header><article><div class="prose" set:html={renderMarkdown(scene.prose_mdx)}/>{artifacts.map(a=><details><summary>{a.title}</summary><div class="artifact-body" set:html={renderMarkdown(a.body_mdx)}/><a href={`/artifacts/${a.artifact_id}/`}>Open as evidence</a></details>)}<nav class="choices" aria-label="Story choices">{edges.map(e=><a class="choice" href={pathFor(e.resolved_content_id)} data-conditions={JSON.stringify(e.state_conditions)} data-effects={JSON.stringify(e.state_effects)}>{e.label}</a>)}</nav></article></main><script is:inline src="/theme.js"></script><script is:inline src="/state.js"></script></body></html>
 '''
     ending_page = r'''---
 import fs from 'node:fs';
+import {renderMarkdown} from '../../lib/markdown.mjs';
 const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));
-export function getStaticPaths(){return work.endings.map(ending=>({params:{endingId:ending.ending_id},props:{ending,edges:work.decision_edges.filter(e=>e.from_content_id===ending.ending_id&&e.availability==='playable')}}))}
+export function getStaticPaths(){const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));return work.endings.map(ending=>({params:{endingId:ending.ending_id},props:{ending,edges:work.decision_edges.filter(e=>e.from_content_id===ending.ending_id&&e.availability==='playable')}}))}
 const {ending,edges}=Astro.props;const pathFor=id=>work.scenes.some(s=>s.scene_id===id)?`/scenes/${id}/`:`/endings/${id}/`;
 ---
-<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{ending.title} · {work.generated_title}</title></head><body data-generation={work.generation_id} data-current={ending.ending_id} data-effects={JSON.stringify(ending.state_effects)}><main><header><div class="kicker">Ending · {work.generated_title}</div><h1>{ending.title}</h1><div class="trace"></div></header><div class="prose">{ending.prose_mdx}</div><nav class="choices">{edges.map(e=><a class="choice" href={pathFor(e.to_content_id)} data-conditions={JSON.stringify(e.state_conditions)} data-effects={JSON.stringify(e.state_effects)}>{e.label}</a>)}{ending.redirect_target_scene_id&&<a class="choice" href={pathFor(ending.redirect_target_scene_id)} data-conditions="[]" data-effects="[]">Continue</a>}</nav><button class="reset">Start over</button></main><script is:inline src="/state.js"></script></body></html>
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{ending.title} · {work.generated_title}</title></head><body data-generation={work.generation_id} data-current={ending.ending_id} data-effects={JSON.stringify(ending.state_effects)}><button class="theme-toggle" aria-label="Switch day or night theme">◐</button><main class="ending-surface"><header><div class="kicker">Ending · {work.generated_title}</div><h1>{ending.title}</h1><div class="trace" aria-live="polite"></div></header><div class="prose" set:html={renderMarkdown(ending.prose_mdx)}/><nav class="choices" aria-label="Ending choices">{edges.map(e=><a class="choice" href={pathFor(e.resolved_content_id)} data-conditions={JSON.stringify(e.state_conditions)} data-effects={JSON.stringify(e.state_effects)}>{e.label}</a>)}{ending.resolved_redirect_content_id&&<a class="choice" href={pathFor(ending.resolved_redirect_content_id)} data-conditions="[]" data-effects="[]">Continue</a>}</nav><button class="reset">Start over</button></main><script is:inline src="/theme.js"></script><script is:inline src="/state.js"></script></body></html>
 '''
     artifact_page = r'''---
 import fs from 'node:fs';
+import {renderMarkdown} from '../../lib/markdown.mjs';
 const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));
-export function getStaticPaths(){return work.artifacts.map(artifact=>({params:{artifactId:artifact.artifact_id},props:{artifact}}))}const {artifact}=Astro.props;
+export function getStaticPaths(){const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));return work.artifacts.map(artifact=>({params:{artifactId:artifact.artifact_id},props:{artifact}}))}const {artifact}=Astro.props;
 ---
-<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{artifact.title} · {work.generated_title}</title></head><body><main><header><div class="kicker">Evidence · {work.generated_title}</div><h1>{artifact.title}</h1></header><div class="artifact-body">{artifact.body_mdx}</div><button onclick="history.back()">Return</button></main></body></html>
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{artifact.title} · {work.generated_title}</title></head><body><button class="theme-toggle" aria-label="Switch day or night theme">◐</button><main><header><div class="kicker">Evidence · {work.generated_title}</div><h1>{artifact.title}</h1></header><div class="artifact-body" set:html={renderMarkdown(artifact.body_mdx)}/><a class="begin" href="/">Return to work</a></main><script is:inline src="/theme.js"></script></body></html>
 '''
     for relative in ("scenes/[sceneId].astro", "endings/[endingId].astro", "artifacts/[artifactId].astro"):
         (project / "src/pages" / Path(relative).parent).mkdir(parents=True, exist_ok=True)
     write_atomic(project / "public/style.css", style.encode())
     write_atomic(project / "public/state.js", state_script.encode())
+    write_atomic(project / "public/theme.js", theme_script.encode())
+    write_atomic(project / "src/lib/markdown.mjs", markdown_module.encode())
     write_atomic(project / "src/pages/index.astro", index_page.encode())
     write_atomic(project / "src/pages/scenes/[sceneId].astro", scene_page.encode())
     write_atomic(project / "src/pages/endings/[endingId].astro", ending_page.encode())
@@ -2273,7 +3292,7 @@ def committed_hashes(run_dir: Path) -> dict[str, str]:
     values = {"run_manifest": sha256_file(run_dir / "run-manifest.json")}
     for directory in committed_directories(run_dir):
         record = read_json(directory / "record.json")
-        identifier = record.get("commit_id", record.get("index_batch_id", directory.name))
+        identifier = record.get("commit_id", directory.name)
         values[identifier] = sha256_file(directory / "record.json")
     return values
 
@@ -2289,24 +3308,26 @@ def make_finalization(run_dir: Path, status: str, failure_class: str, reason: st
         target = mechanical if mechanical["result"] == "NOT_RUN" else build if build["result"] == "NOT_RUN" else None
         if target:
             target["reasons"] = [reason]
-    memory_path = run_dir / "memory/memory-events.jsonl"
+    constraint_path = run_dir / "constraints/constraint-events.jsonl"
+    prospective_history = run_dir / "planning/prospective-plans.jsonl"
     finalization = {
         "record_type": "finalization",
-        "protocol_version": "2.0",
+        "protocol_version": "3.0",
         "generation_id": run_dir.name,
         "run_status": status,
         "run_manifest_hash": state["manifest_hash"],
         "generation_brief_hash": state["brief_hash"],
         "completed_at": utc_now(),
         "creative_step_count": state["creative_step_count"],
-        "analysis_or_index_step_count": state["analysis_or_index_step_count"],
+        "analysis_step_count": state["analysis_step_count"],
         "human_intervention_count": state["human_intervention_count"],
         "committed_rewrite_count": state["committed_rewrite_count"],
         "committed_regeneration_count": state["committed_regeneration_count"],
         "backtrack_count": state["backtrack_count"],
         "ledger_head_hash": entries[-1]["entry_hash"],
         "committed_record_hashes": committed_hashes(run_dir),
-        "memory_event_stream_hash": sha256_file(memory_path) if memory_path.exists() else sha256_bytes(b""),
+        "constraint_event_stream_hash": sha256_file(constraint_path) if constraint_path.exists() else sha256_bytes(b""),
+        "prospective_plan_history_hash": sha256_file(prospective_history) if prospective_history.exists() else sha256_bytes(b""),
         "token_accounting": {"input_tokens": state["input_tokens"], "output_tokens": state["output_tokens"], "cost": state["cost"], "currency": None},
         "mechanical_validation": mechanical,
         "artistic_acceptance": artistic,
@@ -2326,13 +3347,13 @@ def copy_provenance(run_dir: Path, destination: Path) -> None:
         source = run_dir / name
         if source.exists():
             shutil.copy2(source, destination / ("run-ledger.jsonl" if name == "ledger.jsonl" else name))
-    for name in ("raw", "committed", "memory", "validation"):
+    for name in ("raw", "committed", "constraints", "planning", "validation"):
         source = run_dir / name
         if source.exists():
             shutil.copytree(source, destination / name, dirs_exist_ok=True)
 
 
-def publish_success(run_dir: Path, project: Path) -> Path:
+def publish_success(run_dir: Path, project: Path, finalization: dict) -> Path:
     parent = ROOT / "generated-work"
     destination = parent / run_dir.name
     if destination.exists():
@@ -2340,30 +3361,48 @@ def publish_success(run_dir: Path, project: Path) -> Path:
     staging = run_dir / "publish-staging"
     if staging.exists():
         shutil.rmtree(staging)
-    shutil.copytree(project, staging / "web", ignore=shutil.ignore_patterns("node_modules"))
+    shutil.copytree(project, staging / "web", ignore=shutil.ignore_patterns("node_modules", ".astro"))
     copy_provenance(run_dir, staging / "provenance")
+    write_json(staging / "provenance/finalization.json", finalization)
     parent.mkdir(parents=True, exist_ok=True)
     os.replace(staging, destination)
-    return destination / "web/dist"
+    return destination
 
 
-def publish_failure_provenance(run_dir: Path) -> None:
-    destination = ROOT / "generated-work" / run_dir.name / "provenance"
-    if destination.exists():
-        return
-    copy_provenance(run_dir, destination)
+def commit_published_generation(run_dir: Path, destination: Path) -> str:
+    if current_branch() != load_state(run_dir)["branch"]:
+        raise CathedralsError("Publication", "Successful work can only commit on its frozen generation branch.", "build_failure")
+    relative = destination.relative_to(ROOT)
+    try:
+        git("add", "--", str(relative))
+        staged = git("diff", "--cached", "--name-only").splitlines()
+        prefix = f"{relative}/"
+        if not staged or any(path != str(relative) and not path.startswith(prefix) for path in staged):
+            raise CathedralsError("Publication", "Publication staging included unexpected repository files.", "build_failure")
+        git("commit", "-m", f"Cathedrals generation {run_dir.name}: READY_TO_PLAY")
+        return git("rev-parse", "HEAD")
+    except Exception:
+        git("restore", "--staged", "--", str(relative), check=False)
+        if destination.exists():
+            shutil.rmtree(destination)
+        raise
 
 
 def finalize_success(run_dir: Path, project: Path) -> tuple[Path, dict]:
     reconcile_run(run_dir)
+    if git("status", "--porcelain"):
+        raise CathedralsError("Publication", "The generation branch became dirty before publication.", "build_failure")
     finalization = make_finalization(run_dir, "READY_TO_PLAY", "none")
+    destination = publish_success(run_dir, project, finalization)
+    publication_commit = commit_published_generation(run_dir, destination)
     write_json(run_dir / "finalization.json", finalization, mode=0o444, exclusive=True)
-    build_path = publish_success(run_dir, project)
+    build_path = destination / "web/dist"
     state = load_state(run_dir)
     state["status"] = "READY_TO_PLAY"
     state["stage"] = "READY_TO_PLAY"
     state["completed_at"] = finalization["completed_at"]
     state["build_path"] = str(build_path)
+    state["publication_commit"] = publication_commit
     save_state(run_dir, state)
     return build_path, finalization
 
@@ -2383,7 +3422,6 @@ def finalize_failure(run_dir: Path, error: CathedralsError) -> dict:
     state["failure_reason"] = error.reason
     state["completed_at"] = finalization["completed_at"]
     save_state(run_dir, state)
-    publish_failure_provenance(run_dir)
     return finalization
 
 
@@ -2411,14 +3449,14 @@ def execute_run(run_dir: Path, output_fn=print, transport=http_json) -> tuple[Pa
     if mechanical["result"] != "PASS":
         raise CathedralsError("Mechanical validation", mechanical["reasons"][0], "mechanical_validation")
     output_fn("[06] Mechanical validation          ✓")
-    output_fn("[07] Whole-work artistic acceptance …")
+    output_fn("[07] Static Astro build             …")
+    build_web(run_dir, project, output_fn)
+    output_fn("[07] Static Astro build             ✓")
+    output_fn("[08] Whole-work artistic acceptance …")
     artistic = artistic_acceptance(run_dir, transport=transport)
     if artistic["result"] != "PASS":
         raise CathedralsError("Whole-work artistic acceptance", artistic["reasons"][0], "artistic_rejection")
-    output_fn("[07] Whole-work artistic acceptance ✓")
-    output_fn("[08] Static Astro build             …")
-    build_web(run_dir, project, output_fn)
-    output_fn("[08] Static Astro build             ✓")
+    output_fn("[08] Whole-work artistic acceptance ✓")
     build_path, _ = finalize_success(run_dir, project)
     return build_path, counts, read_json(run_dir / "generation-brief.json")
 
@@ -2428,6 +3466,9 @@ def print_failure(run_dir: Path | None, error: CathedralsError, output_fn=print)
     output_fn(f"Generation:\n{run_dir.name if run_dir else 'not created'}\n")
     output_fn(f"Failure stage:\n{error.stage}\n")
     output_fn(f"Reason:\n{error.reason}\n")
+    diagnostic = run_dir / "projection/web/dist" if run_dir else None
+    if diagnostic and (diagnostic / "index.html").exists():
+        output_fn(f"A diagnostic static build was preserved at:\n{diagnostic.relative_to(ROOT)}\n")
     output_fn("Committed work was not rewritten.\nNo partial game is playable.")
 
 

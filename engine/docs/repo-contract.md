@@ -42,11 +42,12 @@ engine canon merely because it was accepted once.
 ## Downstream Directories
 
 - `generated-work/<generation-id>/provenance/` preserves the frozen manifest, raw
-  responses, committed records, append-only ledger/memory, hashes, and verdicts.
+  responses, committed records, append-only ledger/constraints/planning history, hashes, and verdicts.
 - `generated-work/<generation-id>/web/` is the normal static Astro project and keeps
   its deterministic work JSON plus verbatim literary source files.
 - `.cathedrals/runs/<generation-id>/` is ignored operational state used for atomic
-  commits, resume, selective memory, validation, and pre-publication builds.
+  commits, resume, constraint retrieval, prospective planning, validation,
+  pre-publication builds, and rejected-work diagnostic builds.
 - root `schema-generation/`, `prose/`, and `src/` remain legacy projection scaffolds;
   the executable does not mutate them during an engine revision.
 
@@ -56,7 +57,10 @@ truth must never live only in an Astro route.
 ## Main Branch
 
 `main` contains the machine, not a canonical generated story. Generated runs and
-their projections belong on generation branches, build branches, or releases. Empty
+their projections belong on independent generation branches created directly from the
+configured engine base commit. Successful publication creates one final commit that
+stages only the new generated-work tree. Failed runs remain ignored and do not publish
+tracked provenance by default. Empty
 downstream directories may remain on `main` as destination scaffolding.
 
 ## Immutability

@@ -1,4 +1,4 @@
-version: 2.0
+version: 2.1
 
 work:
   id: hospice-annex-v01
@@ -13,49 +13,118 @@ work:
 
 execution_phase:
   current_phase: engine_revision
-  current_operation: executable_generator_refactor
+  current_operation: engine_revision_open_followups
+  primary_focus: final_engine_stabilization_and_synthetic_scale_rehearsal
   downstream_outputs_authoritative: false
+  read_scope: repository_wide
+  write_scope_mode: default_deny
   allowed_write_roots:
     - engine
+    - cathedrals
   forbidden_write_roots:
     - schema-generation
     - prose
     - src
+    - generated-work
   rules:
     - "Engine revision changes the machine only."
+    - "Repository-wide reading and inspection are allowed; write authorization is narrower and remains default-deny."
+    - "The root cathedrals launcher is engine machine code and may be revised during engine_revision."
+    - "Any file underneath engine/ may be created, modified, renamed, or removed when an explicit human instruction or the active milestone requires it and the change remains engine machinery."
+    - "The root cathedrals file may be modified when an explicit human instruction or the active milestone requires launcher/runtime changes."
+    - "Later explicit human instructions may extend or redirect the current engine-revision operation without editing this phase gate first, provided every write remains inside the allowed write paths and does not create downstream generated-work content."
+    - "Explicit human follow-up instructions may extend engine-revision work anywhere inside the existing allowed write roots without requiring a new milestone or per-file allow-list update."
+    - "The latest explicit human instruction within engine_revision may supersede the active milestone's narrower task focus, but it may not override the authorship boundary, forbidden write roots, or generation barrier unless the human explicitly changes the phase gate."
+    - "Files listed by an active milestone are required minimum outputs and audit records, not the exclusive set of authorized engine files. This includes target_outputs, completed_outputs, and similar milestone file lists."
+    - "Additional engine-only files needed to satisfy a follow-up instruction are authorized automatically when they remain under engine/ or are the root cathedrals launcher."
+    - "Adding or modifying an engine-only file inside the allowed write paths does not by itself require a new milestone ID, target_outputs edit, or phase-gate edit."
+    - "Supplemental engine-only outputs must be reported in the completion summary even when they were not predeclared in target_outputs."
+    - "Deletion is allowed only for obsolete/replaced engine machinery or when directly required by the explicit human instruction; deleted paths must be reported."
+    - "Writes outside engine/ and the root cathedrals launcher remain forbidden unless a later explicit human instruction first revises this phase gate to authorize a narrow additional path."
+    - "schema-generation/, prose/, and src/ remain forbidden during engine_revision even if a task would otherwise benefit from editing them."
+    - "Generated fiction, generated-work publication, creative responses, and downstream reader-facing story output remain forbidden during engine_revision."
     - "Leaving engine_revision requires a new explicit human generation instruction."
-    - "A milestone is complete only when every declared output exists."
+    - "A milestone is complete only when every declared target output exists or is explicitly retired by a later human instruction."
     - "Historical claims never establish current executable truth."
 
+instruction_extension_policy:
+  enabled: true
+  purpose: >
+    Permit iterative human follow-up instructions without weakening the engine_revision
+    sandbox. The phase gate defines the write boundary; milestones define current focus
+    and minimum deliverables rather than an exhaustive list of editable files.
+  latest_explicit_human_instruction:
+    may_extend_current_operation: true
+    may_redirect_engine_revision_focus: true
+    may_add_engine_only_outputs: true
+    may_modify_preexisting_engine_files_not_named_in_target_outputs: true
+    may_create_new_engine_files_not_named_in_target_outputs: true
+    may_remove_obsolete_engine_files_when_required: true
+    may_change_phase_implicitly: false
+    may_authorize_generated_work_implicitly: false
+    may_expand_write_boundary_implicitly: false
+  automatically_authorized_paths:
+    - "engine/**"
+    - "cathedrals"
+  no_gate_edit_required_for:
+    - "new or modified files under engine/"
+    - "root cathedrals launcher changes"
+    - "new tests, fixtures, schemas, prompts, docs, format contracts, or engine data under engine/"
+    - "refactors that remain entirely within the engine machine"
+    - "follow-up fixes discovered while implementing or testing an explicit engine-revision instruction"
+  explicit_gate_revision_required_for:
+    - "any write outside engine/ or the root cathedrals launcher"
+    - "any write under schema-generation/, prose/, or src/"
+    - "generated-work publication or downstream creative outputs"
+    - "starting a generation run"
+    - "changing from engine_revision to another execution phase"
+  reporting:
+    list_supplemental_outputs: true
+    list_deleted_outputs: true
+    explain_scope_expansion: true
+
 milestone_control:
-  active_milestone_id: executable_generator_refactor_05
+  active_milestone_id: web_projection_runtime_stabilization_07
   active_milestone:
-    id: executable_generator_refactor_05
+    id: web_projection_runtime_stabilization_07
     phase: engine_revision
-    status: completed
+    status: active
     purpose: >
-      Add the repository-local Cathedrals executable that directly drives LM Studio,
-      immutable commits, deterministic resume, validation, and the static web build.
-    completed_outputs:
+      Stabilize deterministic safe Markdown projection, constrained generated web art
+      direction, cross-packet technical-slot linking, independent generation branches,
+      successful publication commits, and rejected-work diagnostic builds, while
+      permitting later explicit engine-only follow-up instructions inside the locked
+      engine_revision write boundary.
+    target_outputs_semantics:
+      mode: minimum_required_not_exclusive
+      exclusive_write_allowlist: false
+      supplemental_outputs_allowed: true
+      supplemental_outputs_require_phase_gate_compliance: true
+      supplemental_outputs_require_target_list_edit: false
+      supplemental_outputs_require_new_milestone: false
+      supplemental_outputs_must_be_reported: true
+    target_outputs:
       - engine/data/work-instance.yaml
-      - engine/data/claimants.yaml
       - engine/data/generation-protocol.schema.json
-      - engine/docs/generation-workflow-contract.md
-      - engine/docs/content-schema-contract.md
-      - engine/prompts/generation-genesis.md
+      - engine/canon/acceptance-tests.md
+      - engine/docs/build-contract.md
+      - engine/formats/web.md
       - engine/prompts/generation-architecture.md
       - engine/prompts/generation-packet.md
       - engine/prompts/generation-ending-packet.md
-      - engine/prompts/generation-index.md
       - engine/tests/validate-generation-protocol.py
-      - engine/formats/web.md
-      - engine/formats/visualnovel.md
       - cathedrals
-      - .gitignore
       - engine/tests/test_cathedrals.py
+      - engine/tests/fixtures/static-reader-work.json
     downstream_outputs_created: false
+  followup_instruction_behavior:
+    remain_in_current_phase_by_default: true
+    inherit_allowed_write_paths: true
+    active_milestone_remains_valid_until_explicitly_completed_replaced_or_retired: true
+    unrelated_but_engine_only_followup_allowed: true
+    target_outputs_do_not_limit_followup_files: true
   next_milestone:
-    id: first_interactive_autonomous_generation_test_06
+    id: first_interactive_autonomous_generation_test_08
     status: inactive
     activation_requires_explicit_human_instruction: true
     requested_scene_scope_required: true
@@ -300,7 +369,7 @@ scope:
       creative_steps: { target: 6, hard_max: 10 }
       run_input_tokens_hard_max: 600000
       run_output_tokens_hard_max: 110000
-      memory_records_hard_max: 1200
+      constraint_records_hard_max: 1200
     standard:
       scenes: { min: 30, target: 40, hard_max: 50 }
       artifacts: { min: 8, target: 11, hard_max: 14 }
@@ -310,7 +379,7 @@ scope:
       creative_steps: { target: 12, hard_max: 18 }
       run_input_tokens_hard_max: 1200000
       run_output_tokens_hard_max: 200000
-      memory_records_hard_max: 3000
+      constraint_records_hard_max: 3000
     large:
       scenes: { min: 60, target: 72, hard_max: 100 }
       artifacts: { min: 15, target: 20, hard_max: 25 }
@@ -320,7 +389,7 @@ scope:
       creative_steps: { target: 18, hard_max: 28 }
       run_input_tokens_hard_max: 2000000
       run_output_tokens_hard_max: 320000
-      memory_records_hard_max: 6000
+      constraint_records_hard_max: 6000
     cathedral:
       scenes: { min: 100, target: 130, hard_max: 180 }
       artifacts: { min: 25, target: 32, hard_max: 40 }
@@ -330,7 +399,7 @@ scope:
       creative_steps: { target: 32, hard_max: 52 }
       run_input_tokens_hard_max: 4000000
       run_output_tokens_hard_max: 600000
-      memory_records_hard_max: 12000
+      constraint_records_hard_max: 12000
   prose_word_limits:
     scene_target: 450
     scene_hard_max: 600
@@ -376,10 +445,10 @@ generation_budget:
   minimum_model_output_tokens: 10900
   max_analysis_output_tokens: 4096
   max_creative_step_count: derived_per_run
-  max_analysis_or_index_step_count: derived_per_run
+  max_analysis_step_count: derived_per_run
   max_cumulative_input_tokens: derived_per_run
   max_cumulative_output_tokens: derived_per_run
-  max_memory_records: derived_per_run
+  max_constraint_events: derived_per_run
   formulae:
     creative_packet_output: >
       ceil(max_creative_packet_literary_words / words_per_token_assumption) +
@@ -390,11 +459,11 @@ generation_budget:
       context_safety_reserve_tokens <= selected_model_context_window_tokens
     creative_steps: >
       2 + ceil(possible_scene_count / 3) + ceil(ending_hard_max / 2)
-    memory_records: "max(1000, possible_scene_count * 45)"
+    constraint_events: "max(1000, possible_scene_count * 45)"
   preflight_rules:
     - "Record documented context-window and maximum-output limits for each selected model."
     - "Fail before generation if any planned step exceeds its model's context or output limit."
-    - "Fail before generation if the derived scope cannot fit cumulative token, memory, or configured cost limits."
+    - "Fail before generation if the derived scope cannot fit cumulative token, constraint-event, or configured cost limits."
     - "Packet size may be reduced within the frozen architecture; committed content may not be regenerated."
 
 generation_run:
@@ -408,12 +477,14 @@ generation_run:
   backward_canon_mutation_allowed: false
   candidate_cherry_picking_allowed: false
   append_only: true
-  causally_forward: true
+  creative_authorship_forward_only: true
+  planning_may_reason_backward: true
   creative_step_count_may_exceed_one: true
   protocol_contract: engine/data/generation-protocol.schema.json
   ledger_format: jsonl
-  traversal_strategy: dependency_topological
-  traversal_frozen_before_literary_packets: true
+  traversal_strategy: constraint_relevance
+  packet_dependencies_frozen_before_literary_packets: true
+  prospective_plan_mutable_after_each_commit: true
   phases:
     - genesis
     - macroarchitecture
@@ -441,18 +512,19 @@ run_processing:
     - author_frozen_macroarchitecture
     - author_forward_literary_packets
     - author_prerequisite_satisfied_ending_packets
-  analysis_or_index_steps_may:
+  analysis_steps_may:
     - extract_source_grounded_facts
-    - update_retrieval_indexes
+    - classify_constraint_relationships
     - classify_motifs
     - check_continuity
     - retrieve_relevant_immutable_passages
   deterministic_steps_may:
     - validate_protocol_records_ids_references_graph_and_state
-    - append_ledger_and_memory_events
+    - append_ledger_and_constraint_events
+    - recompute_audited_prospective_plan
     - project_committed_records_into_repo_files
     - create_frontmatter
-    - serialize_json_and_mdx_without_literary_change
+    - serialize_json_and_markdown_without_literary_change
     - hash_generated_files
     - compile_static_astro_site
   literary_change_forbidden: true
@@ -502,7 +574,7 @@ provenance:
     - timestamps
     - token_and_cost_accounting_when_available
     - creative_step_count
-    - analysis_or_index_step_count
+    - analysis_step_count
     - human_intervention_count
     - committed_rewrite_count
     - committed_regeneration_count

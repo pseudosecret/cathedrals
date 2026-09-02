@@ -131,8 +131,9 @@ The committed architecture and packet records must collectively encode:
 
 Deterministic preparation may fix abstract slots, edge cardinalities, branch depths,
 reconvergence capacity, and state laws. Generated architecture freezes actual branch
-purposes, choices, promises, and ending families; later literary packets instantiate
-their assigned content without revising the architecture.
+families, hard dependencies, promises, and ending attractors; later literary packets
+instantiate content without revising canon. Noncanonical packet priority and
+future-feasibility assignments may be recomputed after each commit.
 
 ## Graph Implications
 
@@ -143,6 +144,12 @@ The compiled graph must explicitly encode:
 - multi-option decision groups with live-option counts
 - reconvergent nodes with multiple inbound edges
 - redirective ending edges when an ending becomes a new beginning
+
+Technical scene and ending slots are the stable cross-packet linking layer. An edge
+to unwritten content commits a `destination` with `kind: technical_slot`; generated
+literary IDs are used only after their content exists. Projection resolves each slot
+exactly once without editing the earlier edge. Missing, duplicate, or unknown slots
+are terminal mechanical failures.
 - state effects that preserve path consequence through reconvergence
 
 ## Build Implications

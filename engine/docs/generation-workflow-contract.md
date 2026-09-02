@@ -7,6 +7,9 @@ until completion or failure, with no human creative steering and no mutation,
 replacement, regeneration, or candidate selection after a creative artifact commits.
 Response count is not the invariant. A run may contain many creative calls.
 
+> **Cathedrals reasons backward about what the future must earn, but writes forward
+> into a history it cannot revise.**
+
 The externally visible experience is always:
 
 ```text
@@ -49,14 +52,14 @@ max_packet_output_tokens <= selected_model_max_output_tokens
 ```
 
 Also prove that planned steps fit the derived total creative-step, literary-word,
-input-token, output-token, memory, retrieval, and configured cost ceilings. Failure
+input-token, output-token, constraint-event, retrieval, and configured cost ceilings. Failure
 stops before creative generation.
 
 ## 2. Append-Only Run
 
 Create `generated-work/<generation-id>/run-ledger.jsonl`. Each line validates against
 the ledger-entry record in the protocol schema and is chained by SHA-256. The ledger
-records every creative, analysis/index, validation, build, and finalization step.
+records every creative, analysis, prospective-plan, validation, build, and finalization step.
 
 A technical retry keeps the same planned step ID, prompt/context hashes, parameters,
 and seed, while incrementing `attempt`. A creative step counts when valid output is
@@ -70,40 +73,52 @@ Generate in one creative step:
 - significant non-claimant characters
 - the exact threshold incident and core chronology
 - relationships, generated motifs, environmental mutation law, and principal tensions
+- one bounded web art direction interpreted from the frozen brief and generated canon
 
 Commit `genesis.json`. It becomes immutable generated root canon.
 
 ### Phase B — Macroarchitecture
 
-Using frozen engine canon and genesis, generate the complete macro topology, arc
-purposes, major decisions, reconvergence, hidden-route opportunities, narrative
-promises, ending families, and dependency/traversal plan. Commit
-`architecture.json`. Its generated meaning and traversal order are immutable.
+Using frozen engine canon and genesis, generate major topology, branch families,
+ending/branch/claimant/artifact/thematic/motif attractors, hard obligations, soft
+pressures, narrative promises, and backward prerequisite chains. Commit
+`architecture.json`. Attractors freeze terminal transformations rather than terminal
+choreography. Topology, attractors, hard obligations, and packet dependencies are
+immutable; tentative realization order is not.
 
 ### Phase C — Forward Literary Packets
 
-Follow the frozen dependency order. A packet normally contains three to eight related
-scenes plus associated artifacts, formal compositions, and source-grounded memory
-deltas. Assemble only relevant context. Commit a mechanically valid packet even when
-its art is disappointing. Later packets may read and react to it; they may not replace
-it.
+Choose the next dependency-lawful packet from the current prospective plan. A packet
+normally contains three to eight related scenes plus associated artifacts, formal
+compositions, and source-grounded constraint deltas. Context is selected by constraint
+relevance, not chronology. Commit a mechanically valid packet even when its art is
+disappointing. Later packets may read and react to it; they may not replace it.
+
+After every creative commit: preserve source; apply fact and knowledge events; append
+or resolve obligations; update motif pressure; evaluate viable/endangered/foreclosed/
+universally-impossible attractors; recompute the noncanonical prospective plan; then
+choose the next lawful packet. Recalculation never increments rewrite, regeneration,
+or backtrack counters.
 
 ### Phase D — Endings and Residue
 
-Generate ending packets only after all prerequisite path content and state histories
-have committed. Endings may interpret earlier evidence and create consequences, but
-may not retcon it.
+Generate final ending prose late, only for viable early attractors whose hard
+prerequisites have source-cited satisfaction. Endings may interpret earlier evidence
+and create consequences, but may not retcon it.
 
 ### Phase E — Validation and Static Build
 
 Project committed records without literary change, validate the entire graph and
-content set, perform whole-work artistic acceptance, compile Astro, validate the
-build, and cross the complete-work barrier only on full success.
+content set, compile and validate Astro, then perform whole-work artistic acceptance.
+An artistic rejection may retain the valid build under ignored run storage for
+diagnosis, but remains nonplayable and unpublished. On full success, publish only the
+new generated-work tree and create one final commit on the independent generation
+branch before crossing the complete-work barrier.
 
 ## 3. Commit Semantics
 
 A commit atomically preserves the raw response, validated protocol record, prompt and
-context hashes, output hash, generated IDs, memory deltas, canonical-state hashes,
+context hashes, output hash, generated IDs, constraint deltas, canonical-state hashes,
 and ledger entry. After that point the creative bytes and facts are history.
 
 Later steps may read, quote, retrieve, reinterpret from a character's perspective,
@@ -116,26 +131,46 @@ No call may generate several fictional candidates for scoring or selection. A va
 creative output consumes the possibility space and commits. Deterministic structural
 selection before creative generation remains lawful.
 
-## 4. Narrative Memory and Context
+## 4. Constraint Propagation and Context
 
-The immutable creative records are source evidence. `memory-events.jsonl` is an
-append-only index divided into canonical generated state and narrative working
-memory. Every event cites source type, artifact ID, locator, source commit, and source
-hash. Index corrections append a superseding event; they never change source fiction.
-When memory conflicts with immutable prose, prose wins.
+The immutable creative records are source evidence. `constraint-events.jsonl` is an
+append-only, source-hashed index of minimal past facts, tracked epistemic state, typed
+future debt, motif pressure, and foreclosure evidence. Source truth always wins.
 
-For each later creative step, deterministically assemble a bounded context packet
-from frozen engine law, genesis, relevant architecture, current branch/world state,
-relevant claimant and relationship records, recent scenes, open promises, motifs,
-artifacts, exact retrieved source passages, geomancy, and packet obligations.
-Retrieval selects evidence; it cannot invent truth.
+Architecture plans backward with the same recursive grammar used forward:
 
-Creative packets should emit their own memory observations. Optional analysis/index
-calls may extract facts, classify motifs, check consistency, or select source
-passages. They have no authority to write replacement fiction or silently promote a
-summary over its source.
+```text
+desired residue ← consequence ← choice/deferment ← pressure ← interpretation ← encounter
+```
 
-## 5. Failures and Terminal States
+This produces prerequisite obligations, never reverse-authored prose. Literary
+authorship still commits forward only.
+
+For each packet, deterministic weighted retrieval scores hard obligation/direct
+dependency matches at 12, branch at 10, knowledge at 9, claimant/causal debt/attractor
+prerequisite at 8, object/location at 6, motif at 5, lexical overlap variably, and
+recency at no more than 2. It then retrieves original immutable source records and
+locators. Thus Scene 130 may retrieve Scene 12 when Scene 12 constrains it.
+
+Whole records are packed in this priority: engine law, brief, packet plan, hard past
+constraints, hard future obligations, direct source evidence, relevant knowledge,
+attractor prerequisites, original evidence, motif/branch residue, local recent prose,
+soft pressure. A lower-priority section is omitted before a hard record is sliced.
+
+Creative packets emit their own structured deltas. There is no routine secondary
+index call. A future noncreative analysis call may classify constraints or feasibility
+only if deterministic/packet-emitted data proves insufficient; it can never return
+replacement prose.
+
+## 5. Prospective Foreclosure
+
+A committed fact may make a foreclosable attractor impossible. The packet remains
+immutable. Foreclosure is lawful only when a cited immutable event negates a declared
+prerequisite, no lawful realization remains, and the obligation is scoped to that
+future. Universal hard obligations cannot be dropped; making one impossible causes
+`FAILED_GENERATION`. Foreclosure changes future feasibility, not history.
+
+## 6. Failures and Terminal States
 
 - Transport failure before a response: retry the identical planned step.
 - Provider failure before creative output: retry the identical planned step.
@@ -153,7 +188,12 @@ The only terminal states exposed to the user are `READY_TO_PLAY` and
 `FAILED_GENERATION`. A failed run follows its frozen retention policy. Any later
 attempt starts from frozen inputs under a new generation ID.
 
-## 6. Complete-Work Barrier
+Every new attempt first returns to the configured engine base branch, records its
+exact commit, and creates `generation/<generation-id>` from that commit. Resume instead
+returns to the original frozen generation branch. Generation branches never descend
+from one another.
+
+## 7. Complete-Work Barrier
 
 Before `READY_TO_PLAY`, all generated canon, claimants, characters, architecture,
 scenes, artifacts, formal compositions, endings, state-dependent variants, lawful

@@ -48,6 +48,27 @@ The build layer does not invent route structure.
 not hand-authored canon.
 The build layer also does not expose route-structure language to the normal reader unless an explicit debug view is enabled.
 
+## Markdown Projection
+
+Literary fields retain their historical `*_mdx` names but contain constrained
+Markdown, not executable MDX. Preserve their exact UTF-8 bytes under `public/source/`.
+At Astro build time, render display HTML with the pinned `markdown-it` dependency,
+with `html: false`, linkification disabled, and no browser runtime renderer. Mechanical
+validation rejects authored HTML tags before commit; HTML-disabled rendering is
+defense in depth.
+
+## Generated Art Direction
+
+Genesis commits one bounded `web_art_direction` informed by the frozen brief. The
+model selects only known typography classes, six parsed colors, density, border,
+surface, artifact, transition, ending, and route-pressure enums. Contrast validation
+runs before genesis commit. The deterministic projector maps those values to CSS
+variables and known declarations inside a stable prose-first Cathedrals layout.
+The alternate reading theme is deterministically tinted from the committed palette;
+foregrounds are darkened only as far as needed to meet the same contrast floors.
+Arbitrary generated CSS, JavaScript, font URLs, layout declarations, and assets are
+not protocol fields.
+
 ## Route Structure
 
 Use these route families:
@@ -77,13 +98,17 @@ The executable structure should assume:
 - post-hub branch splintering and selective reconvergence
 - variable terminal depth rather than uniform shallow claimant ladders
 
+Edges may retain a frozen `destination` technical slot across packets. Static
+projection resolves it to one committed scene or ending content ID without mutating
+the edge. Missing, duplicate, or nonexistent slots fail mechanical validation.
+
 ## Reader State
 
 Reader state must be client-side only.
 
 Use one stable local-storage namespace:
 
-- `cathedrals:hospice-annex-v01:reader-state:v1`
+- `cathedrals:<generation-id>:reader-state:v1`
 
 Required state shape:
 
@@ -152,7 +177,7 @@ Requirements:
 
 The ending-page path view must be derived from:
 
-- `schema-generation/decision-graph.json`
+- resolved decision edges in projected `work.json`
 - the reader's client-side `chosenEdgeIds`
 - the current ending id
 

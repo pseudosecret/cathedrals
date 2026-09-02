@@ -36,11 +36,12 @@ prose. If preparation decides what happens, stop before starting the run.
 
 Apply the packet and cumulative formulae in `engine/data/work-instance.yaml`. Pass
 only when every planned step fits its model's context and output limits and the full
-derived scope fits the run's token, memory, retrieval, creative-step, and configured cost
+derived scope fits the run's token, constraint-event, retrieval, creative-step, and configured cost
 ceilings.
 
 ## Handoff
 
 The frozen output is supplied to genesis. Genesis and architecture may fill the
 abstract slots creatively. The architecture commit must freeze dependency-valid
-packet traversal before literary execution proceeds.
+packet dependencies and technical envelopes before literary execution proceeds;
+tentative prospective order remains mutable.

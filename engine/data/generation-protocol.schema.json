@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cathedrals.local/schemas/generation-protocol-v2.json",
-  "title": "Cathedrals append-only generation protocol",
+  "$id": "https://cathedrals.local/schemas/generation-protocol-v3.json",
+  "title": "Cathedrals bidirectional constraint-propagation protocol",
   "oneOf": [
     { "$ref": "#/$defs/runManifest" },
     { "$ref": "#/$defs/genesis" },
     { "$ref": "#/$defs/architecture" },
     { "$ref": "#/$defs/creativePacket" },
-    { "$ref": "#/$defs/indexBatch" },
-    { "$ref": "#/$defs/memoryEvent" },
+    { "$ref": "#/$defs/constraintEvent" },
+    { "$ref": "#/$defs/prospectivePlan" },
     { "$ref": "#/$defs/ledgerEntry" },
     { "$ref": "#/$defs/finalization" }
   ],
@@ -46,7 +46,7 @@
       "additionalProperties": false,
       "required": ["purpose", "provider", "model", "parameters"],
       "properties": {
-        "purpose": { "enum": ["creative", "analysis_or_index", "artistic_acceptance"] },
+        "purpose": { "enum": ["creative", "analysis", "artistic_acceptance"] },
         "provider": { "$ref": "#/$defs/nonEmptyString" },
         "model": { "$ref": "#/$defs/nonEmptyString" },
         "parameters": { "type": "object" }
@@ -105,7 +105,7 @@
       ],
       "properties": {
         "record_type": { "const": "run_manifest" },
-        "protocol_version": { "const": "2.0" },
+        "protocol_version": { "const": "3.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "created_at": { "$ref": "#/$defs/timestamp" },
         "generation_brief": { "$ref": "#/$defs/generationBrief" },
@@ -115,6 +115,8 @@
           "additionalProperties": false,
           "required": [
             "work_id",
+            "engine_base_branch",
+            "engine_base_commit",
             "engine_commit_sha",
             "engine_config_hashes",
             "work_seed",
@@ -123,6 +125,8 @@
           ],
           "properties": {
             "work_id": { "const": "hospice-annex-v01" },
+            "engine_base_branch": { "$ref": "#/$defs/nonEmptyString" },
+            "engine_base_commit": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
             "engine_commit_sha": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
             "engine_config_hashes": {
               "type": "object",
@@ -144,7 +148,8 @@
             "backward_canon_mutation_allowed",
             "candidate_cherry_picking_allowed",
             "append_only",
-            "causally_forward"
+            "creative_authorship_forward_only",
+            "planning_may_reason_backward"
           ],
           "properties": {
             "human_creative_interventions_required": { "const": 0 },
@@ -153,7 +158,8 @@
             "backward_canon_mutation_allowed": { "const": false },
             "candidate_cherry_picking_allowed": { "const": false },
             "append_only": { "const": true },
-            "causally_forward": { "const": true }
+            "creative_authorship_forward_only": { "const": true },
+            "planning_may_reason_backward": { "const": true }
           }
         },
         "scope": {
@@ -195,11 +201,11 @@
             "max_analysis_output_tokens",
             "context_safety_reserve_tokens",
             "max_creative_step_count",
-            "max_analysis_or_index_step_count",
+            "max_analysis_step_count",
             "max_total_literary_words",
             "max_cumulative_input_tokens",
             "max_cumulative_output_tokens",
-            "max_memory_records",
+            "max_constraint_events",
             "max_retrieved_source_tokens"
           ],
           "properties": {
@@ -208,11 +214,11 @@
             "max_analysis_output_tokens": { "type": "integer", "minimum": 1 },
             "context_safety_reserve_tokens": { "type": "integer", "minimum": 0 },
             "max_creative_step_count": { "type": "integer", "minimum": 1 },
-            "max_analysis_or_index_step_count": { "type": "integer", "minimum": 0 },
+            "max_analysis_step_count": { "type": "integer", "minimum": 0 },
             "max_total_literary_words": { "type": "integer", "minimum": 1 },
             "max_cumulative_input_tokens": { "type": "integer", "minimum": 1 },
             "max_cumulative_output_tokens": { "type": "integer", "minimum": 1 },
-            "max_memory_records": { "type": "integer", "minimum": 1 },
+            "max_constraint_events": { "type": "integer", "minimum": 1 },
             "max_retrieved_source_tokens": { "type": "integer", "minimum": 0 },
             "max_run_cost": { "type": "number", "minimum": 0 },
             "cost_currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
@@ -221,18 +227,15 @@
         "traversal": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["strategy", "seed", "mutable_after_architecture_commit"],
+          "required": ["strategy", "seed", "prospective_plan_mutable"],
           "properties": {
             "strategy": {
               "enum": [
-                "dependency_topological",
-                "breadth_first_thresholds",
-                "branch_then_reconvergence",
-                "alternating_branch_families"
+                "constraint_relevance"
               ]
             },
             "seed": { "$ref": "#/$defs/nonEmptyString" },
-            "mutable_after_architecture_commit": { "const": false }
+            "prospective_plan_mutable": { "const": true }
           }
         },
         "models": {
@@ -421,66 +424,185 @@
         "source_hash": { "$ref": "#/$defs/hash" }
       }
     },
-    "memoryObservation": {
+    "relevanceTags": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "arc_ids": { "$ref": "#/$defs/idList" },
+        "branch_ids": { "$ref": "#/$defs/idList" },
+        "claimant_ids": { "$ref": "#/$defs/idList" },
+        "character_ids": { "$ref": "#/$defs/idList" },
+        "object_ids": { "$ref": "#/$defs/idList" },
+        "location_ids": { "$ref": "#/$defs/idList" },
+        "motif_ids": { "$ref": "#/$defs/idList" },
+        "state_keys": { "$ref": "#/$defs/stringList" },
+        "technical_slot_ids": { "$ref": "#/$defs/idList" },
+        "keywords": { "$ref": "#/$defs/stringList" }
+      }
+    },
+    "canonicalFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fact_id", "subject", "predicate", "value", "status", "sources", "relevance"],
+      "properties": {
+        "fact_id": { "$ref": "#/$defs/id" },
+        "subject": { "$ref": "#/$defs/id" },
+        "predicate": { "$ref": "#/$defs/nonEmptyString" },
+        "value": {},
+        "status": { "enum": ["established", "contested"] },
+        "sources": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/sourceRef" } },
+        "relevance": { "$ref": "#/$defs/relevanceTags" },
+        "supersedes_fact_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] }
+      }
+    },
+    "knowledgeChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["knowledge_id", "subject_id", "relation", "proposition_id", "action", "sources", "relevance"],
+      "properties": {
+        "knowledge_id": { "$ref": "#/$defs/id" },
+        "subject_id": { "$ref": "#/$defs/id" },
+        "relation": { "enum": ["knows", "believes", "suspects", "explicitly_does_not_know", "claims"] },
+        "proposition_id": { "$ref": "#/$defs/id" },
+        "action": { "enum": ["establish", "retract"] },
+        "sources": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/sourceRef" } },
+        "relevance": { "$ref": "#/$defs/relevanceTags" }
+      }
+    },
+    "obligation": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "memory_id",
-        "memory_class",
-        "memory_kind",
-        "action",
-        "proposition",
-        "status",
-        "sources"
+        "obligation_id", "kind", "description", "status", "created_by_ids", "requires",
+        "hardness", "universality", "resolution_modes", "range", "termination_targets",
+        "sources", "relevance"
       ],
       "properties": {
-        "memory_id": { "$ref": "#/$defs/id" },
-        "memory_class": { "enum": ["canonical_state", "narrative_working"] },
-        "memory_kind": {
+        "obligation_id": { "$ref": "#/$defs/id" },
+        "kind": {
           "enum": [
-            "character",
-            "chronology",
-            "object",
-            "location",
-            "relationship",
-            "character_knowledge",
-            "world_state",
-            "irreversible_event",
-            "unresolved_thread",
-            "promise",
-            "callback",
-            "motif",
-            "question",
-            "branch_residue",
-            "foreshadowing",
-            "thematic_pressure",
-            "intentional_contradiction"
+            "unresolved_question", "causal_debt", "promise", "required_payoff",
+            "branch_residue", "motif_pressure", "character_arc_pressure",
+            "evidence_pressure", "thematic_pressure", "ending_prerequisite",
+            "hidden_route_prerequisite"
           ]
         },
-        "action": { "enum": ["establish", "update_status", "correct_index"] },
-        "proposition": { "$ref": "#/$defs/nonEmptyString" },
-        "status": {
-          "enum": [
-            "established",
-            "contested",
-            "intentionally_unresolved",
-            "open",
-            "fulfilled",
-            "foreclosed",
-            "answered",
-            "superseded_index_only"
-          ]
-        },
-        "sources": {
+        "description": { "$ref": "#/$defs/nonEmptyString" },
+        "status": { "enum": ["active", "satisfied", "foreclosed", "impossible", "intentionally_unresolved"] },
+        "created_by_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+        "requires": { "$ref": "#/$defs/idList" },
+        "hardness": { "enum": ["hard", "soft"] },
+        "universality": { "enum": ["universal", "attractor_scoped", "branch_scoped", "local"] },
+        "resolution_modes": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 16,
-          "items": { "$ref": "#/$defs/sourceRef" }
+          "items": { "enum": ["revelation", "contradiction", "consequence", "transformation", "foreclosure", "redirect", "irreducible_ambiguity", "contamination", "reader_judgment"] }
         },
-        "supersedes_memory_id": {
-          "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }]
+        "range": { "enum": ["local", "long_range"] },
+        "termination_targets": { "$ref": "#/$defs/idList" },
+        "sources": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/sourceRef" } },
+        "relevance": { "$ref": "#/$defs/relevanceTags" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "range": { "const": "long_range" }, "status": { "const": "active" } } },
+          "then": { "properties": { "termination_targets": { "minItems": 1 } } }
+        }
+      ]
+    },
+    "obligationUpdate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["update_id", "obligation_id", "status", "reason", "evidence_sources"],
+      "properties": {
+        "update_id": { "$ref": "#/$defs/id" },
+        "obligation_id": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["satisfied", "foreclosed", "impossible", "intentionally_unresolved"] },
+        "reason": { "$ref": "#/$defs/nonEmptyString" },
+        "evidence_sources": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/sourceRef" } }
+      }
+    },
+    "motifEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["motif_event_id", "motif_id", "action", "current_function", "pressure", "overuse_risk", "sources", "relevance"],
+      "properties": {
+        "motif_event_id": { "$ref": "#/$defs/id" },
+        "motif_id": { "$ref": "#/$defs/id" },
+        "action": { "enum": ["establish", "appear", "transform", "invert", "reveal", "contaminate", "contradict", "fulfill"] },
+        "current_function": { "$ref": "#/$defs/nonEmptyString" },
+        "pressure": { "$ref": "#/$defs/nonEmptyString" },
+        "overuse_risk": { "enum": ["low", "elevated", "high"] },
+        "sources": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/sourceRef" } },
+        "relevance": { "$ref": "#/$defs/relevanceTags" }
+      }
+    },
+    "foreclosureCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["foreclosure_id", "attractor_id", "negated_prerequisite_obligation_ids", "reason", "sources"],
+      "properties": {
+        "foreclosure_id": { "$ref": "#/$defs/id" },
+        "attractor_id": { "$ref": "#/$defs/id" },
+        "negated_prerequisite_obligation_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+        "reason": { "$ref": "#/$defs/nonEmptyString" },
+        "sources": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/sourceRef" } }
+      }
+    },
+    "constraintDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical_facts", "knowledge_changes", "new_obligations", "obligation_updates", "motif_events", "potential_foreclosures"],
+      "properties": {
+        "canonical_facts": { "type": "array", "items": { "$ref": "#/$defs/canonicalFact" } },
+        "knowledge_changes": { "type": "array", "items": { "$ref": "#/$defs/knowledgeChange" } },
+        "new_obligations": { "type": "array", "items": { "$ref": "#/$defs/obligation" } },
+        "obligation_updates": { "type": "array", "items": { "$ref": "#/$defs/obligationUpdate" } },
+        "motif_events": { "type": "array", "items": { "$ref": "#/$defs/motifEvent" } },
+        "potential_foreclosures": { "type": "array", "items": { "$ref": "#/$defs/foreclosureCandidate" } }
+      }
+    },
+    "webArtDirection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "visual_thesis", "typography", "palette", "spatial_density",
+        "border_language", "surface_language", "artifact_treatment",
+        "scene_transition_treatment", "ending_treatment", "route_pressure"
+      ],
+      "properties": {
+        "visual_thesis": { "$ref": "#/$defs/nonEmptyString" },
+        "typography": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["body_family_class", "heading_family_class", "scale", "tracking"],
+          "properties": {
+            "body_family_class": { "enum": ["archival_serif", "literary_serif", "humanist_sans"] },
+            "heading_family_class": { "enum": ["severe_sans", "engraved_serif", "humanist_sans"] },
+            "scale": { "enum": ["restrained", "balanced", "expansive"] },
+            "tracking": { "enum": ["narrow", "neutral", "open"] }
+          }
         },
-        "branch_scope_ids": { "$ref": "#/$defs/idList" }
+        "palette": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["background", "surface", "text", "muted", "accent", "danger"],
+          "properties": {
+            "background": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+            "surface": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+            "text": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+            "muted": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+            "accent": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+            "danger": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }
+          }
+        },
+        "spatial_density": { "enum": ["sparse", "balanced", "compressed"] },
+        "border_language": { "enum": ["none", "hairline", "institutional", "boxed", "ruled"] },
+        "surface_language": { "enum": ["flat", "paper", "clinical", "terminal", "archival"] },
+        "artifact_treatment": { "enum": ["file", "transcript", "card", "ledger", "marginalia"] },
+        "scene_transition_treatment": { "enum": ["quiet", "severe", "dissolving", "segmented"] },
+        "ending_treatment": { "enum": ["ceremonial", "abrupt", "clinical", "ruptured"] },
+        "route_pressure": { "enum": ["subtle", "moderate", "strong"] }
       }
     },
     "genesis": {
@@ -494,18 +616,20 @@
         "story_format",
         "format_composition_law",
         "work_canon",
+        "web_art_direction",
         "claimants",
         "characters",
-        "memory_delta"
+        "constraint_delta"
       ],
       "properties": {
         "record_type": { "const": "genesis" },
-        "protocol_version": { "const": "2.0" },
+        "protocol_version": { "const": "3.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "commit_id": { "$ref": "#/$defs/id" },
         "story_format": { "const": "web" },
         "format_composition_law": { "$ref": "#/$defs/nonEmptyString" },
         "work_canon": { "$ref": "#/$defs/workCanon" },
+        "web_art_direction": { "$ref": "#/$defs/webArtDirection" },
         "claimants": {
           "type": "array",
           "minItems": 5,
@@ -517,11 +641,7 @@
           "maxItems": 40,
           "items": { "$ref": "#/$defs/character" }
         },
-        "memory_delta": {
-          "type": "array",
-          "minItems": 1,
-          "items": { "$ref": "#/$defs/memoryObservation" }
-        }
+        "constraint_delta": { "$ref": "#/$defs/constraintDelta" }
       }
     },
     "arc": {
@@ -612,13 +732,22 @@
         "hard_obligation_ids": { "$ref": "#/$defs/idList" }
       }
     },
+    "destinationRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["technical_slot", "content"] },
+        "id": { "$ref": "#/$defs/id" }
+      }
+    },
     "decisionEdge": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "edge_id",
         "from_content_id",
-        "to_content_id",
+        "destination",
         "label",
         "kind",
         "availability",
@@ -630,7 +759,7 @@
       "properties": {
         "edge_id": { "$ref": "#/$defs/id" },
         "from_content_id": { "$ref": "#/$defs/id" },
-        "to_content_id": { "$ref": "#/$defs/id" },
+        "destination": { "$ref": "#/$defs/destinationRef" },
         "label": { "$ref": "#/$defs/nonEmptyString" },
         "kind": { "enum": ["progression", "decision", "ending", "redirect"] },
         "availability": { "enum": ["playable", "reserved"] },
@@ -646,27 +775,29 @@
       "required": [
         "packet_slot_id",
         "packet_kind",
-        "sequence",
+        "initial_priority",
         "scene_slot_ids",
         "ending_slot_ids",
         "artifact_count",
         "formal_composition_count",
         "depends_on_packet_slot_ids",
         "branch_path_relation",
-        "hard_obligation_ids",
+        "attractor_ids",
+        "relevance",
         "soft_guidance"
       ],
       "properties": {
         "packet_slot_id": { "$ref": "#/$defs/id" },
         "packet_kind": { "enum": ["literary", "ending"] },
-        "sequence": { "type": "integer", "minimum": 1 },
+        "initial_priority": { "type": "integer", "minimum": 1 },
         "scene_slot_ids": { "$ref": "#/$defs/idList" },
         "ending_slot_ids": { "$ref": "#/$defs/idList" },
         "artifact_count": { "type": "integer", "minimum": 0, "maximum": 6 },
         "formal_composition_count": { "type": "integer", "minimum": 0, "maximum": 4 },
         "depends_on_packet_slot_ids": { "$ref": "#/$defs/idList" },
         "branch_path_relation": { "$ref": "#/$defs/nonEmptyString" },
-        "hard_obligation_ids": { "$ref": "#/$defs/idList" },
+        "attractor_ids": { "$ref": "#/$defs/idList" },
+        "relevance": { "$ref": "#/$defs/relevanceTags" },
         "soft_guidance": { "$ref": "#/$defs/stringList" }
       },
       "allOf": [
@@ -690,14 +821,26 @@
         }
       ]
     },
-    "hardObligation": {
+    "attractor": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["obligation_id", "instruction", "satisfaction_evidence"],
+      "required": [
+        "attractor_id", "kind", "terminal_transformation", "thematic_function",
+        "emotional_register", "foreclosable", "prerequisite_obligation_ids",
+        "soft_seed_conditions", "unresolved_realization", "ending_slot_ids", "relevance"
+      ],
       "properties": {
-        "obligation_id": { "$ref": "#/$defs/id" },
-        "instruction": { "$ref": "#/$defs/nonEmptyString" },
-        "satisfaction_evidence": { "$ref": "#/$defs/nonEmptyString" }
+        "attractor_id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["ending", "branch", "claimant", "artifact", "thematic", "motif"] },
+        "terminal_transformation": { "$ref": "#/$defs/nonEmptyString" },
+        "thematic_function": { "$ref": "#/$defs/nonEmptyString" },
+        "emotional_register": { "$ref": "#/$defs/nonEmptyString" },
+        "foreclosable": { "type": "boolean" },
+        "prerequisite_obligation_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+        "soft_seed_conditions": { "$ref": "#/$defs/stringList" },
+        "unresolved_realization": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmptyString" } },
+        "ending_slot_ids": { "$ref": "#/$defs/idList" },
+        "relevance": { "$ref": "#/$defs/relevanceTags" }
       }
     },
     "scopeCommitment": {
@@ -731,28 +874,32 @@
         "genesis_commit_id",
         "story_format",
         "scope_commitment",
-        "hard_obligations",
+        "obligation_graph",
+        "attractors",
         "arcs",
         "topology",
-        "narrative_promises",
-        "ending_families",
-        "hidden_route_opportunities",
-        "traversal_plan",
-        "memory_delta"
+        "packet_plans",
+        "constraint_delta"
       ],
       "properties": {
         "record_type": { "const": "architecture" },
-        "protocol_version": { "const": "2.0" },
+        "protocol_version": { "const": "3.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "commit_id": { "$ref": "#/$defs/id" },
         "genesis_commit_id": { "$ref": "#/$defs/id" },
         "story_format": { "const": "web" },
         "scope_commitment": { "$ref": "#/$defs/scopeCommitment" },
-        "hard_obligations": {
+        "obligation_graph": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 256,
-          "items": { "$ref": "#/$defs/hardObligation" }
+          "maxItems": 512,
+          "items": { "$ref": "#/$defs/obligation" }
+        },
+        "attractors": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/attractor" }
         },
         "arcs": { "type": "array", "minItems": 4, "maxItems": 128, "items": { "$ref": "#/$defs/arc" } },
         "topology": {
@@ -767,39 +914,8 @@
             "reconvergence_node_ids": { "$ref": "#/$defs/idList" }
           }
         },
-        "narrative_promises": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["promise_id", "promise", "required_resolution_modes"],
-            "properties": {
-              "promise_id": { "$ref": "#/$defs/id" },
-              "promise": { "$ref": "#/$defs/nonEmptyString" },
-              "required_resolution_modes": { "$ref": "#/$defs/stringList" }
-            }
-          }
-        },
-        "ending_families": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 32,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["ending_family_id", "purpose", "prerequisite_obligation_ids", "ending_target"],
-            "properties": {
-              "ending_family_id": { "$ref": "#/$defs/id" },
-              "purpose": { "$ref": "#/$defs/nonEmptyString" },
-              "prerequisite_obligation_ids": { "$ref": "#/$defs/idList" },
-              "ending_target": { "type": "integer", "minimum": 1 }
-            }
-          }
-        },
-        "hidden_route_opportunities": { "$ref": "#/$defs/stringList" },
-        "traversal_plan": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/packetPlan" } },
-        "memory_delta": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/memoryObservation" } }
+        "packet_plans": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/packetPlan" } },
+        "constraint_delta": { "$ref": "#/$defs/constraintDelta" }
       }
     },
     "scene": {
@@ -814,6 +930,7 @@
         "beat_jobs",
         "branch_depth",
         "claimant_focus_ids",
+        "epistemic_dependencies",
         "threshold_figure",
         "threshold_resultant",
         "state_inputs",
@@ -847,6 +964,18 @@
         "beat_jobs": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/nonEmptyString" } },
         "branch_depth": { "type": "integer", "minimum": 0 },
         "claimant_focus_ids": { "$ref": "#/$defs/idList" },
+        "epistemic_dependencies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["subject_id", "proposition_ids"],
+            "properties": {
+              "subject_id": { "$ref": "#/$defs/id" },
+              "proposition_ids": { "$ref": "#/$defs/idList" }
+            }
+          }
+        },
         "threshold_figure": { "type": "string", "pattern": "^[123]-[123]-[123]-[123]$" },
         "threshold_resultant": { "type": ["string", "null"], "pattern": "^[123]-[123]-[123]-[123]$" },
         "state_inputs": { "$ref": "#/$defs/stateConditions" },
@@ -908,10 +1037,13 @@
         "ending_id",
         "title",
         "ending_type",
+        "attractor_id",
+        "satisfied_prerequisite_obligation_ids",
+        "prerequisite_evidence_source_ids",
         "claimant_pressure_ids",
         "entry_conditions",
         "state_effects",
-        "redirect_target_scene_id",
+        "redirect_destination",
         "prose_mdx"
       ],
       "properties": {
@@ -919,10 +1051,13 @@
         "ending_id": { "$ref": "#/$defs/id" },
         "title": { "$ref": "#/$defs/nonEmptyString" },
         "ending_type": { "enum": ["commitment", "foreclosure", "contamination", "release", "redirective", "other"] },
+        "attractor_id": { "$ref": "#/$defs/id" },
+        "satisfied_prerequisite_obligation_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+        "prerequisite_evidence_source_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
         "claimant_pressure_ids": { "$ref": "#/$defs/idList" },
         "entry_conditions": { "$ref": "#/$defs/stateConditions" },
         "state_effects": { "type": "array", "items": { "$ref": "#/$defs/stateEffect" } },
-        "redirect_target_scene_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "redirect_destination": { "anyOf": [{ "$ref": "#/$defs/destinationRef" }, { "type": "null" }] },
         "prose_mdx": { "type": "string", "minLength": 1, "maxLength": 14000 }
       }
     },
@@ -951,17 +1086,17 @@
         "packet_slot_id",
         "packet_kind",
         "packet_sequence",
-        "obligations_consumed",
+        "obligations_advanced",
         "scenes",
         "artifacts",
         "endings",
         "decision_edges",
         "formal_compositions",
-        "memory_delta"
+        "constraint_delta"
       ],
       "properties": {
         "record_type": { "const": "creative_packet" },
-        "protocol_version": { "const": "2.0" },
+        "protocol_version": { "const": "3.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "commit_id": { "$ref": "#/$defs/id" },
         "architecture_commit_id": { "$ref": "#/$defs/id" },
@@ -969,13 +1104,13 @@
         "packet_slot_id": { "$ref": "#/$defs/id" },
         "packet_kind": { "enum": ["literary", "ending"] },
         "packet_sequence": { "type": "integer", "minimum": 1 },
-        "obligations_consumed": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+        "obligations_advanced": { "type": "array", "items": { "$ref": "#/$defs/id" } },
         "scenes": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/scene" } },
         "artifacts": { "type": "array", "maxItems": 6, "items": { "$ref": "#/$defs/artifact" } },
         "endings": { "type": "array", "maxItems": 6, "items": { "$ref": "#/$defs/ending" } },
         "decision_edges": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/decisionEdge" } },
         "formal_compositions": { "type": "array", "maxItems": 4, "items": { "$ref": "#/$defs/formalComposition" } },
-        "memory_delta": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/memoryObservation" } }
+        "constraint_delta": { "$ref": "#/$defs/constraintDelta" }
       },
       "allOf": [
         {
@@ -998,63 +1133,98 @@
         }
       ]
     },
-    "indexBatch": {
+    "constraintEvent": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "record_type",
         "protocol_version",
         "generation_id",
-        "index_batch_id",
-        "source_commit_ids",
-        "observations"
-      ],
-      "properties": {
-        "record_type": { "const": "index_batch" },
-        "protocol_version": { "const": "2.0" },
-        "generation_id": { "$ref": "#/$defs/id" },
-        "index_batch_id": { "$ref": "#/$defs/id" },
-        "source_commit_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
-        "observations": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/memoryObservation" } }
-      }
-    },
-    "memoryEvent": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "record_type",
-        "protocol_version",
-        "generation_id",
-        "memory_event_sequence",
+        "constraint_event_sequence",
         "origin_step_id",
-        "memory_id",
-        "memory_class",
-        "memory_kind",
+        "constraint_id",
+        "constraint_class",
+        "constraint_kind",
         "action",
-        "proposition",
-        "status",
+        "data",
         "sources"
       ],
       "properties": {
-        "record_type": { "const": "memory_event" },
-        "protocol_version": { "const": "2.0" },
+        "record_type": { "const": "constraint_event" },
+        "protocol_version": { "const": "3.0" },
         "generation_id": { "$ref": "#/$defs/id" },
-        "memory_event_sequence": { "type": "integer", "minimum": 1 },
+        "constraint_event_sequence": { "type": "integer", "minimum": 1 },
         "origin_step_id": { "$ref": "#/$defs/id" },
-        "memory_id": { "$ref": "#/$defs/id" },
-        "memory_class": { "enum": ["canonical_state", "narrative_working"] },
-        "memory_kind": { "$ref": "#/$defs/memoryObservation/properties/memory_kind" },
-        "action": { "$ref": "#/$defs/memoryObservation/properties/action" },
-        "proposition": { "$ref": "#/$defs/nonEmptyString" },
-        "status": { "$ref": "#/$defs/memoryObservation/properties/status" },
+        "constraint_id": { "$ref": "#/$defs/id" },
+        "constraint_class": { "enum": ["past_constraint", "future_obligation", "motif_pressure", "prospective_foreclosure"] },
+        "constraint_kind": { "enum": ["canonical_fact", "knowledge_state", "obligation", "obligation_update", "motif_state", "foreclosure_candidate"] },
+        "action": { "enum": ["establish", "retract", "update", "satisfy", "foreclose", "mark_impossible", "resolve_ambiguously"] },
+        "data": { "type": "object" },
         "sources": {
           "type": "array",
           "minItems": 1,
           "maxItems": 16,
           "items": { "$ref": "#/$defs/hashedSourceRef" }
+        }
+      }
+    },
+    "prospectivePlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type", "protocol_version", "generation_id", "plan_id",
+        "based_on_canonical_state_hash", "recomputed_after_commit_id", "created_at",
+        "feasibility", "obligation_assignments", "packet_order"
+      ],
+      "properties": {
+        "record_type": { "const": "prospective_plan" },
+        "protocol_version": { "const": "3.0" },
+        "generation_id": { "$ref": "#/$defs/id" },
+        "plan_id": { "$ref": "#/$defs/id" },
+        "based_on_canonical_state_hash": { "$ref": "#/$defs/hash" },
+        "recomputed_after_commit_id": { "$ref": "#/$defs/id" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "feasibility": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["attractor_id", "status", "reason", "source_ids"],
+            "properties": {
+              "attractor_id": { "$ref": "#/$defs/id" },
+              "status": { "enum": ["viable", "endangered", "foreclosed", "universally_required_but_impossible"] },
+              "reason": { "$ref": "#/$defs/nonEmptyString" },
+              "source_ids": { "$ref": "#/$defs/idList" }
+            }
+          }
         },
-        "supersedes_memory_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
-        "branch_scope_ids": { "$ref": "#/$defs/idList" }
+        "obligation_assignments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["obligation_id", "packet_slot_id", "score", "reason"],
+            "properties": {
+              "obligation_id": { "$ref": "#/$defs/id" },
+              "packet_slot_id": { "$ref": "#/$defs/id" },
+              "score": { "type": "integer" },
+              "reason": { "$ref": "#/$defs/nonEmptyString" }
+            }
+          }
+        },
+        "packet_order": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["packet_slot_id", "score", "reason"],
+            "properties": {
+              "packet_slot_id": { "$ref": "#/$defs/id" },
+              "score": { "type": "integer" },
+              "reason": { "$ref": "#/$defs/nonEmptyString" }
+            }
+          }
+        }
       }
     },
     "tokenAccounting": {
@@ -1093,9 +1263,10 @@
         "completed_at",
         "output_hash",
         "generated_artifact_ids",
-        "canonical_state_delta_ids",
-        "unresolved_thread_delta_ids",
-        "motif_delta_ids",
+        "past_constraint_delta_ids",
+        "future_obligation_delta_ids",
+        "motif_pressure_delta_ids",
+        "prospective_plan_hash_after",
         "branch_path_relation",
         "commit_status",
         "canonical_state_hash_after",
@@ -1104,12 +1275,12 @@
       ],
       "properties": {
         "record_type": { "const": "ledger_entry" },
-        "protocol_version": { "const": "2.0" },
+        "protocol_version": { "const": "3.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "ledger_sequence": { "type": "integer", "minimum": 1 },
         "planned_step_id": { "$ref": "#/$defs/id" },
         "attempt": { "type": "integer", "minimum": 1 },
-        "step_type": { "enum": ["creative", "analysis_or_index", "deterministic"] },
+        "step_type": { "enum": ["creative", "analysis", "deterministic"] },
         "step_phase": {
           "enum": [
             "preflight",
@@ -1118,7 +1289,7 @@
             "architecture",
             "literary_packet",
             "ending_packet",
-            "index",
+            "prospective_plan",
             "projection",
             "validation",
             "artistic_acceptance",
@@ -1140,9 +1311,10 @@
         "completed_at": { "$ref": "#/$defs/timestamp" },
         "output_hash": { "anyOf": [{ "$ref": "#/$defs/hash" }, { "type": "null" }] },
         "generated_artifact_ids": { "$ref": "#/$defs/idList" },
-        "canonical_state_delta_ids": { "$ref": "#/$defs/idList" },
-        "unresolved_thread_delta_ids": { "$ref": "#/$defs/idList" },
-        "motif_delta_ids": { "$ref": "#/$defs/idList" },
+        "past_constraint_delta_ids": { "$ref": "#/$defs/idList" },
+        "future_obligation_delta_ids": { "$ref": "#/$defs/idList" },
+        "motif_pressure_delta_ids": { "$ref": "#/$defs/idList" },
+        "prospective_plan_hash_after": { "anyOf": [{ "$ref": "#/$defs/hash" }, { "type": "null" }] },
         "branch_path_relation": { "type": ["string", "null"] },
         "commit_status": { "enum": ["COMMITTED", "FAILED_BEFORE_COMMIT"] },
         "canonical_state_hash_after": { "$ref": "#/$defs/hash" },
@@ -1165,7 +1337,7 @@
         {
           "if": {
             "properties": {
-              "step_type": { "enum": ["creative", "analysis_or_index"] }
+              "step_type": { "enum": ["creative", "analysis"] }
             }
           },
           "then": {
@@ -1207,9 +1379,9 @@
           "then": {
             "properties": {
               "generated_artifact_ids": { "maxItems": 0 },
-              "canonical_state_delta_ids": { "maxItems": 0 },
-              "unresolved_thread_delta_ids": { "maxItems": 0 },
-              "motif_delta_ids": { "maxItems": 0 }
+              "past_constraint_delta_ids": { "maxItems": 0 },
+              "future_obligation_delta_ids": { "maxItems": 0 },
+              "motif_pressure_delta_ids": { "maxItems": 0 }
             }
           }
         }
@@ -1245,14 +1417,15 @@
         "generation_brief_hash",
         "completed_at",
         "creative_step_count",
-        "analysis_or_index_step_count",
+        "analysis_step_count",
         "human_intervention_count",
         "committed_rewrite_count",
         "committed_regeneration_count",
         "backtrack_count",
         "ledger_head_hash",
         "committed_record_hashes",
-        "memory_event_stream_hash",
+        "constraint_event_stream_hash",
+        "prospective_plan_history_hash",
         "token_accounting",
         "mechanical_validation",
         "artistic_acceptance",
@@ -1263,14 +1436,14 @@
       ],
       "properties": {
         "record_type": { "const": "finalization" },
-        "protocol_version": { "const": "2.0" },
+        "protocol_version": { "const": "3.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "run_status": { "enum": ["READY_TO_PLAY", "FAILED_GENERATION"] },
         "run_manifest_hash": { "$ref": "#/$defs/hash" },
         "generation_brief_hash": { "$ref": "#/$defs/hash" },
         "completed_at": { "$ref": "#/$defs/timestamp" },
         "creative_step_count": { "type": "integer", "minimum": 0 },
-        "analysis_or_index_step_count": { "type": "integer", "minimum": 0 },
+        "analysis_step_count": { "type": "integer", "minimum": 0 },
         "human_intervention_count": { "type": "integer", "minimum": 0 },
         "committed_rewrite_count": { "type": "integer", "minimum": 0 },
         "committed_regeneration_count": { "type": "integer", "minimum": 0 },
@@ -1281,7 +1454,8 @@
           "minProperties": 1,
           "additionalProperties": { "$ref": "#/$defs/hash" }
         },
-        "memory_event_stream_hash": { "$ref": "#/$defs/hash" },
+        "constraint_event_stream_hash": { "$ref": "#/$defs/hash" },
+        "prospective_plan_history_hash": { "$ref": "#/$defs/hash" },
         "token_accounting": { "$ref": "#/$defs/tokenAccounting" },
         "mechanical_validation": { "$ref": "#/$defs/validationVerdict" },
         "artistic_acceptance": { "$ref": "#/$defs/artisticVerdict" },

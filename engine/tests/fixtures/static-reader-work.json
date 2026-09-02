@@ -1,0 +1,122 @@
+{
+  "manifest": {
+    "generation_brief": {
+      "project_name": "Static Reader Fixture"
+    }
+  },
+  "genesis": {
+    "work_canon": {
+      "generated_title": "Static Reader Fixture"
+    },
+    "web_art_direction": {
+      "visual_thesis": "A restrained test surface with visible document hierarchy.",
+      "typography": {
+        "body_family_class": "archival_serif",
+        "heading_family_class": "severe_sans",
+        "scale": "balanced",
+        "tracking": "narrow"
+      },
+      "palette": {
+        "background": "#101418",
+        "surface": "#182028",
+        "text": "#f2eee6",
+        "muted": "#aeb9c2",
+        "accent": "#6fd3d1",
+        "danger": "#ff7a86"
+      },
+      "spatial_density": "balanced",
+      "border_language": "institutional",
+      "surface_language": "archival",
+      "artifact_treatment": "ledger",
+      "scene_transition_treatment": "quiet",
+      "ending_treatment": "ceremonial",
+      "route_pressure": "moderate"
+    }
+  },
+  "architecture": {
+    "topology": {}
+  },
+  "packets": [
+    {
+      "record_type": "creative_packet",
+      "scenes": [
+        {
+          "technical_slot_id": "scene_slot_0001",
+          "scene_id": "fixture_introduction",
+          "title": "Introduction",
+          "prose_mdx": "# Heading\n\nThis is *emphasized* and **strong**.\n\n> A quoted statement.\n\n- one\n- two",
+          "artifact_ids": ["fixture_artifact"],
+          "choice_edge_ids": ["edge_to_later_packet"],
+          "state_effects": [
+            {"operation": "increment", "key": "contamination", "value": 1}
+          ]
+        }
+      ],
+      "artifacts": [
+        {
+          "artifact_id": "fixture_artifact",
+          "title": "Fixture Evidence",
+          "body_mdx": "## Evidence\n\nA deterministic artifact body."
+        }
+      ],
+      "endings": [],
+      "decision_edges": [
+        {
+          "edge_id": "edge_to_later_packet",
+          "from_content_id": "fixture_introduction",
+          "destination": {"kind": "technical_slot", "id": "scene_slot_0042"},
+          "label": "Continue to the later slot",
+          "kind": "progression",
+          "availability": "playable",
+          "decision_group_id": null,
+          "major_decision": false,
+          "state_conditions": [],
+          "state_effects": []
+        }
+      ],
+      "formal_compositions": []
+    },
+    {
+      "record_type": "creative_packet",
+      "scenes": [
+        {
+          "technical_slot_id": "scene_slot_0042",
+          "scene_id": "arbitrary_generated_destination",
+          "title": "Resolved Destination",
+          "prose_mdx": "The technical destination has resolved.",
+          "artifact_ids": [],
+          "choice_edge_ids": ["edge_to_ending"],
+          "state_effects": []
+        }
+      ],
+      "artifacts": [],
+      "endings": [
+        {
+          "technical_slot_id": "ending_slot_0001",
+          "ending_id": "fixture_ending",
+          "title": "Fixture Ending",
+          "prose_mdx": "The static fixture ends here.",
+          "state_effects": [],
+          "redirect_destination": null
+        }
+      ],
+      "decision_edges": [
+        {
+          "edge_id": "edge_to_ending",
+          "from_content_id": "arbitrary_generated_destination",
+          "destination": {"kind": "technical_slot", "id": "ending_slot_0001"},
+          "label": "Finish the fixture",
+          "kind": "ending",
+          "availability": "playable",
+          "decision_group_id": null,
+          "major_decision": false,
+          "state_conditions": [
+            {"key": "contamination", "operator": "gte", "value": 1}
+          ],
+          "state_effects": []
+        }
+      ],
+      "formal_compositions": []
+    }
+  ]
+}

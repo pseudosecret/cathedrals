@@ -36,8 +36,9 @@ prior creative output. A malformed response is terminal, not retryable.
 
 Run every mechanical check in `engine/canon/acceptance-tests.md`, including protocol,
 IDs, cross-references, scope/packet bounds, graph reachability, choices, splitting,
-reconvergence, redirects, hesitation, state effects, variants, formal compositions,
-safe MDX, projection bytes, memory provenance, resource totals, and complete static
+reconvergence, technical-slot destination resolution, redirects, hesitation, state
+effects, variants, formal compositions, safe Markdown rendering, projection bytes,
+generated art direction, constraint provenance, resource totals, and complete static
 compilation.
 
 Check suspected contradictions against original immutable passages. Preserve lawful
@@ -49,7 +50,15 @@ Serialization repair is lawful only before commit and only when creative bytes a
 facts remain unchanged. Never complete truncated or malformed creative output by
 inference.
 
-## 4. Whole-Work Artistic Acceptance
+## 4. Static Build and Diagnostic Preservation
+
+Project all required content, render Markdown with raw HTML disabled, compile Astro,
+validate every route/state behavior, and verify the complete build uses only
+deterministic client-side state. A valid build remains inside ignored run storage until
+acceptance and publication. It may remain there as a diagnostic artifact after a late
+artistic rejection.
+
+## 5. Whole-Work Artistic Acceptance
 
 After all creative steps end, a configured non-authorial evaluator reads the complete
 immutable work and returns `PASS` or `FAIL GENERATION` with concrete reasons. Assess
@@ -58,20 +67,19 @@ detail, artifact force, thematic coherence, formal composition, redundancy, gene
 AI habits, and ending consequence. Do not emit edits or feed findings into a repair
 call.
 
-## 5. Static Build and Barrier
+## 6. Publication and Barrier
 
-Project all required content, compile Astro, validate every route/state behavior, and
-verify the complete build uses only deterministic client-side state. Confirm every
-presented choice points to prebuilt content or behavior and no runtime model/API is
-needed.
+After artistic acceptance, publish only the new generated-work tree and commit it once
+on the frozen generation branch. Failed runs remain untracked under `.cathedrals/` by
+default.
 
 Only a complete mechanical pass, artistic pass, and build pass may finalize
 `READY_TO_PLAY` with `playable: true`. Every failure finalizes `FAILED_GENERATION`
 with `playable: false`; partial content remains quarantined under the retention policy.
 
-## 6. Accepted Hashes
+## 7. Accepted Hashes
 
-Finalization records the ledger head, every committed creative record, memory event
-stream, projections, decision graph, validation verdicts, and build hash. Any later
+Finalization records the ledger head, every committed creative record, constraint
+event stream, prospective-plan history, projections, decision graph, validation verdicts, and build hash. Any later
 literary or generated-fact hash mismatch invalidates publication. Engine presentation
 defects may be fixed in a separate engine revision without changing generated content.

@@ -16,4 +16,16 @@ a complete static Astro site. Runtime behavior is deterministic and client-side 
 no model, network story service, or deferred branch generation is allowed.
 
 Generated Markdown-compatible literary strings are immutable source evidence. The
-projector may escape, wrap, index, link, and serialize them, but may not rewrite them.
+historical `prose_mdx` and `body_mdx` names contain Markdown only; HTML, JSX, imports,
+exports, and executable MDX are forbidden. The projector preserves those bytes under
+`public/source/` and renders them at build time with `markdown-it` configured with raw
+HTML disabled. Rendered HTML is a deterministic projection, never source canon.
+
+Genesis commits one bounded `web_art_direction`. It may select safe typography,
+palette, density, border, surface, artifact, transition, ending, and route-pressure
+dimensions, but never CSS or JavaScript. The projector validates contrast and maps
+those choices into the stable Cathedrals house grammar.
+
+Cross-packet links use frozen scene/ending technical slots until their literary
+content exists. The projector resolves each slot exactly once to committed content;
+no unresolved or duplicate destination may reach a static build.

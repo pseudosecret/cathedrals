@@ -9,7 +9,7 @@ content.
 - frozen-brief preflight
 - autonomous generation run by generation ID
 - committed genesis, architecture, and packet sequence numbers
-- analysis/index step count
+- analysis step count
 - mechanical, artistic, and static-build verdicts
 - terminal state
 

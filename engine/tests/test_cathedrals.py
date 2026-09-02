@@ -14,6 +14,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).parents[2]
+STATIC_READER_FIXTURE = ROOT / "engine/tests/fixtures/static-reader-work.json"
 LOADER = importlib.machinery.SourceFileLoader("cathedrals_runner", str(ROOT / "cathedrals"))
 SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
 RUNNER = importlib.util.module_from_spec(SPEC)
@@ -24,6 +25,121 @@ LOADER.exec_module(RUNNER)
 def answers(*values):
     values = iter(values)
     return lambda _prompt="": next(values)
+
+
+def static_reader_fixture():
+    return json.loads(STATIC_READER_FIXTURE.read_text(encoding="utf-8"))
+
+
+def art_direction(**updates):
+    value = static_reader_fixture()["genesis"]["web_art_direction"]
+    value.update(updates)
+    return value
+
+
+def source_ref(identifier="scene_old"):
+    return {"artifact_type": "scene", "artifact_id": identifier, "source_locator": "prose_mdx#relevant"}
+
+
+def hashed_source(identifier="scene_old"):
+    return source_ref(identifier) | {"source_commit_id": "commit_source", "source_hash": "a" * 64}
+
+
+def empty_delta(**updates):
+    value = {
+        "canonical_facts": [],
+        "knowledge_changes": [],
+        "new_obligations": [],
+        "obligation_updates": [],
+        "motif_events": [],
+        "potential_foreclosures": [],
+    }
+    value.update(updates)
+    return value
+
+
+def obligation(identifier="obligation_one", **updates):
+    value = {
+        "obligation_id": identifier,
+        "kind": "ending_prerequisite",
+        "description": "Earn the terminal transformation.",
+        "status": "active",
+        "created_by_ids": ["attractor_one"],
+        "requires": [],
+        "hardness": "hard",
+        "universality": "attractor_scoped",
+        "resolution_modes": ["transformation"],
+        "range": "long_range",
+        "termination_targets": ["attractor_one"],
+        "sources": [source_ref("commit_architecture")],
+        "relevance": {"branch_ids": ["branch_one"], "keywords": ["archive"]},
+    }
+    value.update(updates)
+    return value
+
+
+def attractor(identifier="attractor_one", prerequisite_ids=None, **updates):
+    value = {
+        "attractor_id": identifier,
+        "kind": "ending",
+        "terminal_transformation": "The reader becomes the documented subject.",
+        "thematic_function": "Completion becomes participation.",
+        "emotional_register": "contamination",
+        "foreclosable": True,
+        "prerequisite_obligation_ids": prerequisite_ids or ["obligation_one"],
+        "soft_seed_conditions": ["institutional second person"],
+        "unresolved_realization": ["exact document", "exact room", "final prose"],
+        "ending_slot_ids": ["ending_slot_0001", "ending_slot_0002"],
+        "relevance": {"branch_ids": ["branch_one"]},
+    }
+    value.update(updates)
+    return value
+
+
+def packet_plan(identifier="packet_one", **updates):
+    value = {
+        "packet_slot_id": identifier,
+        "packet_kind": "literary",
+        "initial_priority": 1,
+        "scene_slot_ids": ["scene_slot_0001", "scene_slot_0002", "scene_slot_0003"],
+        "ending_slot_ids": [],
+        "artifact_count": 0,
+        "formal_composition_count": 0,
+        "depends_on_packet_slot_ids": [],
+        "branch_path_relation": "branch_one",
+        "attractor_ids": ["attractor_one"],
+        "relevance": {"branch_ids": ["branch_one"], "character_ids": ["character_one"], "keywords": ["archive"]},
+        "soft_guidance": ["Pressure the archive contradiction."],
+    }
+    value.update(updates)
+    return value
+
+
+def architecture_fixture(plans=None, obligations=None, attractors=None):
+    return {
+        "record_type": "architecture",
+        "generation_id": "generation_test",
+        "commit_id": "commit_architecture",
+        "obligation_graph": obligations or [obligation()],
+        "attractors": attractors or [attractor()],
+        "packet_plans": plans or [packet_plan()],
+    }
+
+
+def constraint_event(sequence, kind, data, constraint_class="past_constraint", source="scene_old", action="establish"):
+    return {
+        "record_type": "constraint_event",
+        "protocol_version": "3.0",
+        "generation_id": "generation_test",
+        "constraint_event_sequence": sequence,
+        "origin_step_id": "packet_one",
+        "constraint_id": data.get("fact_id") or data.get("knowledge_id") or data.get("obligation_id") or data.get("update_id") or data.get("motif_event_id") or data.get("foreclosure_id"),
+        "constraint_class": constraint_class,
+        "constraint_kind": kind,
+        "action": action,
+        "data": data,
+        "sources": [hashed_source(source)],
+    }
 
 
 class CathedralsRunnerTests(unittest.TestCase):
@@ -99,32 +215,186 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(node, Path("/usr/bin/node"))
         self.assertEqual(npm, Path("/usr/bin/npm"))
 
+    def test_new_generation_branches_from_configured_engine_base(self):
+        calls = []
+
+        def fake_git(*args, check=True):
+            calls.append(args)
+            if args[:2] == ("rev-parse", "--show-toplevel"):
+                return str(ROOT)
+            if args[:2] == ("status", "--porcelain"):
+                return ""
+            if args[:2] == ("show-ref", "--verify"):
+                return "base exists" if args[-1] == "refs/heads/main" else ""
+            if args[:2] == ("rev-parse", "HEAD"):
+                return "a" * 40
+            return ""
+
+        with mock.patch.object(RUNNER, "git", side_effect=fake_git):
+            branch, base = RUNNER.prepare_generation_branch("run_fixture")
+        self.assertEqual((branch, base), ("generation/run_fixture", "a" * 40))
+        self.assertIn(("switch", "main"), calls)
+        self.assertIn(("switch", "-c", "generation/run_fixture", "a" * 40), calls)
+
+    def test_resume_switches_to_frozen_generation_branch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            (run / "state").mkdir()
+            state = RUNNER.initial_run_state("generation_test", "generation/frozen", "a" * 64, "b" * 64, "model")
+            RUNNER.save_state(run, state)
+            RUNNER.write_json(run / "generation-brief.json", {"lm_studio_base_url": "http://127.0.0.1:1234", "model": "model"})
+            calls = []
+
+            def fake_git(*args, check=True):
+                calls.append(args)
+                return ""
+
+            with mock.patch.object(RUNNER, "current_branch", return_value="generation/older"), \
+                 mock.patch.object(RUNNER, "git", side_effect=fake_git), \
+                 mock.patch.object(RUNNER, "reconcile_run"), \
+                 mock.patch.object(RUNNER, "preflight_model_capacity"), \
+                 mock.patch.object(RUNNER, "http_json", return_value={"data": [{"id": "model"}]}):
+                RUNNER.ensure_resume_ready(run, transport=RUNNER.http_json)
+        self.assertIn(("switch", "generation/frozen"), calls)
+
+    def test_publication_stages_only_generation_output_and_creates_one_commit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = root / ".cathedrals/runs/generation_test"
+            destination = root / "generated-work/generation_test"
+            (run / "state").mkdir(parents=True)
+            (destination / "web").mkdir(parents=True)
+            (destination / "web/index.html").write_text("fixture", encoding="utf-8")
+            RUNNER.save_state(run, RUNNER.initial_run_state("generation_test", "generation/generation_test", "a" * 64, "b" * 64, "model"))
+            calls = []
+
+            def fake_git(*args, check=True):
+                calls.append(args)
+                if args[:3] == ("diff", "--cached", "--name-only"):
+                    return "generated-work/generation_test/web/index.html"
+                if args[:2] == ("rev-parse", "HEAD"):
+                    return "c" * 40
+                return ""
+
+            with mock.patch.object(RUNNER, "ROOT", root), \
+                 mock.patch.object(RUNNER, "current_branch", return_value="generation/generation_test"), \
+                 mock.patch.object(RUNNER, "git", side_effect=fake_git):
+                commit = RUNNER.commit_published_generation(run, destination)
+        self.assertEqual(commit, "c" * 40)
+        self.assertIn(("add", "--", "generated-work/generation_test"), calls)
+        self.assertEqual(sum(call[:1] == ("commit",) for call in calls), 1)
+        self.assertNotIn("unrelated.txt", " ".join(" ".join(call) for call in calls))
+
+    def test_failed_generation_does_not_publish_tracked_provenance(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = root / ".cathedrals/runs/generation_test"
+            (run / "state").mkdir(parents=True)
+            RUNNER.save_state(run, RUNNER.initial_run_state("generation_test", "generation/generation_test", "a" * 64, "b" * 64, "model"))
+            failed = {"run_status": "FAILED_GENERATION", "completed_at": "2026-01-01T00:00:00Z"}
+            with mock.patch.object(RUNNER, "ROOT", root), mock.patch.object(RUNNER, "make_finalization", return_value=failed):
+                RUNNER.finalize_failure(run, RUNNER.CathedralsError("test", "rejected", "artistic_rejection"))
+            self.assertFalse((root / "generated-work").exists())
+            self.assertTrue((run / "finalization.json").exists())
+
     def test_web_projection_creates_static_route_families_without_changing_source(self):
-        scene = {
-            "technical_slot_id": "scene_slot_0001",
-            "scene_id": "scene_fixture",
-            "title": "Fixture",
-            "prose_mdx": "fixture prose bytes",
-            "artifact_ids": ["artifact_fixture"],
-            "choice_edge_ids": ["edge_fixture"],
-            "state_effects": [],
-        }
-        artifact = {"artifact_id": "artifact_fixture", "title": "Evidence", "body_mdx": "fixture evidence bytes"}
-        ending = {"ending_id": "ending_fixture", "title": "End", "prose_mdx": "fixture ending bytes", "state_effects": []}
-        edge = {"edge_id": "edge_fixture", "from_content_id": "scene_fixture", "to_content_id": "ending_fixture"}
-        packet = {"record_type": "creative_packet", "scenes": [scene], "artifacts": [artifact], "endings": [ending], "decision_edges": [edge]}
+        fixture = static_reader_fixture()
+        source = fixture["packets"][0]["scenes"][0]["prose_mdx"]
+        original_edge = json.dumps(fixture["packets"][0]["decision_edges"][0], sort_keys=True)
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary) / "generation_fixture"
             run.mkdir()
-            RUNNER.write_json(run / "run-manifest.json", {"generation_brief": {"project_name": "Fixture"}})
-            with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: {"work_canon": {"generated_title": "Fixture Work"}} if kind == "genesis" else {"topology": {}}), mock.patch.object(
-                RUNNER, "all_committed_records", return_value=[packet]
+            RUNNER.write_json(run / "run-manifest.json", fixture["manifest"])
+            with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: fixture[kind]), mock.patch.object(
+                RUNNER, "all_committed_records", return_value=fixture["packets"]
             ), mock.patch.object(RUNNER, "append_deterministic_step"):
                 project, counts = RUNNER.project_web(run)
-            self.assertEqual(counts, {"scenes": 1, "artifacts": 1, "endings": 1})
-            self.assertEqual((project / "public/source/scene_fixture.md").read_text(), "fixture prose bytes")
+                first_hash = RUNNER.sha256_file(project / "public/style.css")
+                RUNNER.project_web(run)
+            self.assertEqual(counts, {"scenes": 2, "artifacts": 1, "endings": 1})
+            self.assertEqual((project / "public/source/fixture_introduction.md").read_text(), source)
+            self.assertEqual(RUNNER.sha256_file(project / "public/style.css"), first_hash)
+            work = RUNNER.read_json(project / "public/work.json")
+            self.assertEqual(work["decision_edges"][0]["resolved_content_id"], "arbitrary_generated_destination")
+            self.assertEqual(json.dumps(fixture["packets"][0]["decision_edges"][0], sort_keys=True), original_edge)
+            package = RUNNER.read_json(project / "package.json")
+            self.assertEqual(package["dependencies"]["markdown-it"], RUNNER.MARKDOWN_IT_VERSION)
+            renderer = (project / "src/lib/markdown.mjs").read_text()
+            scene_template = (project / "src/pages/scenes/[sceneId].astro").read_text()
+            self.assertIn("html:false", renderer)
+            self.assertIn("set:html={renderMarkdown(scene.prose_mdx)}", scene_template)
             for route in ("scenes/[sceneId].astro", "artifacts/[artifactId].astro", "endings/[endingId].astro"):
                 self.assertTrue((project / "src/pages" / route).exists())
+
+    def test_generated_markdown_rejects_authored_html_and_executable_mdx(self):
+        for source in (
+            "<script>alert(1)</script>", "<iframe src='x'></iframe>", "<object></object>",
+            "<embed>", "<style>body{}</style>", "<link href='x'>", "<meta charset='x'>",
+            "<form></form>", "<input>", "<button>run</button>", "<svg/onload=alert(1)>",
+            "<!-- authored HTML -->", "export const value = 1", "export{value}",
+        ):
+            with self.assertRaises(RUNNER.SchemaError):
+                RUNNER.validate_markdown_source(source, "Fixture")
+        RUNNER.validate_markdown_source("# Heading\n\n*safe emphasis*", "Fixture")
+        RUNNER.validate_markdown_source("See <https://example.invalid>.", "Fixture")
+
+    def test_art_direction_is_deterministic_bounded_and_work_specific(self):
+        first = art_direction()
+        second = art_direction(
+            typography={"body_family_class": "humanist_sans", "heading_family_class": "engraved_serif", "scale": "restrained", "tracking": "open"},
+            spatial_density="compressed", border_language="ruled", surface_language="terminal",
+        )
+        self.assertEqual(RUNNER.art_direction_css(first), RUNNER.art_direction_css(first))
+        self.assertNotEqual(RUNNER.art_direction_css(first), RUNNER.art_direction_css(second))
+        self.assertNotIn(first["visual_thesis"], RUNNER.art_direction_css(first))
+        light = RUNNER.light_art_direction_palette(first)
+        for foreground, minimum in (("text", 4.5), ("muted", 4.5), ("accent", 3.0), ("danger", 3.0)):
+            self.assertGreaterEqual(RUNNER.contrast_ratio(light[foreground], light["background"]), minimum)
+            self.assertGreaterEqual(RUNNER.contrast_ratio(light[foreground], light["surface"]), minimum)
+
+    def test_art_direction_schema_rejects_invalid_values_and_code_fields(self):
+        protocol = RUNNER.load_protocol()
+        for invalid in (
+            art_direction(border_language="freeform_css"),
+            art_direction(palette=art_direction()["palette"] | {"accent": "red"}),
+            art_direction(css="body{position:fixed}"),
+            art_direction(javascript="alert(1)"),
+        ):
+            with self.assertRaises(RUNNER.SchemaError):
+                RUNNER.validate_json_schema(invalid, protocol["$defs"]["webArtDirection"], protocol)
+
+    def test_art_direction_rejects_insufficient_contrast(self):
+        low_contrast = art_direction(palette=art_direction()["palette"] | {"text": "#111519"})
+        with self.assertRaisesRegex(RUNNER.SchemaError, "fails contrast"):
+            RUNNER.validate_art_direction(low_contrast)
+
+    def test_cross_packet_technical_destinations_resolve_without_mutating_edges(self):
+        fixture = static_reader_fixture()
+        scenes = [item for packet in fixture["packets"] for item in packet["scenes"]]
+        endings = [item for packet in fixture["packets"] for item in packet["endings"]]
+        edges = [item for packet in fixture["packets"] for item in packet["decision_edges"]]
+        before = json.dumps(edges, sort_keys=True)
+        resolved, _ = RUNNER.resolve_cross_packet_links(scenes, endings, edges)
+        self.assertEqual(resolved[0]["resolved_content_id"], "arbitrary_generated_destination")
+        self.assertEqual(resolved[1]["resolved_content_id"], "fixture_ending")
+        self.assertEqual(json.dumps(edges, sort_keys=True), before)
+
+    def test_cross_packet_resolution_rejects_missing_and_duplicate_slots(self):
+        scene = {"technical_slot_id": "scene_slot_one", "scene_id": "scene_one"}
+        edge = {"destination": {"kind": "technical_slot", "id": "scene_slot_missing"}}
+        with self.assertRaises(RUNNER.SchemaError):
+            RUNNER.resolve_cross_packet_links([scene], [], [edge])
+        duplicate = {"technical_slot_id": "scene_slot_one", "ending_id": "ending_one", "redirect_destination": None}
+        with self.assertRaises(RUNNER.SchemaError):
+            RUNNER.resolve_cross_packet_links([scene], [duplicate], [])
+
+    def test_redirect_to_future_ending_slot_resolves(self):
+        endings = [
+            {"technical_slot_id": "ending_slot_one", "ending_id": "ending_one", "redirect_destination": {"kind": "technical_slot", "id": "ending_slot_two"}},
+            {"technical_slot_id": "ending_slot_two", "ending_id": "ending_generated_name", "redirect_destination": None},
+        ]
+        _, resolved = RUNNER.resolve_cross_packet_links([], endings, [])
+        self.assertEqual(resolved[0]["resolved_redirect_content_id"], "ending_generated_name")
 
     def test_append_helpers_refuse_rewrite_and_preserve_ledger_prefix(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -140,6 +410,325 @@ class CathedralsRunnerTests(unittest.TestCase):
             with self.assertRaises(RUNNER.IntegrityError):
                 RUNNER.write_json(immutable, {"value": 2}, exclusive=True)
 
+    def test_canonical_fact_event_preserves_immutable_source_provenance(self):
+        fact = {
+            "fact_id": "fact_archive_destroyed",
+            "subject": "room_archive",
+            "predicate": "destroyed",
+            "value": True,
+            "status": "established",
+            "sources": [source_ref()],
+            "relevance": {"location_ids": ["room_archive"]},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            (run / "state").mkdir()
+            (run / "constraints").mkdir()
+            RUNNER.write_json(run / "state/source-index.json", {"scene_old": {"commit_id": "commit_source", "hash": "a" * 64}})
+            record = {"record_type": "fixture", "generation_id": "generation_test", "commit_id": "commit_packet", "constraint_delta": empty_delta(canonical_facts=[fact])}
+            event = RUNNER.make_constraint_events(run, record, "commit_packet", "b" * 64, "packet_one")[0]
+        self.assertEqual(event["sources"][0]["source_commit_id"], "commit_source")
+        self.assertEqual(event["sources"][0]["source_hash"], "a" * 64)
+
+    def test_character_knowledge_is_distinct_from_world_truth(self):
+        fact = constraint_event(1, "canonical_fact", {"fact_id": "fact_truth", "subject": "room_archive", "predicate": "destroyed", "value": True, "status": "established", "relevance": {}})
+        ignorance = constraint_event(2, "knowledge_state", {"knowledge_id": "knowledge_ignorance", "subject_id": "character_one", "relation": "explicitly_does_not_know", "proposition_id": "fact_truth", "action": "establish", "relevance": {}}, source="scene_new")
+        facts, knowledge, _, _, _ = RUNNER.project_constraint_state([fact, ignorance])
+        self.assertTrue(facts["fact_truth"]["data"]["value"])
+        self.assertIn("fact_truth", knowledge["character_one"]["explicitly_does_not_know"])
+
+    def test_active_obligation_survives_later_packets(self):
+        debt = constraint_event(1, "obligation", obligation(), "future_obligation")
+        later_fact = constraint_event(2, "canonical_fact", {"fact_id": "fact_later", "subject": "room_archive", "predicate": "sealed", "value": True, "status": "established", "relevance": {}})
+        _, _, obligations, _, _ = RUNNER.project_constraint_state([debt, later_fact])
+        self.assertEqual(obligations["obligation_one"]["data"]["status"], "active")
+
+    def test_satisfied_obligation_retains_evidence(self):
+        debt = constraint_event(1, "obligation", obligation(), "future_obligation")
+        update = constraint_event(2, "obligation_update", {"update_id": "update_paid", "obligation_id": "obligation_one", "status": "satisfied", "reason": "The copied register was recovered."}, "future_obligation", source="scene_new", action="satisfy")
+        _, _, obligations, _, _ = RUNNER.project_constraint_state([debt, update])
+        resolved = obligations["obligation_one"]
+        self.assertEqual(resolved["data"]["status"], "satisfied")
+        self.assertEqual(resolved["resolution_event"]["sources"][0]["artifact_id"], "scene_new")
+
+    def test_ending_attractor_has_backward_prerequisite_chain(self):
+        obligations = [
+            obligation("obligation_encounter", requires=[], termination_targets=["obligation_interpretation"]),
+            obligation("obligation_interpretation", requires=["obligation_encounter"], termination_targets=["obligation_one"]),
+            obligation("obligation_one", requires=["obligation_interpretation"]),
+        ]
+        architecture = architecture_fixture(obligations=obligations)
+        self.assertEqual(architecture["attractors"][0]["prerequisite_obligation_ids"], ["obligation_one"])
+        self.assertEqual(architecture["obligation_graph"][2]["requires"], ["obligation_interpretation"])
+
+    def test_architecture_rejects_hard_obligation_with_unknown_origin(self):
+        with self.assertRaisesRegex(RUNNER.SchemaError, "unknown origin"):
+            RUNNER.validate_obligation_origins(
+                [obligation(created_by_ids=["missing_origin"])], {"attractor_one"}, "Architecture obligation"
+            )
+
+    def test_ending_context_labels_prerequisites_and_reader_state(self):
+        reader_fact = constraint_event(1, "canonical_fact", {
+            "fact_id": "fact_reader_state", "subject": "reader", "predicate": "documented",
+            "value": True, "status": "established", "relevance": {"state_keys": ["reader_documented"]},
+        })
+        satisfied = constraint_event(2, "obligation", obligation(status="satisfied"), "future_obligation")
+        satisfied["resolution_event"] = constraint_event(3, "obligation_update", {
+            "update_id": "update_one", "obligation_id": "obligation_one", "status": "satisfied",
+            "reason": "Established.",
+        }, "future_obligation")
+        plan = packet_plan(
+            packet_kind="ending", scene_slot_ids=[], ending_slot_ids=["ending_slot_0001"],
+            advance_obligation_ids=[], may_satisfy_obligation_ids=[],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            (run / "state").mkdir()
+            (run / "state/frozen-engine-context.txt").write_text("law", encoding="utf-8")
+            RUNNER.write_json(run / "run-manifest.json", {
+                "generation_brief": {},
+                "budgets": {"max_retrieved_source_tokens": 100, "max_prepared_context_tokens": 20000},
+            })
+            RUNNER.write_json(run / "state/canonical-facts.json", {"fact_reader_state": reader_fact})
+            RUNNER.write_json(run / "state/obligations.json", {"obligation_one": satisfied})
+            for name in ("knowledge-state.json", "motifs.json"):
+                RUNNER.write_json(run / f"state/{name}", {})
+            with mock.patch.object(RUNNER, "committed_record", return_value={"record_type": "genesis"}), \
+                 mock.patch.object(RUNNER, "all_committed_records", return_value=[]), \
+                 mock.patch.object(RUNNER, "select_relevant_constraints", return_value=[reader_fact, satisfied]), \
+                 mock.patch.object(RUNNER, "retrieve_original_sources", return_value=[]), \
+                 mock.patch.object(RUNNER, "ensure_frozen_geomancy", return_value={"assignments": []}):
+                context = RUNNER.relevant_packet_context(run, architecture_fixture(), plan)
+        self.assertIn("===== ENDING ATTRACTOR =====", context)
+        self.assertIn("===== BACKWARD PREREQUISITE CHAIN =====", context)
+        self.assertIn("===== SATISFIED PREREQUISITES WITH SOURCES =====", context)
+        self.assertIn("===== CURRENT READER STATE =====", context)
+
+    def test_packet_context_includes_only_selected_current_character_knowledge(self):
+        selected = constraint_event(1, "knowledge_state", {
+            "knowledge_id": "knowledge_selected", "subject_id": "character_one", "relation": "suspects",
+            "proposition_id": "fact_selected", "action": "establish", "relevance": {"character_ids": ["character_one"]},
+        })
+        unrelated = constraint_event(2, "knowledge_state", {
+            "knowledge_id": "knowledge_unrelated", "subject_id": "character_one", "relation": "suspects",
+            "proposition_id": "fact_unrelated", "action": "establish", "relevance": {"character_ids": ["character_one"]},
+        })
+        _, knowledge, _, _, _ = RUNNER.project_constraint_state([selected, unrelated])
+        plan = packet_plan(advance_obligation_ids=[], may_satisfy_obligation_ids=[])
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            (run / "state").mkdir()
+            (run / "state/frozen-engine-context.txt").write_text("law", encoding="utf-8")
+            RUNNER.write_json(run / "run-manifest.json", {
+                "generation_brief": {},
+                "budgets": {"max_retrieved_source_tokens": 100, "max_prepared_context_tokens": 20000},
+            })
+            for name, value in (("canonical-facts.json", {}), ("knowledge-state.json", knowledge), ("obligations.json", {}), ("motifs.json", {})):
+                RUNNER.write_json(run / f"state/{name}", value)
+            with mock.patch.object(RUNNER, "committed_record", return_value={"record_type": "genesis"}), \
+                 mock.patch.object(RUNNER, "all_committed_records", return_value=[]), \
+                 mock.patch.object(RUNNER, "select_relevant_constraints", return_value=[selected]), \
+                 mock.patch.object(RUNNER, "retrieve_original_sources", return_value=[]), \
+                 mock.patch.object(RUNNER, "ensure_frozen_geomancy", return_value={"assignments": []}):
+                context = RUNNER.relevant_packet_context(run, architecture_fixture(), plan)
+        self.assertIn("knowledge_selected", context)
+        self.assertNotIn("knowledge_unrelated", context)
+
+    def test_prospective_plan_may_change_without_changing_canon(self):
+        first = obligation("obligation_one", termination_targets=["packet_one"])
+        second = obligation("obligation_two", created_by_ids=["attractor_one"], termination_targets=["packet_two"])
+        plans = [packet_plan("packet_one"), packet_plan("packet_two", initial_priority=2)]
+        architecture = architecture_fixture(plans=plans, obligations=[first, second])
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "generation_test"
+            for name in ("state", "committed", "planning"):
+                (run / name).mkdir(parents=True)
+            state = RUNNER.initial_run_state("generation_test", "generation/test", "a" * 64, "b" * 64, "model")
+            RUNNER.save_state(run, state)
+            one = constraint_event(1, "obligation", first, "future_obligation")
+            two = constraint_event(2, "obligation", second, "future_obligation")
+            _, _, obligations, _, _ = RUNNER.project_constraint_state([one, two])
+            RUNNER.write_json(run / "state/obligations.json", obligations)
+            RUNNER.write_json(run / "state/foreclosure-candidates.json", {})
+            before = RUNNER.build_prospective_plan(run, architecture, "commit_architecture")
+            obligations["obligation_one"]["data"]["status"] = "satisfied"
+            RUNNER.write_json(run / "state/obligations.json", obligations)
+            after = RUNNER.build_prospective_plan(run, architecture, "commit_packet")
+            self.assertEqual(RUNNER.load_state(run)["canonical_state_hash"], "b" * 64)
+        self.assertNotEqual(before["packet_order"][0]["packet_slot_id"], after["packet_order"][0]["packet_slot_id"])
+
+    def test_prospective_change_cannot_change_committed_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "scene.md"
+            source.write_text("immutable scene bytes")
+            before = RUNNER.sha256_file(source)
+            RUNNER.evaluate_feasibility(architecture_fixture(), {"obligation_one": constraint_event(1, "obligation", obligation(), "future_obligation")}, {})
+            self.assertEqual(RUNNER.sha256_file(source), before)
+
+    def test_lawful_committed_fact_can_foreclose_foreclosable_attractor(self):
+        impossible = obligation(status="impossible")
+        obligations = {"obligation_one": constraint_event(1, "obligation", impossible, "future_obligation")}
+        candidate_data = {"foreclosure_id": "foreclosure_one", "attractor_id": "attractor_one", "negated_prerequisite_obligation_ids": ["obligation_one"], "reason": "Committed death negated survival."}
+        candidates = {"foreclosure_one": constraint_event(2, "foreclosure_candidate", candidate_data, "prospective_foreclosure", action="establish")}
+        result = RUNNER.evaluate_feasibility(architecture_fixture(), obligations, candidates)
+        self.assertEqual(result[0]["status"], "foreclosed")
+
+    def test_universal_hard_obligation_cannot_be_foreclosed(self):
+        impossible = obligation(status="impossible", universality="universal")
+        obligations = {"obligation_one": constraint_event(1, "obligation", impossible, "future_obligation")}
+        candidate_data = {"foreclosure_id": "foreclosure_one", "attractor_id": "attractor_one", "negated_prerequisite_obligation_ids": ["obligation_one"], "reason": "Attempted loophole."}
+        candidates = {"foreclosure_one": constraint_event(2, "foreclosure_candidate", candidate_data, "prospective_foreclosure")}
+        result = RUNNER.evaluate_feasibility(architecture_fixture(), obligations, candidates)
+        self.assertEqual(result[0]["status"], "universally_required_but_impossible")
+
+    def test_relevance_selects_older_hard_fact_over_new_irrelevant_record(self):
+        architecture = architecture_fixture()
+        plan = packet_plan() | {"advance_obligation_ids": ["obligation_one"], "may_satisfy_obligation_ids": []}
+        old = constraint_event(1, "obligation", obligation(), "future_obligation")
+        new = constraint_event(100, "canonical_fact", {"fact_id": "fact_irrelevant", "subject": "other_room", "predicate": "painted", "value": True, "status": "established", "relevance": {"location_ids": ["other_room"]}})
+        self.assertGreater(RUNNER.relevance_score(old, plan, architecture, set(), 100), RUNNER.relevance_score(new, plan, architecture, set(), 100))
+
+    def test_recency_bonus_is_not_dominant(self):
+        architecture = architecture_fixture()
+        plan = packet_plan() | {"advance_obligation_ids": ["obligation_one"], "may_satisfy_obligation_ids": []}
+        old = constraint_event(1, "obligation", obligation(), "future_obligation")
+        new = constraint_event(1000, "canonical_fact", {"fact_id": "fact_recent", "subject": "other_room", "predicate": "painted", "value": True, "status": "established", "relevance": {}})
+        old_score = RUNNER.relevance_score(old, plan, architecture, set(), 1000)
+        new_score = RUNNER.relevance_score(new, plan, architecture, set(), 1000)
+        self.assertGreaterEqual(old_score - new_score, 10)
+
+    def test_context_budget_keeps_hard_constraint_before_recent_prose(self):
+        context = RUNNER.bounded_context(
+            [("HARD PAST CONSTRAINTS", "room_archive destroyed"), ("RECENT LOCAL SOURCE", "x" * 500)],
+            16,
+        )
+        self.assertIn("room_archive destroyed", context)
+        self.assertNotIn("RECENT LOCAL SOURCE", context)
+
+    def test_original_evidence_is_retrieved_for_selected_constraint(self):
+        event = constraint_event(1, "canonical_fact", {"fact_id": "fact_old", "subject": "room_archive", "predicate": "destroyed", "value": True, "status": "established", "relevance": {}})
+        packet = {"record_type": "creative_packet", "scenes": [{"scene_id": "scene_old", "prose_mdx": "original passage"}], "artifacts": [], "endings": [], "formal_compositions": []}
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            commit = run / "committed/0001-packet"
+            commit.mkdir(parents=True)
+            RUNNER.write_json(commit / "record.json", packet)
+            retrieved = RUNNER.retrieve_original_sources(run, [event])
+        self.assertEqual(retrieved[0]["immutable_source"]["prose_mdx"], "original passage")
+        self.assertEqual(retrieved[0]["source_locator"], "prose_mdx#relevant")
+
+    def test_new_long_range_obligation_is_in_future_graph(self):
+        protocol = RUNNER.load_protocol()
+        debt = obligation("obligation_new", termination_targets=["packet_future"])
+        RUNNER.validate_json_schema(debt, protocol["$defs"]["obligation"], protocol)
+        event = constraint_event(1, "obligation", debt, "future_obligation")
+        _, _, obligations, _, _ = RUNNER.project_constraint_state([event])
+        self.assertIn("obligation_new", obligations)
+
+    def test_ending_cannot_commit_without_required_prerequisite(self):
+        ending = {"attractor_id": "attractor_one", "satisfied_prerequisite_obligation_ids": ["obligation_one"], "prerequisite_evidence_source_ids": ["scene_old"]}
+        state = {"obligation_one": constraint_event(1, "obligation", obligation(), "future_obligation")}
+        with self.assertRaises(RUNNER.SchemaError):
+            RUNNER.validate_ending_prerequisites(ending, {"attractor_one": attractor()}, state, {"attractor_one": "viable"}, {"scene_old"})
+
+    def test_motif_occurrence_updates_pressure_and_provenance(self):
+        first = constraint_event(1, "motif_state", {"motif_event_id": "motif_event_one", "motif_id": "motif_frost", "action": "appear", "current_function": "warning", "pressure": "Transform before recurrence.", "overuse_risk": "elevated", "relevance": {}}, "motif_pressure")
+        second = constraint_event(2, "motif_state", {"motif_event_id": "motif_event_two", "motif_id": "motif_frost", "action": "transform", "current_function": "evidence", "pressure": "Do not repeat as wallpaper.", "overuse_risk": "low", "relevance": {}}, "motif_pressure", source="scene_new", action="update")
+        _, _, _, motifs, _ = RUNNER.project_constraint_state([first, second])
+        self.assertEqual(motifs["motif_frost"]["current_function"], "evidence")
+        self.assertEqual(motifs["motif_frost"]["appearances"], ["scene_old", "scene_new"])
+
+    def test_recursive_summary_never_substitutes_for_original_source(self):
+        event = constraint_event(1, "canonical_fact", {"fact_id": "fact_summary", "subject": "room_archive", "predicate": "summary", "value": "derived wording", "status": "established", "relevance": {}})
+        packet = {"record_type": "creative_packet", "scenes": [{"scene_id": "scene_old", "prose_mdx": "source wording"}], "artifacts": [], "endings": [], "formal_compositions": []}
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            commit = run / "committed/0001-packet"
+            commit.mkdir(parents=True)
+            RUNNER.write_json(commit / "record.json", packet)
+            retrieved = RUNNER.retrieve_original_sources(run, [event])
+        self.assertEqual(retrieved[0]["immutable_source"]["prose_mdx"], "source wording")
+
+    def test_analysis_protocol_cannot_return_replacement_prose(self):
+        protocol = RUNNER.load_protocol()
+        self.assertNotIn("indexBatch", protocol["$defs"])
+        plan = {
+            "record_type": "prospective_plan",
+            "protocol_version": "3.0",
+            "generation_id": "generation_test",
+            "plan_id": "prospective_plan_0001",
+            "based_on_canonical_state_hash": "a" * 64,
+            "recomputed_after_commit_id": "commit_architecture",
+            "created_at": "2026-01-01T00:00:00Z",
+            "feasibility": [],
+            "obligation_assignments": [],
+            "packet_order": [],
+            "replacement_prose": "forbidden",
+        }
+        with self.assertRaises(RUNNER.SchemaError):
+            RUNNER.validate_json_schema(plan, protocol["$defs"]["prospectivePlan"], protocol)
+
+    def test_prospective_recomputation_does_not_increment_irreversibility_counters(self):
+        architecture = architecture_fixture()
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "generation_test"
+            for name in ("state", "committed/0001-architecture", "planning"):
+                (run / name).mkdir(parents=True)
+            RUNNER.save_state(run, RUNNER.initial_run_state("generation_test", "generation/test", "a" * 64, "b" * 64, "model"))
+            RUNNER.write_json(run / "committed/0001-architecture/record.json", architecture)
+            debt = constraint_event(1, "obligation", obligation(), "future_obligation")
+            _, _, obligations, _, _ = RUNNER.project_constraint_state([debt])
+            RUNNER.write_json(run / "state/obligations.json", obligations)
+            RUNNER.write_json(run / "state/foreclosure-candidates.json", {})
+            RUNNER.recompute_prospective_plan(run, "commit_architecture")
+            state = RUNNER.load_state(run)
+        self.assertEqual([state[key] for key in ("committed_rewrite_count", "committed_regeneration_count", "backtrack_count")], [0, 0, 0])
+
+    def test_artistic_rejection_occurs_after_build_and_preserves_diagnostic_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = root / ".cathedrals/runs/generation_test"
+            project = run / "projection/web"
+            project.mkdir(parents=True)
+            order = []
+
+            def build(_run, _project, _output):
+                order.append("build")
+                (_project / "dist").mkdir()
+                (_project / "dist/index.html").write_text("fixture", encoding="utf-8")
+                return {"result": "PASS", "reasons": ["built"]}
+
+            with mock.patch.object(RUNNER, "ROOT", root), \
+                 mock.patch.object(RUNNER, "execute_creative_phases", side_effect=lambda *_: order.append("creative")), \
+                 mock.patch.object(RUNNER, "project_web", side_effect=lambda *_: (order.append("projection") or (project, {"scenes": 2, "artifacts": 1, "endings": 1}))), \
+                 mock.patch.object(RUNNER, "validate_complete_work", side_effect=lambda *_: (order.append("mechanical") or {"result": "PASS", "reasons": ["valid"]})), \
+                 mock.patch.object(RUNNER, "build_web", side_effect=build), \
+                 mock.patch.object(RUNNER, "artistic_acceptance", side_effect=lambda *_args, **_kwargs: (order.append("artistic") or {"result": "FAIL GENERATION", "reasons": ["rejected"]})):
+                with self.assertRaises(RUNNER.CathedralsError) as raised:
+                    RUNNER.execute_run(run, output_fn=lambda _line: None)
+                output = []
+                RUNNER.print_failure(run, raised.exception, output.append)
+        self.assertEqual(order, ["creative", "projection", "mechanical", "build", "artistic"])
+        self.assertIn("diagnostic static build", "\n".join(output))
+        self.assertFalse((root / "generated-work").exists())
+
+    def test_accepted_work_builds_before_acceptance_and_reaches_ready_finalizer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            project = run / "projection/web"
+            order = []
+            build_path = project / "dist"
+            with mock.patch.object(RUNNER, "execute_creative_phases", side_effect=lambda *_: order.append("creative")), \
+                 mock.patch.object(RUNNER, "project_web", side_effect=lambda *_: (order.append("projection") or (project, {"scenes": 1, "artifacts": 1, "endings": 1}))), \
+                 mock.patch.object(RUNNER, "validate_complete_work", side_effect=lambda *_: (order.append("mechanical") or {"result": "PASS", "reasons": ["valid"]})), \
+                 mock.patch.object(RUNNER, "build_web", side_effect=lambda *_: (order.append("build") or {"result": "PASS", "reasons": ["built"]})), \
+                 mock.patch.object(RUNNER, "artistic_acceptance", side_effect=lambda *_args, **_kwargs: (order.append("artistic") or {"result": "PASS", "reasons": ["accepted"]})), \
+                 mock.patch.object(RUNNER, "finalize_success", side_effect=lambda *_: (order.append("finalize") or (build_path, {}))), \
+                 mock.patch.object(RUNNER, "read_json", return_value={"project_name": "Fixture"}):
+                result, _, _ = RUNNER.execute_run(run, output_fn=lambda _line: None)
+        self.assertEqual(result, build_path)
+        self.assertEqual(order, ["creative", "projection", "mechanical", "build", "artistic", "finalize"])
+
     def test_terminal_schema_has_no_partial_play_state(self):
         protocol = RUNNER.load_protocol()
         statuses = protocol["$defs"]["finalization"]["properties"]["run_status"]["enum"]
@@ -149,21 +738,22 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(barrier["runtime_generation_allowed"]["const"], False)
         invalid_ready = {
             "record_type": "finalization",
-            "protocol_version": "2.0",
+            "protocol_version": "3.0",
             "generation_id": "generation_test",
             "run_status": "READY_TO_PLAY",
             "run_manifest_hash": "a" * 64,
             "generation_brief_hash": "b" * 64,
             "completed_at": "2026-01-01T00:00:00Z",
             "creative_step_count": 0,
-            "analysis_or_index_step_count": 0,
+            "analysis_step_count": 0,
             "human_intervention_count": 0,
             "committed_rewrite_count": 0,
             "committed_regeneration_count": 0,
             "backtrack_count": 0,
             "ledger_head_hash": "c" * 64,
             "committed_record_hashes": {"run_manifest": "d" * 64},
-            "memory_event_stream_hash": "e" * 64,
+            "constraint_event_stream_hash": "e" * 64,
+            "prospective_plan_history_hash": "f" * 64,
             "token_accounting": {"input_tokens": 0, "output_tokens": 0, "cost": None, "currency": None},
             "mechanical_validation": {"result": "NOT_RUN", "reasons": ["partial"]},
             "artistic_acceptance": {"result": "NOT_RUN", "reasons": ["partial"]},
@@ -174,6 +764,16 @@ class CathedralsRunnerTests(unittest.TestCase):
         }
         with self.assertRaises(RUNNER.SchemaError):
             RUNNER.validate_json_schema(invalid_ready, protocol["$defs"]["finalization"], protocol)
+        rejected = invalid_ready | {
+            "run_status": "FAILED_GENERATION",
+            "failure_class": "artistic_rejection",
+            "mechanical_validation": {"result": "PASS", "reasons": ["valid"]},
+            "static_build_validation": {"result": "PASS", "reasons": ["built"]},
+            "artistic_acceptance": {"result": "FAIL GENERATION", "reasons": ["rejected"]},
+        }
+        RUNNER.validate_json_schema(rejected, protocol["$defs"]["finalization"], protocol)
+        self.assertFalse(rejected["playable"])
+        self.assertFalse(rejected["complete_work_barrier_satisfied"])
 
 
 if __name__ == "__main__":

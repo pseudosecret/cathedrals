@@ -40,13 +40,33 @@ record_types = {
         "genesis",
         "architecture",
         "creativePacket",
-        "indexBatch",
-        "memoryEvent",
+        "constraintEvent",
+        "prospectivePlan",
         "ledgerEntry",
         "finalization",
     )
 }
 assert len(record_types) == 8
+assert schema["$defs"]["runManifest"]["properties"]["protocol_version"]["const"] == "3.0"
+assert {"engine_base_branch", "engine_base_commit"} <= set(
+    schema["$defs"]["runManifest"]["properties"]["engine_snapshot"]["required"]
+)
+assert "web_art_direction" in schema["$defs"]["genesis"]["required"]
+assert schema["$defs"]["genesis"]["properties"]["web_art_direction"]["$ref"] == "#/$defs/webArtDirection"
+assert schema["$defs"]["decisionEdge"]["required"] == [
+    "edge_id",
+    "from_content_id",
+    "destination",
+    "label",
+    "kind",
+    "availability",
+    "decision_group_id",
+    "major_decision",
+    "state_conditions",
+    "state_effects",
+]
+assert "to_content_id" not in schema["$defs"]["decisionEdge"]["properties"]
+assert schema["$defs"]["destinationRef"]["properties"]["kind"]["enum"] == ["technical_slot", "content"]
 assert schema["$defs"]["claimant"]["properties"]["technical_slot_id"]["enum"] == [
     f"claimant_slot_{number:02d}" for number in range(1, 6)
 ]
@@ -59,10 +79,23 @@ for invariant in (
     "backward_canon_mutation_allowed: false",
     "candidate_cherry_picking_allowed: false",
     "append_only: true",
-    "causally_forward: true",
+    "creative_authorship_forward_only: true",
+    "planning_may_reason_backward: true",
     "The frozen possible_scene_count supplied by the user is the primary run-level",
 ):
     assert invariant in work_instance
+
+for phase_gate_rule in (
+    "current_phase: engine_revision",
+    "allowed_write_roots:\n    - engine\n    - cathedrals",
+    "Files listed by an active milestone are required minimum outputs and audit records, not the exclusive set of authorized engine files.",
+    "without requiring a new milestone or per-file allow-list update",
+    "target_outputs_do_not_limit_followup_files: true",
+    "exclusive_write_allowlist: false",
+    "- generated-work",
+):
+    assert phase_gate_rule in work_instance
+assert "allowed_write_files:" not in work_instance
 
 assert not (ENGINE / "data/generation-bundle.schema.json").exists()
 assert not (ENGINE / "prompts/single-transaction-generation.md").exists()

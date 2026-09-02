@@ -51,7 +51,7 @@ Fail for any of the following:
 - a failed attempt is hidden or a technical retry changes prompt, context, parameters,
   or seed
 - a valid creative result is discarded in favor of another candidate
-- derived scope, packet, cumulative token/cost, retrieval, or memory bounds are exceeded
+- derived scope, packet, cumulative token/cost, retrieval, or constraint bounds are exceeded
 
 ## Content and Graph Validation
 
@@ -60,7 +60,7 @@ Fail when:
 - IDs duplicate or references dangle
 - claimant slots are missing, repeated, or not exactly five
 - any architecture node lacks exactly one committed reader-facing output
-- packet traversal violates frozen dependencies
+- prospective packet choice violates frozen dependencies or mutates canon
 - literary/ending packet sizes or whole-work derived scope bounds fail
 - the opening hub lacks exactly three playable situated actions after three to five
   reader-perspective scenes, or acts as a claimant menu
@@ -69,22 +69,41 @@ Fail when:
 - reconvergence erases consequential inbound state
 - branch depth is uniformly shallow without dramatic cause
 - a major irreversible decision lacks consequential hesitation
-- redirective endings point anywhere except prebuilt content
+- a technical destination is absent from architecture, unresolved, or owned more than once
+- a generated content destination names unwritten future content instead of a frozen technical slot
+- redirective endings point anywhere except exactly resolved prebuilt content
 - a stateful variant is cosmetic
 - formal-composition anchors or required source evidence are absent
-- generated MDX is unsafe or deterministic projection changes literary bytes
+- generated Markdown contains authored HTML/executable MDX, raw HTML is enabled in the renderer, or deterministic projection changes literary bytes
 - graph/state/frontmatter/static Astro compilation fails
 
-## Narrative Memory Validation
+## Constraint-Topology Validation
 
-Pass only when canonical generated state and narrative working memory remain distinct;
-important records identify immutable source type, artifact ID, locator, source commit,
-and source hash; original sources remain retrievable; and an index correction appends
-a superseding record rather than changing source truth. If memory and prose conflict,
-validation and context assembly must prefer prose.
+Pass only when immutable source, minimal canonical facts, character knowledge, typed
+future obligations, motif pressure, and mutable prospective planning remain distinct.
+Every derived constraint identifies immutable source type, artifact ID, locator,
+source commit, and source hash; original sources remain retrievable; corrections append
+superseding events; and source truth outranks derived state.
 
-Fail recursive summary chains that no longer resolve to original evidence, retrieval
-that invents a fact, or an analysis/index call that writes replacement fiction.
+Fail a dangling or circular obligation graph, a silently vanished obligation, a
+satisfied debt without evidence, an unlawful universal-obligation foreclosure, a
+foreclosed attractor without the immutable event that negated it, an ending missing a
+hard prerequisite, tracked character reasoning from explicitly unavailable knowledge,
+recursive summary chains, or any analysis call that writes replacement fiction.
+
+## Long-Form Structural Health
+
+Fail or strongly penalize endless mystery creation without repayment; arbitrary or
+unseeded endings; obvious mechanical foreshadowing; early objects that exist only for
+an ending; repeated motifs whose meaning never changes; claimant drift caused by lost
+epistemic state; checklist-style obligation fulfillment; technically valid but
+causally unearned endings; excessive tidiness that destroys ambiguity; and branches
+whose cosmetic differences share one teleology.
+
+Reward causal pressure without plot bureaucracy. Deliberate ambiguity may resolve by
+contradiction, foreclosure, transformation, contamination, reader judgment, or
+irreducible ambiguity. Attractors should create gravity while leaving realization
+surprising.
 
 ## Claimant-Set Acceptance
 
@@ -147,3 +166,19 @@ intentionally art-directed surfaces; mobile readability; accessible interaction;
 light/dark contrast; clear choices; meaningful artifact presentation; ceremonial
 endings; path visualization; client-side state only; and no runtime AI or server
 dependency. Fail a generic template treatment.
+
+Pass only when Markdown headings, emphasis, blockquotes, and lists render as semantic
+HTML while immutable source bytes remain exact. Genesis art direction must validate,
+produce deterministic work-specific CSS through bounded mappings, retain visible
+focus and readable contrast, and expose no arbitrary CSS or script surface.
+
+New generation branches must start from the configured engine base commit, never a
+prior generation branch. Successful publication stages only its own
+`generated-work/<generation-id>/` tree and creates one final generation commit.
+Failed runs remain under ignored `.cathedrals/runs/` by default and leave tracked
+paths clean.
+
+A complete mechanically valid work must build before whole-work artistic acceptance.
+Artistic rejection remains `FAILED_GENERATION`, `playable: false`, and outside accepted
+publication even when its ignored diagnostic static build remains available for
+inspection.

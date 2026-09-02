@@ -9,27 +9,27 @@ engine. Do not create generated work or mutate downstream projections.
 
 After `./cathedrals` collects and freezes one explicit experience request:
 
-1. create a generation branch and generation ID
+1. switch to the configured clean engine base branch, record its commit, and create an independent generation branch and generation ID
 2. freeze the high-level request as `generation_brief.mutable: false`
 3. freeze/hash engine inputs, seeds, explicit scene scope, model, derived budgets, and traversal strategy
 4. preflight every planned call against per-step and cumulative limits
 5. write the immutable run manifest and initialize the hash-chained ledger
 6. generate and commit genesis with `engine/prompts/generation-genesis.md`
 7. generate and commit architecture with `engine/prompts/generation-architecture.md`
-8. follow its frozen dependencies using `generation-packet.md` and
+8. recompute a prospective plan and follow immutable dependencies using `generation-packet.md` and
    `generation-ending-packet.md`
-9. optionally use `generation-index.md` only for source-grounded memory work
-10. project, validate, artistically accept or reject, build, and validate the complete
-    static work
-11. finalize only as `READY_TO_PLAY` or `FAILED_GENERATION`
+9. after each commit apply constraint deltas and recompute feasibility without changing canon
+10. project and mechanically validate, then build and validate the complete static work
+11. artistically accept or reject; publish and commit only after acceptance
+12. finalize only as `READY_TO_PLAY` or `FAILED_GENERATION`
 
 ## Allowed Actions
 
 - deterministic seed, geomancy, topology-envelope, hash, budget, and context assembly
 - multiple causally forward creative calls inside the one autonomous run
-- source-grounded analysis/index calls that cannot author replacement fiction
-- append-only commits, ledgers, memory events, and deterministic projections
-- graph, state, MDX, continuity, resource, hash, and static-build validation
+- source-grounded noncreative analysis calls that cannot author replacement fiction
+- append-only commits, ledgers, constraint events, audited prospective plans, and deterministic projections
+- graph, technical destinations, state, safe Markdown, continuity, resource, hash, and static-build validation
 - whole-work artistic acceptance after creative generation ends
 
 ## Forbidden Actions
