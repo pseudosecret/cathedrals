@@ -2583,8 +2583,22 @@ def validate_genesis_foundation(record: dict, run_dir: Path) -> None:
         raise SchemaError("Genesis foundation claimant IDs must be unique")
     canon = record["work_canon"]
     claimant_ids = {item["claimant_id"] for item in anchors}
-    if any(not set(item["claimant_ids"]).issubset(claimant_ids) for item in canon["claimant_relationships"]):
-        raise SchemaError("Genesis foundation relationship references an unknown claimant anchor")
+    
+    unknown_claimant_ids = sorted({
+        claimant_id
+        for relationship in canon["claimant_relationships"]
+        for claimant_id in relationship["claimant_ids"]
+        if claimant_id not in claimant_ids
+    })
+
+    if unknown_claimant_ids:
+        raise SchemaError(
+            "Genesis foundation relationships reference unknown claimant IDs: "
+            + ", ".join(unknown_claimant_ids)
+            + ". Valid claimant IDs are: "
+            + ", ".join(sorted(claimant_ids))
+        )
+
     if len(canon["generated_motifs"]) > 8 or len(canon["principal_tensions"]) > 8:
         raise SchemaError("Genesis foundation exceeds its bounded motif or tension count")
     
