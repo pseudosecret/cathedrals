@@ -2781,10 +2781,26 @@ def build_semantic_delta(run_dir: Path, step_id: str, payload: dict, content_ids
 
     facts = []
     fact_aliases = {}
+    facts_by_identity = {}
     for index, item in enumerate(payload["canonical_facts"], 1):
         identifier = deterministic_id("fact", run_dir.name, step_id, index)
-        fact_aliases[f"fact_{index:02d}"] = identifier
-        facts.append({key: value for key, value in item.items() if key != "source"} | {"fact_id": identifier, "sources": source(item)})
+        identity = canonical_json({key: item[key] for key in ("subject", "predicate", "value", "status")})
+        fact = facts_by_identity.get(identity)
+        if fact is None:
+            fact = {key: value for key, value in item.items() if key not in {"source", "relevance"}} | {
+                "fact_id": identifier, "sources": source(item),
+                "relevance": {key: list(values) for key, values in item["relevance"].items()},
+            }
+            facts_by_identity[identity] = fact
+            facts.append(fact)
+        else:
+            for fact_source in source(item):
+                if fact_source not in fact["sources"]:
+                    fact["sources"].append(fact_source)
+            for key, values in item["relevance"].items():
+                fact["relevance"][key] = list(dict.fromkeys(fact["relevance"].get(key, []) + values))
+        for prefix in ("fact", "prop", "proposition"):
+            fact_aliases[f"{prefix}_{index:02d}"] = fact["fact_id"]
     known_facts = set(_read_state_map(run_dir, "canonical-facts.json"))
     knowledge = []
     for index, item in enumerate(payload["knowledge_changes"], 1):

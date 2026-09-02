@@ -521,6 +521,77 @@ class CathedralsRunnerTests(unittest.TestCase):
             self.assertIn("personality", claimant)
         self.assertEqual(records, committed_inputs)
 
+    def test_semantic_delta_accepts_compatibility_aliases_and_coalesces_duplicate_facts(self):
+        payload = {
+            "canonical_facts": [
+                {
+                    "source": {"technical_slot_id": "claimant_slot_01"},
+                    "subject": "room_archive",
+                    "predicate": "sealed",
+                    "value": True,
+                    "status": "established",
+                    "relevance": {"claimant_ids": ["claimant_01"], "keywords": ["archive"]},
+                },
+                {
+                    "source": {"technical_slot_id": "claimant_slot_02"},
+                    "subject": "room_archive",
+                    "predicate": "sealed",
+                    "value": True,
+                    "status": "established",
+                    "relevance": {"claimant_ids": ["claimant_02"], "keywords": ["archive", "seal"]},
+                },
+            ],
+            "knowledge_changes": [
+                {
+                    "source": {"technical_slot_id": "claimant_slot_01"},
+                    "subject_id": "claimant_01",
+                    "relation": "knows",
+                    "proposition_id": "prop_01",
+                    "action": "establish",
+                    "relevance": {},
+                },
+                {
+                    "source": {"technical_slot_id": "claimant_slot_02"},
+                    "subject_id": "claimant_02",
+                    "relation": "believes",
+                    "proposition_id": "proposition_02",
+                    "action": "establish",
+                    "relevance": {},
+                },
+                {
+                    "source": {"technical_slot_id": "claimant_slot_02"},
+                    "subject_id": "claimant_02",
+                    "relation": "suspects",
+                    "proposition_id": "fact_02",
+                    "action": "establish",
+                    "relevance": {},
+                },
+            ],
+            "new_soft_obligations": [],
+            "obligation_updates": [],
+            "motif_events": [],
+        }
+        content_ids = {
+            "claimant_slot_01": ("genesis", "claimant_01"),
+            "claimant_slot_02": ("genesis", "claimant_02"),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "generation_test"
+            (run / "state").mkdir(parents=True)
+            delta = RUNNER.build_semantic_delta(run, "genesis_constraints", payload, content_ids)
+
+            fact = delta["canonical_facts"][0]
+            self.assertEqual(len(delta["canonical_facts"]), 1)
+            self.assertEqual(fact["fact_id"], RUNNER.deterministic_id("fact", run.name, "genesis_constraints", 1))
+            self.assertEqual([source["artifact_id"] for source in fact["sources"]], ["claimant_01", "claimant_02"])
+            self.assertEqual(fact["relevance"]["claimant_ids"], ["claimant_01", "claimant_02"])
+            self.assertEqual(fact["relevance"]["keywords"], ["archive", "seal"])
+            self.assertEqual({item["proposition_id"] for item in delta["knowledge_changes"]}, {fact["fact_id"]})
+
+            payload["knowledge_changes"][0]["proposition_id"] = "proposition_03"
+            with self.assertRaisesRegex(RUNNER.SchemaError, "unknown proposition proposition_03"):
+                RUNNER.build_semantic_delta(run, "genesis_constraints", payload, content_ids)
+
     def test_scope_is_dynamic_not_clamped_to_profiles(self):
         scope = RUNNER.derive_scope(150)["scope"]
         self.assertEqual(scope["possible_scene_count"], 150)
