@@ -826,7 +826,7 @@ def create_run(
         "generation_brief": brief,
         "generation_brief_hash": brief_hash,
         "engine_snapshot": {
-            "work_id": "hospice-annex-v01",
+            "work_id": "cathedrals-v01",
             "path": "engine-snapshot",
             "work_seed": seed,
             "structural_seed": sha256_bytes(f"structure:{seed}".encode()),

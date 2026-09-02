@@ -23,7 +23,7 @@ required_generated_dimensions:
   identity:
     - stable_generated_id
     - name
-    - exact_relationship_to_annex_and_incident
+    - exact_relationship_to_setting_and_incident
     - exact_role_or_occupation_if_any
     - personality
   interpretive_pressure:

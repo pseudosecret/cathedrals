@@ -63,11 +63,11 @@ The opening hub is exactly three situated actions, not a claimant selector.
 
 ## Fictional Envelope
 
-Keep the snowbound hospice annex, traces of care and administration, reader-as-judge
+The setting and flavor is generated, but always keep elements like reader-as-judge
 mechanics, costly ambiguity, and threshold-event class in engine canon. Generate exact
 people, incident, chronology, records, objects, clues, relationships, mutations, and
-consequences. Preserve Cathedrals' thematic pressure around responsibility, winter,
-enclosure, thresholds, admission/release, memory, documentation, absence, judgment,
+consequences. Preserve Cathedrals' thematic pressure around responsibility, emotional cost,
+feeling trapped (to a lesser extent), thresholds, admission/release, memory, documentation, absence, judgment,
 contradiction, commitment, and foreclosure.
 
 ## Branching, Geomancy, Prose, and Artifacts

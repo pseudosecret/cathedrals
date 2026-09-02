@@ -122,7 +122,7 @@
             "geomancy_seed"
           ],
           "properties": {
-            "work_id": { "const": "hospice-annex-v01" },
+            "work_id": { "const": "cathedrals-v01" },
             "path": { "const": "engine-snapshot" },
             "work_seed": { "$ref": "#/$defs/nonEmptyString" },
             "structural_seed": { "$ref": "#/$defs/nonEmptyString" },
@@ -326,7 +326,7 @@
         "technical_slot_id",
         "name",
         "incident_role",
-        "annex_relationship",
+        "setting_relationship",
         "personality",
         "epistemic_regime",
         "relationship_to_responsibility",

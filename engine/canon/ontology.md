@@ -2,7 +2,7 @@
 
 ## 1. Surface Reality
 
-The work takes place in a sealed, concrete location that presents as a snowbound hospice annex. It is materially legible: rooms, records, staff traces, personal effects, intake documents, maintenance habits.
+The work takes place in a sealed, concrete location. It is materially legible: e.g., if it were a hospital: rooms, records, staff traces, personal effects, intake documents, maintenance habits.
 
 ## 2. Hidden Reality
 

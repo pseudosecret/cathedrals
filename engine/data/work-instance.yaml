@@ -1,15 +1,13 @@
 version: 2.1
 
 work:
-  id: hospice-annex-v01
-  title_working: "The Annex"
+  id: cathedrals-v01
+  title_working: "Cathedrals"
   format: literary_escape_room
   status: engine_revision
   generated_work_present: false
   description: >
-    A static nonlinear literary work to be generated in one autonomous, uninterrupted,
-    append-only run inside a snowbound hospice-annex frame. Interpretation,
-    commitment, hesitation, and foreclosure alter what the annex can sustain.
+    the work takes place in one concrete, bounded setting capable of materially embodying contradiction and consequence; the exact setting is generated in Genesis.
 
 execution_phase:
   current_phase: engine_revision
