@@ -2587,7 +2587,7 @@ def validate_genesis_foundation(record: dict, run_dir: Path) -> None:
         raise SchemaError("Genesis foundation relationship references an unknown claimant anchor")
     if len(canon["generated_motifs"]) > 8 or len(canon["principal_tensions"]) > 8:
         raise SchemaError("Genesis foundation exceeds its bounded motif or tension count")
-    validate_art_direction(record["web_art_direction"])
+    
 
 
 def validate_genesis_cast(record: dict, run_dir: Path) -> None:
@@ -3378,9 +3378,22 @@ def validate_art_direction(direction: dict) -> None:
             raise SchemaError(f"Web art direction fails contrast: {foreground} on {background} must be at least {minimum}:1")
 
 
-def art_direction_css(direction: dict) -> str:
-    validate_art_direction(direction)
+def accessible_art_direction_palette(direction: dict) -> dict[str, str]:
     palette = direction["palette"]
+    backgrounds = (palette["background"], palette["surface"])
+
+    return {
+        "background": palette["background"],
+        "surface": palette["surface"],
+        "text": _force_contrast(palette["text"], backgrounds, 4.5),
+        "muted": _force_contrast(palette["muted"], backgrounds, 4.5),
+        "accent": _force_contrast(palette["accent"], backgrounds, 3.0),
+        "danger": _force_contrast(palette["danger"], backgrounds, 3.0),
+    }
+
+
+def art_direction_css(direction: dict) -> str:
+    palette = accessible_art_direction_palette(direction)
     light_palette = light_art_direction_palette(direction)
     body_fonts = {
         "archival_serif": "Georgia,'Times New Roman',serif",
