@@ -110,11 +110,11 @@ and create consequences, but may not retcon it.
 
 ### Phase E — Validation and Static Build
 
-Project committed records without literary change, validate the entire graph and
-content set, compile and validate Astro, then perform whole-work artistic acceptance.
-An artistic rejection may retain the valid build under ignored run storage for
-diagnosis, but remains nonplayable and unpublished. On full success, publish only the
-new generated-work tree before crossing the complete-work barrier.
+Project committed records without literary change, validate hard integrity, links,
+state, safety, and full-plan coverage, then build the dependency-free static reader.
+Artistic and structural quality findings are warnings. A locked npm/Astro enhancement
+is optional and cannot veto the baseline. On hard-gate success, publish only the new
+generated-work tree before crossing the complete-work barrier.
 
 ## 3. Commit Semantics
 
@@ -180,14 +180,14 @@ future. Universal hard obligations cannot be dropped; making one impossible caus
 - Mechanically valid but weak art: commit and continue.
 - Lawful diegetic contradiction: preserve and continue.
 - Unresolvable mechanical continuity impossibility: `FAILED_GENERATION`; do not retcon.
-- Whole-work artistic rejection: `FAILED_GENERATION`; no repair loop.
-- Mechanical or static-build failure caused by generated content: `FAILED_GENERATION`.
+- Artistic weakness: publish with warnings; no repair loop.
+- Correctable uncommitted provider, schema, or build trouble: `PAUSED_GENERATION`.
+- Irrecoverable committed-history corruption or hard-budget exhaustion: `FAILED_GENERATION`.
   An engine defect may be fixed only in a later engine revision, never by altering the
   committed work.
 
-The only terminal states exposed to the user are `READY_TO_PLAY` and
-`FAILED_GENERATION`. A failed run follows its frozen retention policy. Any later
-attempt starts from frozen inputs under a new generation ID.
+The terminal states are `READY_TO_PLAY` and `FAILED_GENERATION`.
+`PAUSED_GENERATION` is resumable and never writes finalization.
 
 Every new attempt copies the current local launcher and engine into
 `.cathedrals/runs/<generation-id>/engine-snapshot/`. Resume uses that run-local copy and
@@ -197,8 +197,8 @@ does not inspect the installation. Runs never descend from or modify one another
 
 Before `READY_TO_PLAY`, all generated canon, claimants, characters, architecture,
 scenes, artifacts, formal compositions, endings, state-dependent variants, lawful
-branches, graph data, projections, validations, artistic acceptance, static build,
-and build validation must exist and pass.
+branches, graph data, projections, hard validations, static baseline, and build
+validation must exist and pass.
 
 Never expose partial play, generate a chapter after player input, observe play to
 complete the work, or defer an unvisited branch until runtime. Every playable choice

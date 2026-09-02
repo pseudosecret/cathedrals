@@ -29,8 +29,9 @@ backtrack_count = 0
 creative_step_count >= 1
 ```
 
-Technical retries must be identical except for attempt/audit fields and must have no
-prior creative output. A malformed response is terminal, not retryable.
+Transport failures retry under the provider retry law. Invalid uncommitted structured
+output receives three schema-aware corrections per invocation; exhaustion pauses the
+run, and explicit resume grants three more. No correction may alter committed history.
 
 ## 3. Mechanical and Continuity Validation
 
@@ -52,29 +53,25 @@ inference.
 
 ## 4. Static Build and Diagnostic Preservation
 
-Project all required content, render Markdown with raw HTML disabled, compile Astro,
-validate every route/state behavior, and verify the complete build uses only
-deterministic client-side state. A valid build remains inside ignored run storage until
-acceptance and publication. It may remain there as a diagnostic artifact after a late
-artistic rejection.
+Project all required content, render Markdown with raw HTML disabled, build the
+dependency-free static reader, validate route/state behavior, and verify the complete
+build uses only deterministic client-side state. A locked npm/Astro enhancement may
+run afterward; its failure preserves and publishes the baseline with a warning.
 
-## 5. Whole-Work Artistic Acceptance
+## 5. Advisory Artistic Review
 
-After all creative steps end, a configured non-authorial evaluator reads the complete
-immutable work and returns `PASS` or `FAIL GENERATION` with concrete reasons. Assess
-claimant differentiation, route distinction, prose quality, dramatic scene function,
-detail, artifact force, thematic coherence, formal composition, redundancy, generic
-AI habits, and ending consequence. Do not emit edits or feed findings into a repair
-call.
+Artistic review is outside the publication gate. It may report warnings, but it does
+not rewrite committed work, trigger replacement generation, or prevent publication
+of a mechanically valid and buildable complete work.
 
 ## 6. Publication and Barrier
 
-After artistic acceptance, publish only the new generated-work tree. Failed runs remain
+After validation and the baseline build, publish only the new generated-work tree. Paused and failed runs remain
 under `.cathedrals/` by default.
 
-Only a complete mechanical pass, artistic pass, and build pass may finalize
-`READY_TO_PLAY` with `playable: true`. Every failure finalizes `FAILED_GENERATION`
-with `playable: false`; partial content remains quarantined under the retention policy.
+Only complete planned content, a hard mechanical pass, and a baseline build pass may
+finalize `READY_TO_PLAY` with `playable: true`. Correctable uncommitted failures pause;
+partial content remains quarantined under the retention policy.
 
 ## 7. Accepted Hashes
 

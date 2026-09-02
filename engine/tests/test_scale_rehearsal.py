@@ -264,7 +264,7 @@ def scale_constraint_fixture():
     def event(kind, constraint_class, identifier, data, scene_number):
         events.append({
             "record_type": "constraint_event",
-            "protocol_version": "4.0",
+            "protocol_version": "5.0",
             "generation_id": "synthetic_scale",
             "constraint_event_sequence": len(events) + 1,
             "origin_step_id": f"packet_slot_{max(1, (scene_number - 1) // 3 + 1):03d}",

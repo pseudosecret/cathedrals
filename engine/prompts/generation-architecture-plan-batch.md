@@ -1,11 +1,11 @@
 # Architecture Plan Batch Instruction
 
-Return exactly one `architecture_plan_batch` record conforming to the supplied schema.
+Return exactly one Architecture plan annotation payload conforming to the supplied schema.
 Return JSON only.
 
-Fill exactly the supplied deterministic packet allocations. Copy every packet ID,
-kind, technical slot list, artifact count, and formal-composition count unchanged.
-Author priority, lawful dependencies, branch relation, attractor pressure, relevance,
+Annotate every supplied deterministic packet allocation by its packet join key. Do not
+repeat the packet kind, technical slots, artifact count, or formal-composition count;
+the engine merges those fixed allocations. Author priority, lawful dependencies, branch relation, attractor pressure, relevance,
 and soft guidance. Dependencies may reference only prior frozen packet IDs or earlier
 packet IDs in this batch; this keeps the complete dependency graph acyclic.
 Each ending plan selects exactly one ending attractor. Do not write scenes or prose.
@@ -28,4 +28,4 @@ RELEVANT PROTOCOL DEFINITIONS BEGIN
 
 RELEVANT PROTOCOL DEFINITIONS END
 
-Return the one Architecture plan batch now.
+Return the Architecture plan annotation payload now.

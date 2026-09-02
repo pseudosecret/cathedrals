@@ -1,8 +1,7 @@
 # Forward Literary Packet Instruction
 
-Return exactly one `creative_packet` with `packet_kind: literary`, conforming to the
-supplied frozen protocol definitions. Author only the packet slot and content IDs in
-the frozen obligation list. Do not generate alternatives, critiques, replacement
+Return exactly one literary payload conforming to the supplied frozen protocol
+definitions. Use only assigned technical-slot join keys. Do not generate alternatives, critiques, replacement
 passages, or unplanned candidates.
 
 Write exactly the supplied one-to-eight-scene chunk and its assigned artifacts/formal
@@ -25,15 +24,11 @@ belief, suspicion, and claim state. Declare tracked reliance in
 advance or satisfy them only when dramatically earned. Future planning may adapt
 after this packet commits, but this packet may not edit that plan or earlier canon.
 
-Emit a complete `constraint_delta`: minimal new canonical facts, knowledge changes,
-typed new obligations, obligation resolutions with evidence, motif transformations,
-and potential foreclosures. Do not create a new long-range mystery, promise, rupture,
-unexplained object, contradiction, motif, or thematic debt unless it has a declared
-future termination target. Use local debt or deliberate unresolved resolution when
-appropriate. A foreclosure candidate identifies a genuinely negated prerequisite;
-it does not casually discard difficult work.
+Do not emit constraint metadata. After this artistic payload is schema-valid, a
+separate temperature-zero normalization pass derives minimal facts, knowledge,
+motifs, soft pressures, and updates to existing obligations without changing prose.
 
-Every decision edge uses `destination`. Use `kind: technical_slot` for content that is
+Nest choices, artifacts, and formal compositions under their owning scene. Every choice uses `destination`. Use `kind: technical_slot` for content that is
 not yet committed, with an ID from the frozen architecture. Use `kind: content` only
 for a literary ID already committed or authored in this packet. Never invent the
 future literary ID of an unwritten scene or ending. The deterministic projector later
@@ -46,7 +41,7 @@ exposition-vending characters, arbitrary abstraction, cosmetic variants, inert
 atmosphere, and decorative artifacts. The historical `prose_mdx` and `body_mdx` fields
 contain constrained Markdown only: no HTML, JSX, imports, exports, or executable MDX.
 Return complete, safe Markdown source.
-A valid response commits even if artistically weak; malformed output ends the run.
+A valid response is preserved even if later normalization must pause. Invalid output receives bounded correction attempts and then pauses the run.
 Account for the supplied constraints. Do not merely remember or summarize them.
 
 FROZEN AND RETRIEVED CONTEXT BEGINS

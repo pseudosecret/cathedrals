@@ -36,7 +36,7 @@ hidden.
 - generation: one autonomous append-only run; multiple creative steps allowed
 - generation entry point: root `./cathedrals`
 - scale input: user-supplied `possible_scene_count`; profiles are budget guidance
-- renderer: static Astro with client-side state only
+- renderer: dependency-free static baseline with client-side state; locked Astro enhancement optional
 - visual-novel request aliases: accepted but currently resolved to web
 - play barrier: complete `READY_TO_PLAY` build only
 

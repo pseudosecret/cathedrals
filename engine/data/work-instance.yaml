@@ -529,15 +529,19 @@ run_processing:
     - create_frontmatter
     - serialize_json_and_markdown_without_literary_change
     - hash_generated_files
-    - compile_static_astro_site
+    - compile_dependency_free_static_baseline
+    - attempt_locked_static_astro_enhancement
   literary_change_forbidden: true
 
 validation:
   mechanical_result: pass_or_fail
-  artistic_result: pass_or_fail_generation
+  artistic_result: advisory_warning_only
   repair_policy:
     serialization_only_when_literary_bytes_unchanged: true
     creative_repair_allowed: false
+    invalid_uncommitted_schema_attempts_per_resume: 3
+    correction_exhaustion_status: PAUSED_GENERATION
+    preserve_schema_valid_artistic_payload_during_semantic_correction: true
     failed_generation_may_be_replaced_by_fresh_generation: true
   acceptance_source: engine/canon/acceptance-tests.md
 

@@ -42,14 +42,14 @@ It then owns this sequence:
 12. Generate endings only after their prerequisite histories commit.
 13. Deterministically project all committed content and validate protocol, hashes,
     graph, technical destinations, state, counts, Markdown, constraint provenance, and budgets.
-14. Compile and validate the complete static Astro site.
-15. Perform whole-work artistic acceptance without a repair prompt.
-16. On success publish only the new generated-work tree. Write
+14. Build and validate the dependency-free static baseline.
+15. Attempt the locked npm/Astro enhancement when locally available; warn on failure.
+16. On hard-gate success publish only the new generated-work tree. Write
     `finalization.json`: `READY_TO_PLAY` only after every barrier passes;
     otherwise `FAILED_GENERATION` with `playable: false`.
 
-An artistically rejected complete work keeps its build under ignored run storage for
-diagnosis. It is never copied to accepted publication paths or described as playable.
+Artistic or structural quality concerns are recorded as publication warnings and do
+not block a mechanically valid baseline.
 
 Do not pause for creative approval. A valid but ugly packet commits. A run either
 completes or dies.
@@ -71,17 +71,17 @@ regenerations, and backtracks. `creative_step_count` may exceed one.
 
 ## Lawful Retry
 
-Retry only a transport failure or provider failure before creative output. Keep the
-same planned step, prompt, context, parameters, and seed; increment only attempt and
-audit data. Malformed output, artistic disappointment, or continuity trouble is not a
-retry condition.
+Retry transport/provider failures under the provider law. Invalid uncommitted output
+receives three schema-aware correction attempts per invocation; exhaustion enters
+`PAUSED_GENERATION`, and resume grants three more. Schema-valid packet prose is staged
+before semantic normalization and reused after a pause.
 
 ## Stop Conditions
 
 Stop before creative generation for engine conflict, mutable/missing brief, failing
 preflight, missing deterministic inputs, insufficient model limits, candidate-
 selection logic, or forbidden phase writes. During the run, stop as
-`FAILED_GENERATION` for malformed creative output, exhausted frozen resources,
-unresolvable continuity, mechanical failure, artistic rejection, or build failure.
+`PAUSED_GENERATION` for correctable uncommitted provider/schema/build trouble, or
+`FAILED_GENERATION` for irrecoverable committed-history corruption and hard-budget exhaustion.
 
 Do not stop for ordinary fictional choices. They belong to autonomous generation.

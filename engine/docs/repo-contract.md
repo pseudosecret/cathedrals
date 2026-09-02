@@ -44,8 +44,8 @@ engine canon merely because it was accepted once.
 
 - `generated-work/<generation-id>/provenance/` preserves the frozen manifest, raw
   responses, committed records, append-only ledger/constraints/planning history, hashes, and verdicts.
-- `generated-work/<generation-id>/web/` is the normal static Astro project and keeps
-  its deterministic work JSON plus verbatim literary source files.
+- `generated-work/<generation-id>/web/` contains the dependency-free static baseline,
+  optional Astro enhancement sources, deterministic work JSON, and verbatim literary source files.
 - `.cathedrals/runs/<generation-id>/` is ignored operational state used for atomic
   commits, resume, constraint retrieval, prospective planning, validation,
   pre-publication builds, and rejected-work diagnostic builds.

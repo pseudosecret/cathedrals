@@ -35,9 +35,9 @@ Use only statuses equivalent to:
 - `generating_architecture`
 - `generating_forward`
 - `mechanical_validation`
-- `artistic_acceptance`
+- `PAUSED_GENERATION`
 - `static_build_validation`
 - `READY_TO_PLAY`
 - `FAILED_GENERATION`
 
-`FAILED_GENERATION` is terminal for its generation ID.
+`FAILED_GENERATION` is terminal for its generation ID; `PAUSED_GENERATION` is resumable.

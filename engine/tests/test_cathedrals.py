@@ -70,6 +70,52 @@ def empty_delta(**updates):
     return value
 
 
+def claimant_expansion(identifier):
+    fields = (
+        "setting_relationship",
+        "personality",
+        "epistemic_regime",
+        "relationship_to_responsibility",
+        "evidence_logic",
+        "emotional_pressure",
+        "rhetorical_behavior",
+        "diction",
+        "cadence",
+        "contradiction_mode",
+        "artifact_affinity",
+        "environmental_pressure",
+        "literary_effect",
+        "accusation_consequence",
+        "retraction_consequence",
+    )
+    return {
+        "claimant_id": identifier,
+        **{field: f"{identifier} {field}" for field in fields},
+        "differentiation_notes": [f"{identifier} is distinct"],
+    }
+
+
+def genesis_foundation_fixture():
+    anchors = [
+        {
+            "claimant_id": f"claimant_{number:02d}",
+            "technical_slot_id": f"claimant_slot_{number:02d}",
+            "name": f"Claimant {number}",
+            "incident_role": f"Incident role {number}",
+        }
+        for number in range(1, 6)
+    ]
+    return {
+        "record_type": "genesis_foundation",
+        "generation_id": "generation_test",
+        "commit_id": "commit_foundation",
+        "format_composition_law": "Composition law",
+        "work_canon": {"central_incident": {"subjects": ["claimant_01"]}},
+        "web_art_direction": {},
+        "claimant_anchors": anchors,
+    }
+
+
 def obligation(identifier="obligation_one", **updates):
     value = {
         "obligation_id": identifier,
@@ -152,7 +198,7 @@ def constraint_event(
 ):
     return {
         "record_type": "constraint_event",
-        "protocol_version": "4.0",
+        "protocol_version": "5.0",
         "generation_id": "generation_test",
         "constraint_event_sequence": sequence,
         "origin_step_id": "packet_one",
@@ -173,7 +219,7 @@ def constraint_event(
 def genesis_ledger(seed="12345"):
     return {
         "record_type": "ledger_entry",
-        "protocol_version": "4.0",
+        "protocol_version": "5.0",
         "generation_id": "generation_test",
         "ledger_sequence": 1,
         "planned_step_id": "genesis",
@@ -367,6 +413,114 @@ class CathedralsRunnerTests(unittest.TestCase):
         RUNNER.validate_json_schema(valid, protocol)
         self.assertEqual(valid, original)
 
+    def test_genesis_cast_schema_authors_expansions_only(self):
+        protocol = RUNNER.load_protocol()
+        schema = protocol["$defs"]["claimant"]
+        valid = claimant_expansion("claimant_01")
+        original = json.loads(json.dumps(valid))
+        RUNNER.validate_json_schema(valid, schema, protocol)
+        self.assertEqual(valid, original)
+
+        invalid = valid | {
+            "technical_slot_id": "claimant_slot_01",
+            "name": "Repeated name",
+            "incident_role": "Repeated role",
+        }
+        with self.assertRaises(RUNNER.SchemaError) as raised:
+            RUNNER.validate_json_schema(invalid, schema, protocol)
+        reason = str(raised.exception)
+        self.assertIn("failed schema validation with 3 problems", reason)
+        for field in ("technical_slot_id", "name", "incident_role"):
+            self.assertIn(f"$.{field}", reason)
+
+    def test_genesis_cast_requires_every_anchor_id_and_reports_all_offenders(self):
+        foundation = genesis_foundation_fixture()
+        valid = {
+            "foundation_commit_id": foundation["commit_id"],
+            "commit_id": "commit_cast",
+            "claimants": [
+                claimant_expansion(f"claimant_{number:02d}")
+                for number in range(5, 0, -1)
+            ],
+            "characters": [],
+        }
+        with mock.patch.object(RUNNER, "committed_record", return_value=foundation):
+            RUNNER.validate_genesis_cast(valid, Path("/offline"))
+        self.assertEqual(
+            RUNNER.generated_ids(valid | {"record_type": "genesis_cast"}),
+            ["commit_cast"],
+        )
+
+        invalid = valid | {
+            "claimants": [
+                claimant_expansion(identifier)
+                for identifier in (
+                    "claimant_01",
+                    "claimant_01",
+                    "unexpected_a",
+                    "unexpected_b",
+                    "unexpected_b",
+                )
+            ]
+        }
+        with mock.patch.object(
+            RUNNER, "committed_record", return_value=foundation
+        ), self.assertRaises(RUNNER.SchemaError) as raised:
+            RUNNER.validate_genesis_cast(invalid, Path("/offline"))
+        reason = str(raised.exception)
+        for identifier in (
+            "claimant_01",
+            "claimant_02",
+            "claimant_03",
+            "claimant_04",
+            "claimant_05",
+            "unexpected_a",
+            "unexpected_b",
+        ):
+            self.assertIn(identifier, reason)
+        self.assertIn("missing:", reason)
+        self.assertIn("unexpected:", reason)
+        self.assertIn("duplicated:", reason)
+
+    def test_assembled_genesis_merges_anchors_with_cast_expansions(self):
+        foundation = genesis_foundation_fixture()
+        cast = {
+            "record_type": "genesis_cast",
+            "commit_id": "commit_cast",
+            "claimants": [
+                claimant_expansion(f"claimant_{number:02d}")
+                for number in range(5, 0, -1)
+            ],
+            "characters": [],
+        }
+        constraints = {
+            "record_type": "genesis_constraints",
+            "commit_id": "commit_constraints",
+            "constraint_delta": empty_delta(),
+        }
+        records = {
+            "genesis_foundation": foundation,
+            "genesis_cast": cast,
+            "genesis_constraints": constraints,
+        }
+        committed_inputs = json.loads(json.dumps(records))
+        with mock.patch.object(
+            RUNNER,
+            "committed_record",
+            side_effect=lambda _run, record_type: records[record_type],
+        ):
+            genesis = RUNNER.assembled_genesis(Path("/offline"))
+        self.assertEqual(
+            [item["claimant_id"] for item in genesis["claimants"]],
+            [f"claimant_{number:02d}" for number in range(1, 6)],
+        )
+        for claimant in genesis["claimants"]:
+            self.assertIn("technical_slot_id", claimant)
+            self.assertIn("name", claimant)
+            self.assertIn("incident_role", claimant)
+            self.assertIn("personality", claimant)
+        self.assertEqual(records, committed_inputs)
+
     def test_scope_is_dynamic_not_clamped_to_profiles(self):
         scope = RUNNER.derive_scope(150)["scope"]
         self.assertEqual(scope["possible_scene_count"], 150)
@@ -526,6 +680,22 @@ class CathedralsRunnerTests(unittest.TestCase):
             launcher = (ROOT / "cathedrals").read_text()
             self.assertNotIn("def " + "git" + "(", launcher)
             self.assertNotIn('run_command(["git"', launcher)
+
+    def test_resume_dispatches_to_the_run_local_launcher(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "generation_test"
+            snapshot = run / "engine-snapshot"
+            snapshot.mkdir(parents=True)
+            (snapshot / "cathedrals").write_text(
+                "def main(argv=None, **kwargs):\n    kwargs['output_fn']('snapshot launcher')\n    return 7\n",
+                encoding="utf-8",
+            )
+            output = []
+            result = RUNNER.run_snapshot_launcher(run, [], answers(), output.append, None)
+            bytecode_caches = list(snapshot.rglob("__pycache__")) + list(snapshot.rglob("*.pyc"))
+        self.assertEqual(result, 7)
+        self.assertEqual(output, ["snapshot launcher"])
+        self.assertEqual(bytecode_caches, [])
 
     def test_failed_generation_does_not_publish_tracked_provenance(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1339,7 +1509,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertNotIn("indexBatch", protocol["$defs"])
         plan = {
             "record_type": "prospective_plan",
-            "protocol_version": "4.0",
+            "protocol_version": "5.0",
             "generation_id": "generation_test",
             "plan_id": "prospective_plan_0001",
             "based_on_canonical_state_hash": "a" * 64,
@@ -1390,12 +1560,13 @@ class CathedralsRunnerTests(unittest.TestCase):
             [0, 0, 0],
         )
 
-    def test_artistic_rejection_occurs_after_build_and_preserves_diagnostic_path(self):
+    def test_artistic_review_is_not_a_publication_gate(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             run = root / ".cathedrals/runs/generation_test"
             project = run / "projection/web"
             project.mkdir(parents=True)
+            RUNNER.write_json(run / "generation-brief.json", {"project_name": "Fixture"})
             order = []
 
             def build(_run, _project, _output):
@@ -1404,6 +1575,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 (_project / "dist/index.html").write_text("fixture", encoding="utf-8")
                 return {"result": "PASS", "reasons": ["built"]}
 
+            build_path = project / "dist"
             with mock.patch.object(RUNNER, "ROOT", root), mock.patch.object(
                 RUNNER,
                 "execute_creative_phases",
@@ -1424,25 +1596,15 @@ class CathedralsRunnerTests(unittest.TestCase):
                 ),
             ), mock.patch.object(
                 RUNNER, "build_web", side_effect=build
-            ), mock.patch.object(
-                RUNNER,
-                "artistic_acceptance",
-                side_effect=lambda *_args, **_kwargs: (
-                    order.append("artistic")
-                    or {"result": "FAIL GENERATION", "reasons": ["rejected"]}
-                ),
+            ), mock.patch.object(RUNNER, "artistic_acceptance") as artistic, mock.patch.object(
+                RUNNER, "finalize_success", side_effect=lambda *_: (order.append("finalize") or (build_path, {}))
             ):
-                with self.assertRaises(RUNNER.CathedralsError) as raised:
-                    RUNNER.execute_run(run, output_fn=lambda _line: None)
-                output = []
-                RUNNER.print_failure(run, raised.exception, output.append)
-        self.assertEqual(
-            order, ["creative", "projection", "mechanical", "build", "artistic"]
-        )
-        self.assertIn("diagnostic static build", "\n".join(output))
-        self.assertFalse((root / "generated-work").exists())
+                result, _, _ = RUNNER.execute_run(run, output_fn=lambda _line: None)
+        self.assertEqual(result, build_path)
+        self.assertEqual(order, ["creative", "projection", "mechanical", "build", "finalize"])
+        artistic.assert_not_called()
 
-    def test_accepted_work_builds_before_acceptance_and_reaches_ready_finalizer(self):
+    def test_mechanically_valid_work_reaches_ready_finalizer_without_artistic_call(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
             project = run / "projection/web"
@@ -1472,14 +1634,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 side_effect=lambda *_: (
                     order.append("build") or {"result": "PASS", "reasons": ["built"]}
                 ),
-            ), mock.patch.object(
-                RUNNER,
-                "artistic_acceptance",
-                side_effect=lambda *_args, **_kwargs: (
-                    order.append("artistic")
-                    or {"result": "PASS", "reasons": ["accepted"]}
-                ),
-            ), mock.patch.object(
+            ), mock.patch.object(RUNNER, "artistic_acceptance") as artistic, mock.patch.object(
                 RUNNER,
                 "finalize_success",
                 side_effect=lambda *_: (order.append("finalize") or (build_path, {})),
@@ -1490,8 +1645,9 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(result, build_path)
         self.assertEqual(
             order,
-            ["creative", "projection", "mechanical", "build", "artistic", "finalize"],
+            ["creative", "projection", "mechanical", "build", "finalize"],
         )
+        artistic.assert_not_called()
 
     def test_two_thousand_scene_scope_uses_bounded_plan_batches(self):
         core = {
@@ -1617,6 +1773,81 @@ class CathedralsRunnerTests(unittest.TestCase):
             )
             self.assertEqual(list((run / "committed").iterdir()), [])
 
+    def test_invalid_uncommitted_payload_gets_three_corrections_then_pauses(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "generation_test"
+            for name in ("state", "raw", "committed", "constraints", ".staging"):
+                (run / name).mkdir(parents=True)
+            RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+            RUNNER.write_json(run / "generation-brief.json", {"generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid"})
+            RUNNER.write_json(run / "run-manifest.json", {"budgets": {"max_prepared_context_tokens": 49152}})
+            calls = []
+
+            def invalid(*_args, **_kwargs):
+                calls.append(1)
+                return {"choices": [{"finish_reason": "stop", "message": {"content": "{}"}}]}
+
+            with self.assertRaises(RUNNER.PausedError):
+                RUNNER.request_record(
+                    run, expected_record_type="genesis_foundation", step_id="correction_test", phase="genesis",
+                    prompt="prompt", context="context", branch_relation="foundation", temperature=0.8,
+                    response_definition="claimantAnchorPayload", transport=invalid,
+                )
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(len(RUNNER.ledger_entries(run)), 3)
+            self.assertFalse((run / "finalization.json").exists())
+
+    def test_schema_valid_artistic_payload_is_reused_after_pause(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "generation_test"
+            for name in ("state", "raw", "committed", "constraints", ".staging"):
+                (run / name).mkdir(parents=True)
+            RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+            RUNNER.write_json(run / "generation-brief.json", {"generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid"})
+            RUNNER.write_json(run / "run-manifest.json", {"budgets": {"max_prepared_context_tokens": 49152}})
+            response = {"choices": [{"finish_reason": "stop", "message": {"content": '{"name":"Anchor","incident_role":"Witness"}'}}]}
+            transport = mock.Mock(return_value=response)
+
+            def paused(_payload):
+                raise RUNNER.PausedError("Semantic normalization", "pause")
+
+            arguments = dict(
+                expected_record_type="genesis_foundation", step_id="staged_test", phase="genesis",
+                prompt="prompt", context="context", branch_relation="foundation", temperature=0.8,
+                response_definition="claimantAnchorPayload", record_builder=paused,
+                payload_preserver=lambda payload, content, api: RUNNER.preserve_packet_payload(run, "staged_test", payload, content, api),
+            )
+            with self.assertRaises(RUNNER.PausedError):
+                RUNNER.request_record(run, transport=transport, **arguments)
+            with self.assertRaises(RUNNER.PausedError):
+                RUNNER.request_record(run, transport=mock.Mock(side_effect=AssertionError("artistic payload regenerated")), **arguments)
+            self.assertEqual(transport.call_count, 1)
+            self.assertTrue((run / ".staging/staged_test.artistic.json").exists())
+
+    def test_dependency_free_baseline_does_not_invoke_npm(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "web"
+            (project / "public").mkdir(parents=True)
+            fixture = static_reader_fixture()
+            scenes = [item for packet in fixture["packets"] for item in packet["scenes"]]
+            artifacts = [item for packet in fixture["packets"] for item in packet["artifacts"]]
+            endings = [item for packet in fixture["packets"] for item in packet["endings"]]
+            edges = [item for packet in fixture["packets"] for item in packet["decision_edges"]]
+            resolved_edges, resolved_endings = RUNNER.resolve_cross_packet_links(scenes, endings, edges)
+            work = {
+                "generation_id": "generation_test", "project_name": "Fixture",
+                "generated_title": fixture["genesis"]["work_canon"]["generated_title"],
+                "entry_content_id": scenes[0]["scene_id"], "scenes": scenes,
+                "artifacts": artifacts, "endings": resolved_endings, "decision_edges": resolved_edges,
+            }
+            RUNNER.write_json(project / "public/work.json", work)
+            for name in ("style.css", "state.js", "theme.js"):
+                (project / "public" / name).write_text("", encoding="utf-8")
+            with mock.patch.object(RUNNER, "ensure_node", side_effect=AssertionError("npm invoked")):
+                RUNNER.build_static_baseline(project)
+            self.assertTrue((project / "dist/index.html").exists())
+            self.assertTrue((project / "dist/work.json").exists())
+
     def test_single_scene_truncation_gets_one_expanded_retry(self):
         plan = {
             "packet_slot_id": "literary_packet_0001",
@@ -1694,7 +1925,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(barrier["runtime_generation_allowed"]["const"], False)
         invalid_ready = {
             "record_type": "finalization",
-            "protocol_version": "4.0",
+            "protocol_version": "5.0",
             "generation_id": "generation_test",
             "run_status": "READY_TO_PLAY",
             "run_manifest_hash": "a" * 64,
@@ -1719,6 +1950,8 @@ class CathedralsRunnerTests(unittest.TestCase):
             "mechanical_validation": {"result": "NOT_RUN", "reasons": ["partial"]},
             "artistic_acceptance": {"result": "NOT_RUN", "reasons": ["partial"]},
             "static_build_validation": {"result": "NOT_RUN", "reasons": ["partial"]},
+            "warnings": [],
+            "npm_enhancement": {"result": "NOT_RUN", "reasons": ["partial"]},
             "complete_work_barrier_satisfied": False,
             "playable": False,
             "failure_class": "none",

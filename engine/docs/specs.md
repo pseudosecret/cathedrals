@@ -138,7 +138,7 @@ Requirements:
 
 - One frozen experience request initiates complete autonomous generation.
 - The work is unavailable to ordinary play until generated canon, all lawful paths,
-  state variants, endings, validation, artistic acceptance, and static build pass.
+  state variants, endings, hard validation, and dependency-free static build pass.
 - No player action, feedback, or traversal may trigger creative generation.
 - Every presented alternative preexists play, including hidden, redirective,
   reconvergent, and contamination paths.

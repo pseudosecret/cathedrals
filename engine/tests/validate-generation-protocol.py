@@ -50,7 +50,7 @@ record_types = {
     )
 }
 assert len(record_types) == 11
-assert schema["$defs"]["runManifest"]["properties"]["protocol_version"]["const"] == "4.0"
+assert schema["$defs"]["runManifest"]["properties"]["protocol_version"]["const"] == "5.0"
 engine_snapshot = schema["$defs"]["runManifest"]["properties"]["engine_snapshot"]
 assert "path" in engine_snapshot["required"]
 assert set(engine_snapshot["properties"]) == {"work_id", "path", "work_seed", "structural_seed", "geomancy_seed"}
@@ -74,9 +74,11 @@ assert schema["$defs"]["decisionEdge"]["required"] == [
 ]
 assert "to_content_id" not in schema["$defs"]["decisionEdge"]["properties"]
 assert schema["$defs"]["destinationRef"]["properties"]["kind"]["enum"] == ["technical_slot", "content"]
-assert schema["$defs"]["claimant"]["properties"]["technical_slot_id"]["enum"] == [
-    f"claimant_slot_{number:02d}" for number in range(1, 6)
-]
+claimant = schema["$defs"]["claimant"]
+for anchor_field in ("technical_slot_id", "name", "incident_role"):
+    assert anchor_field not in claimant["required"]
+    assert anchor_field not in claimant["properties"]
+assert claimant["additionalProperties"] is False
 
 work_instance = (ENGINE / "data/work-instance.yaml").read_text()
 for invariant in (

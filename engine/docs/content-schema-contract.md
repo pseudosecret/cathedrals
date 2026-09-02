@@ -172,8 +172,9 @@ JSON Schema cannot enforce the whole run. Deterministic validation must also con
 and prospective-history hashes, step counters, token/cost totals, validation verdicts,
 and terminal state.
 `READY_TO_PLAY` requires positive creative-step count; zero intervention, rewrite,
-regeneration, and backtrack counters; full mechanical and artistic passes; a passing
-static build; and `complete_work_barrier_satisfied: true`.
+regeneration, and backtrack counters; a full hard mechanical pass; a passing static
+baseline build; and `complete_work_barrier_satisfied: true`. Artistic concerns and
+optional npm-enhancement failures are warnings.
 
 `FAILED_GENERATION` always has `playable: false`. There is no partially generated but
 playable state. A later run receives a new generation ID and does not reopen the old

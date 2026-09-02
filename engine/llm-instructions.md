@@ -100,16 +100,16 @@ fiction.
 
 ## Failure and Validation
 
-Retry only transport/provider failures before creative output, using the identical
-planned request. Malformed creative output fails the run. Valid artistic weakness
-commits. Unresolvable mechanical continuity fails without retcon. Whole-work artistic
-acceptance occurs after complete projection and a passing diagnostic static build and returns only `PASS` or
-`FAIL GENERATION`, never repair instructions.
+Retry transport/provider failures under the retry law. Invalid uncommitted structured
+output receives bounded schema-aware correction and then pauses; committed output is
+never repaired. Valid artistic weakness commits and becomes a warning. Publication
+requires hard mechanical validation and the dependency-free static baseline, not an
+artistic verdict.
 
 ## Generation, Build, and Play Barrier
 
 Do not expose the reader until every generated artifact, branch, state variant,
-ending, graph record, projection, validation, artistic verdict, static build, and
+ending, graph record, projection, hard validation, and static baseline, and
 build validation has passed. Terminal state is `READY_TO_PLAY` or
 `FAILED_GENERATION`; no partial playable state exists.
 

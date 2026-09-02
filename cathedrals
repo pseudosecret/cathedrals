@@ -7,6 +7,9 @@ import argparse
 import dataclasses
 import datetime as dt
 import hashlib
+import html
+import importlib.util
+import importlib.machinery
 import json
 import math
 import os
@@ -33,13 +36,14 @@ NODE_VERSION = "22.23.2"
 ASTRO_VERSION = "7.2.9"
 MARKDOWN_IT_VERSION = "14.1.0"
 NODE_MINIMUM = (22, 12, 0)
-PROTOCOL_VERSION = "4.0"
+PROTOCOL_VERSION = "5.0"
 BASE_OUTPUT_TOKENS = 10900
 EXPANDED_OUTPUT_TOKENS = 21800
 PACKET_LITERARY_WORDS = 4800
 PLAN_BATCH_SIZE = 8
 TERMINAL_STATES = {"READY_TO_PLAY", "FAILED_GENERATION"}
 RETRYABLE_PROVIDER_FAILURES = {"transport_before_response", "provider_before_creative_output"}
+PAUSABLE_FAILURES = RETRYABLE_PROVIDER_FAILURES | {"provider_truncation", "build_failure"}
 FORMAT_ALIASES = {
     "web": "web",
     "visualnovel": "visualnovel",
@@ -97,6 +101,11 @@ class TruncationError(CathedralsError):
     def __init__(self, reason: str, response: dict | None = None):
         super().__init__("LM Studio response", reason, "provider_truncation")
         self.response = response
+
+
+class PausedError(CathedralsError):
+    def __init__(self, stage: str, reason: str, failure_class: str = "corrective_pause"):
+        super().__init__(stage, reason, failure_class)
 
 
 @dataclass(frozen=True)
@@ -354,7 +363,11 @@ def load_protocol(run_dir: Path | None = None):
 
 def record_schema(record_type: str, protocol=None):
     protocol = protocol or load_protocol()
-    definition_name = RECORD_DEFS[record_type]
+    return definition_schema(RECORD_DEFS[record_type], protocol)
+
+
+def definition_schema(definition_name: str, protocol=None):
+    protocol = protocol or load_protocol()
     needed = {definition_name}
     queue = [definition_name]
     while queue:
@@ -586,7 +599,7 @@ def ensure_runtime_layout() -> None:
 def copy_engine_snapshot(run_dir: Path) -> None:
     destination = snapshot_root(run_dir)
     ignore = shutil.ignore_patterns(
-        ".git", ".cathedrals", "generated-work", "__pycache__", "*.pyc", ".DS_Store",
+        ".git", ".cathedrals", "generated-work", "__pycache__", "*.pyc", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".DS_Store",
         "*~", "*.swp", "*.swo", ".#*", "#*#",
     )
     destination.mkdir()
@@ -851,7 +864,7 @@ def create_run(
         },
         "models": [
             {"purpose": purpose, "provider": "LM Studio", "model": model, "parameters": {"structured_output": True}}
-            for purpose in ("creative", "analysis", "artistic_acceptance")
+            for purpose in ("creative", "analysis")
         ],
         "retention_policy": "preserve_failed",
         "complete_work_barrier": {
@@ -919,7 +932,6 @@ def generated_ids(record: dict) -> list[str]:
         ids += [item["event_id"] for item in record["work_canon"]["chronology"]]
         ids += [item["claimant_id"] for item in record["claimant_anchors"]]
     if record.get("record_type") == "genesis_cast":
-        ids += [item["claimant_id"] for item in record["claimants"]]
         ids += [item["character_id"] for item in record["characters"]]
     if record.get("record_type") == "architecture_core":
         ids += [item["arc_id"] for item in record["arcs"]]
@@ -946,12 +958,7 @@ def generated_ids(record: dict) -> list[str]:
 
 
 def reused_generated_ids(run_dir: Path, record: dict) -> set[str]:
-    duplicates = set(generated_ids(record)) & set(_source_index(run_dir))
-    if record.get("record_type") == "genesis_cast":
-        foundation = committed_record(run_dir, "genesis_foundation")
-        if foundation:
-            duplicates -= {item["claimant_id"] for item in foundation["claimant_anchors"]}
-    return duplicates
+    return set(generated_ids(record)) & set(_source_index(run_dir))
 
 
 def constraint_deltas(record: dict) -> tuple[dict, list[str], list[str], list[str]]:
@@ -1143,6 +1150,8 @@ def reconcile_run(run_dir: Path) -> None:
         verify_immutable_file(directory / "record.json", meta["record_hash"])
         verify_immutable_file(directory / "raw-response.txt", meta["raw_response_hash"])
         verify_immutable_file(directory / "api-response.json", meta["api_response_hash"])
+        for name, expected_hash in meta.get("supplemental_hashes", {}).items():
+            verify_immutable_file(directory / name, expected_hash)
         step_id = meta["ledger_entry"]["planned_step_id"]
         if step_id in committed_steps:
             raise IntegrityError(f"Creative step committed more than once: {step_id}")
@@ -1239,7 +1248,12 @@ def commit_record(
     constraint_events = make_constraint_events(run_dir, record, commit_id, record_hash, planned_step_id)
     constraint_hash = sha256_bytes(b"".join(canonical_json(item) for item in constraint_events))
     state_after = sha256_bytes(f"{state['canonical_state_hash']}:{record_hash}:{constraint_hash}".encode())
-    usage = api_response.get("usage", {}) if isinstance(api_response, dict) else {}
+    usage = dict(api_response.get("usage", {})) if isinstance(api_response, dict) else {}
+    semantic_api_path = run_dir / ".staging" / f"{planned_step_id}.semantic.api.json"
+    if semantic_api_path.exists():
+        semantic_usage = read_json(semantic_api_path).get("usage", {})
+        for key in ("prompt_tokens", "completion_tokens"):
+            usage[key] = (usage.get(key) or 0) + (semantic_usage.get(key) or 0)
     entry = new_ledger_entry(
         run_dir,
         planned_step_id=planned_step_id,
@@ -1273,11 +1287,24 @@ def commit_record(
     write_atomic(staging / "record.json", record_bytes)
     write_atomic(staging / "raw-response.txt", raw_bytes)
     write_atomic(staging / "api-response.json", api_bytes)
+    supplemental = []
+    for suffix, target in (
+        (".artistic.json", "artistic-payload.json"),
+        (".artistic.txt", "artistic-response.txt"),
+        (".artistic.api.json", "artistic-api-response.json"),
+        (".semantic.json", "semantic-normalization.json"),
+        (".semantic.api.json", "semantic-api-response.json"),
+    ):
+        source = run_dir / ".staging" / f"{planned_step_id}{suffix}"
+        if source.exists():
+            shutil.copy2(source, staging / target)
+            supplemental.append(target)
     meta = {
         "record_hash": record_hash,
         "raw_response_hash": sha256_bytes(raw_bytes),
         "api_response_hash": sha256_bytes(api_bytes),
         "constraint_events": constraint_events,
+        "supplemental_hashes": {name: sha256_file(staging / name) for name in supplemental},
         "ledger_entry": entry,
     }
     write_json(staging / "commit-meta.json", meta)
@@ -1297,6 +1324,8 @@ def commit_record(
     state["stage"] = step_phase.upper()
     save_state(run_dir, state)
     reconcile_run(run_dir)
+    for suffix in (".artistic.json", ".artistic.txt", ".artistic.api.json", ".semantic.json", ".semantic.api.json"):
+        (run_dir / ".staging" / f"{planned_step_id}{suffix}").unlink(missing_ok=True)
     if record["record_type"] == "creative_packet" or (
         record["record_type"] == "architecture_plan_batch" and assembled_architecture(run_dir)
     ):
@@ -1378,6 +1407,7 @@ def assembled_genesis(run_dir: Path) -> dict | None:
     constraints = committed_record(run_dir, "genesis_constraints")
     if not foundation or not cast or not constraints:
         return None
+    expansions = {item["claimant_id"]: item for item in cast["claimants"]}
     return {
         "record_type": "genesis",
         "protocol_version": PROTOCOL_VERSION,
@@ -1387,7 +1417,10 @@ def assembled_genesis(run_dir: Path) -> dict | None:
         "format_composition_law": foundation["format_composition_law"],
         "work_canon": foundation["work_canon"],
         "web_art_direction": foundation["web_art_direction"],
-        "claimants": cast["claimants"],
+        "claimants": [
+            expansions[anchor["claimant_id"]] | anchor
+            for anchor in foundation["claimant_anchors"]
+        ],
         "characters": cast["characters"],
         "constraint_delta": constraints["constraint_delta"],
     }
@@ -1746,6 +1779,10 @@ def request_record(
     max_tokens: int = BASE_OUTPUT_TOKENS,
     transport=http_json,
     precommit_validator=None,
+    response_definition: str | None = None,
+    record_builder=None,
+    payload_preserver=None,
+    payload_validator=None,
 ) -> dict:
     state = load_state(run_dir)
     brief = read_json(run_dir / "generation-brief.json")
@@ -1753,67 +1790,42 @@ def request_record(
         raise CathedralsError("Context assembly", f"Prepared prompt for {step_id} exceeds the frozen context budget", "budget_exhaustion")
     seed = step_seed(brief["generation_seed"], step_id)
     protocol = load_protocol(run_dir)
-    schema = record_schema(expected_record_type, protocol)
+    response_definition = response_definition or RECORD_DEFS[expected_record_type]
+    schema = definition_schema(response_definition, protocol)
     parameters = {"temperature": temperature, "max_tokens": max_tokens, "seed": seed, "stream": False}
-    payload = {
-        "model": state["model"],
-        "messages": [
-            {
-                "role": "system",
-                "content": "Execute the supplied Cathedrals phase. Return only the schema-constrained record.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-        **parameters,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": expected_record_type,
-                "strict": True,
-                "schema": schema,
-            },
-        },
-    }
-    request_hash = sha256_bytes(canonical_json(payload))
-    failed_attempts = [entry for entry in ledger_entries(run_dir) if entry["planned_step_id"] == step_id]
-    attempt = len(failed_attempts) + 1
-    inflight_path = run_dir / "state/inflight.json"
-    if inflight_path.exists():
-        inflight = read_json(inflight_path)
-        if inflight["step_id"] != step_id or inflight["request_hash"] != request_hash:
-            raise IntegrityError("Resume found a different in-flight creative request")
-        attempt = inflight["attempt"]
-    else:
-        write_json(
-            inflight_path,
-            {"step_id": step_id, "attempt": attempt, "request_hash": request_hash, "started_at": utc_now()},
-            exclusive=True,
-        )
-    inflight = read_json(inflight_path)
-    response_path = run_dir / "raw" / f"{step_id}-attempt{attempt}.api.json"
-    response = read_json(response_path) if response_path.exists() else None
-    try:
-        content = normalize_provider_response(response) if response is not None else None
-    except TruncationError as error:
-        append_failed_attempt(
-            run_dir,
-            step_id=step_id,
-            attempt=attempt,
-            phase=phase,
-            prompt=prompt,
-            context=context,
-            parameters=parameters,
-            started_at=inflight["started_at"],
-            failure_class=error.failure_class,
-            output_hash=sha256_bytes(canonical_json(response)),
-            usage=response.get("usage", {}) if isinstance(response, dict) else {},
-        )
-        inflight_path.unlink(missing_ok=True)
-        raise
-    if response is None:
-        failures = 0
-        while failures < 3:
-            try:
+    feedback = ""
+    for correction in range(3):
+        current_prompt = prompt + feedback
+        payload = {
+            "model": load_state(run_dir)["model"],
+            "messages": [
+                {"role": "system", "content": "Execute the supplied Cathedrals phase. Return only the schema-constrained payload."},
+                {"role": "user", "content": current_prompt},
+            ],
+            **parameters,
+            "response_format": {"type": "json_schema", "json_schema": {"name": response_definition, "strict": True, "schema": schema}},
+        }
+        request_hash = sha256_bytes(canonical_json(payload))
+        attempts = [entry["attempt"] for entry in ledger_entries(run_dir) if entry["planned_step_id"] == step_id]
+        attempt = max(attempts, default=0) + 1
+        inflight_path = run_dir / "state/inflight.json"
+        if inflight_path.exists():
+            inflight = read_json(inflight_path)
+            if inflight["step_id"] != step_id:
+                raise IntegrityError("Resume found a different in-flight creative request")
+            attempt = inflight["attempt"]
+        else:
+            inflight = {"step_id": step_id, "attempt": attempt, "request_hash": request_hash, "started_at": utc_now()}
+            write_json(inflight_path, inflight, exclusive=True)
+        response_path = run_dir / "raw" / f"{step_id}-attempt{attempt}.api.json"
+        response = read_json(response_path) if response_path.exists() else None
+        try:
+            preserved_payload = run_dir / ".staging" / f"{step_id}.artistic.json"
+            if preserved_payload.exists():
+                authored = read_json(preserved_payload)
+                content = (run_dir / ".staging" / f"{step_id}.artistic.txt").read_text(encoding="utf-8")
+                response = read_json(run_dir / ".staging" / f"{step_id}.artistic.api.json")
+            elif response is None:
                 response, content = provider_response(
                     transport,
                     api_url(brief["lm_studio_base_url"], "/v1/chat/completions"),
@@ -1822,56 +1834,60 @@ def request_record(
                     started_at=inflight["started_at"],
                     preserve=lambda value: write_json(response_path, value, mode=0o444, exclusive=True),
                 )
-                break
-            except CathedralsError as error:
-                failed_response = error.response if isinstance(error, TruncationError) else None
-                append_failed_attempt(
-                    run_dir,
-                    step_id=step_id,
-                    attempt=attempt,
-                    phase=phase,
-                    prompt=prompt,
-                    context=context,
-                    parameters=parameters,
-                    started_at=inflight["started_at"],
-                    failure_class=error.failure_class,
-                    output_hash=sha256_bytes(canonical_json(failed_response)) if failed_response else None,
-                    usage=failed_response.get("usage", {}) if failed_response else {},
-                )
-                failures += 1
-                if error.failure_class not in RETRYABLE_PROVIDER_FAILURES or failures == 3:
-                    inflight_path.unlink(missing_ok=True)
-                    raise
-                attempt += 1
-                inflight["attempt"] = attempt
-                inflight["started_at"] = utc_now()
-                write_json(inflight_path, inflight)
-                response_path = run_dir / "raw" / f"{step_id}-attempt{attempt}.api.json"
-    try:
-        record = parse_structured_content(content)
-        validate_json_schema(record, protocol["$defs"][RECORD_DEFS[expected_record_type]], protocol)
-        validate_declared_id_uniqueness(record)
-        duplicate_ids = reused_generated_ids(run_dir, record)
-        if duplicate_ids:
-            raise SchemaError(f"Record reuses previously committed IDs: {', '.join(sorted(duplicate_ids))}")
-        if precommit_validator:
-            precommit_validator(record)
-    except SchemaError:
-        append_failed_attempt(
-            run_dir,
-            step_id=step_id,
-            attempt=attempt,
-            phase=phase,
-            prompt=prompt,
-            context=context,
-            parameters=parameters,
-            started_at=inflight["started_at"],
-            failure_class="malformed_response",
-            output_hash=sha256_bytes(content.encode()),
-            usage=response.get("usage", {}) if isinstance(response, dict) else {},
-        )
-        inflight_path.unlink(missing_ok=True)
-        raise
+            else:
+                content = normalize_provider_response(response)
+            if not preserved_payload.exists():
+                authored = parse_structured_content(content)
+            validate_json_schema(authored, protocol["$defs"][response_definition], protocol)
+            if payload_validator:
+                payload_validator(authored)
+            if payload_preserver:
+                payload_preserver(authored, content, response)
+            record = record_builder(authored) if record_builder else authored
+            validate_json_schema(record, protocol["$defs"][RECORD_DEFS[expected_record_type]], protocol)
+            validate_declared_id_uniqueness(record)
+            duplicate_ids = reused_generated_ids(run_dir, record)
+            if duplicate_ids:
+                raise SchemaError(f"Record reuses previously committed IDs: {', '.join(sorted(duplicate_ids))}")
+            if precommit_validator:
+                precommit_validator(record)
+            break
+        except TruncationError as error:
+            failed_response = error.response
+            append_failed_attempt(run_dir, step_id=step_id, attempt=attempt, phase=phase, prompt=current_prompt,
+                context=context, parameters=parameters, started_at=inflight["started_at"], failure_class=error.failure_class,
+                output_hash=sha256_bytes(canonical_json(failed_response)) if failed_response else None,
+                usage=failed_response.get("usage", {}) if isinstance(failed_response, dict) else {})
+            inflight_path.unlink(missing_ok=True)
+            raise
+        except PausedError:
+            inflight_path.unlink(missing_ok=True)
+            raise
+        except CathedralsError as error:
+            staged_artistic = run_dir / ".staging" / f"{step_id}.artistic.json"
+            staged_semantic = run_dir / ".staging" / f"{step_id}.semantic.json"
+            if isinstance(error, SchemaError) and staged_artistic.exists() and staged_semantic.exists():
+                write_atomic(run_dir / "state" / f"{step_id}.semantic-feedback.txt", error.reason.encode())
+                staged_semantic.unlink(missing_ok=True)
+                (run_dir / ".staging" / f"{step_id}.semantic.api.json").unlink(missing_ok=True)
+            append_failed_attempt(run_dir, step_id=step_id, attempt=attempt, phase=phase, prompt=current_prompt,
+                context=context, parameters=parameters, started_at=inflight["started_at"], failure_class=error.failure_class,
+                output_hash=sha256_bytes(content.encode()) if isinstance(locals().get("content"), str) else None,
+                usage=response.get("usage", {}) if isinstance(response, dict) else {})
+            inflight_path.unlink(missing_ok=True)
+            if error.failure_class in RETRYABLE_PROVIDER_FAILURES and correction < 2:
+                feedback = "\n\nThe provider returned no usable response. Return the required JSON payload now."
+                continue
+            if isinstance(error, SchemaError) and correction < 2:
+                feedback = f"\n\nCORRECTION REQUIRED\nThe previous uncommitted payload failed validation:\n{error.reason}\nReturn a complete corrected payload."
+                continue
+            if isinstance(error, SchemaError):
+                raise PausedError("Structured record correction", f"{step_id} exhausted 3 schema-correction attempts in this session. Resume to grant 3 more attempts. Last problem: {error.reason}") from error
+            if error.failure_class in RETRYABLE_PROVIDER_FAILURES:
+                raise PausedError("LM Studio response", f"{step_id} exhausted 3 provider-response attempts in this session. Resume to grant 3 more attempts. Last problem: {error.reason}", error.failure_class) from error
+            raise
+    else:
+        raise PausedError("Structured record correction", f"{step_id} exhausted its correction attempts")
     commit_record(
         run_dir,
         record,
@@ -1880,7 +1896,7 @@ def request_record(
         planned_step_id=step_id,
         attempt=attempt,
         step_phase=phase,
-        prompt=prompt,
+        prompt=current_prompt,
         context=context,
         parameters=parameters,
         branch_relation=branch_relation,
@@ -2021,7 +2037,6 @@ def validate_declared_id_uniqueness(record: dict) -> None:
         identifiers += [item["event_id"] for item in record["work_canon"]["chronology"]]
         identifiers += [item["claimant_id"] for item in record["claimant_anchors"]]
     elif record.get("record_type") == "genesis_cast":
-        identifiers += [item["claimant_id"] for item in record["claimants"]]
         identifiers += [item["character_id"] for item in record["characters"]]
     elif record.get("record_type") == "architecture_core":
         identifiers += [item["obligation_id"] for item in record["obligation_graph"]]
@@ -2571,6 +2586,347 @@ def plan_batches(architecture_core: dict) -> list[list[dict]]:
     return [specs[index:index + PLAN_BATCH_SIZE] for index in range(0, len(specs), PLAN_BATCH_SIZE)]
 
 
+def deterministic_id(prefix: str, *parts) -> str:
+    identity = ":".join(str(part) for part in parts)
+    return f"{prefix}_{sha256_bytes(identity.encode())[:16]}"
+
+
+def record_envelope(run_dir: Path, record_type: str, step_id: str) -> dict:
+    return {
+        "record_type": record_type,
+        "protocol_version": PROTOCOL_VERSION,
+        "generation_id": run_dir.name,
+        "commit_id": deterministic_id("commit", run_dir.name, step_id),
+    }
+
+
+def build_genesis_foundation(run_dir: Path, payload: dict) -> dict:
+    anchors = [
+        item | {"claimant_id": f"claimant_{index:02d}", "technical_slot_id": f"claimant_slot_{index:02d}"}
+        for index, item in enumerate(payload["claimant_anchors"], 1)
+    ]
+    canon = payload["work_canon"] | {
+        "work_id": "cathedrals-v01",
+        "chronology": [item | {"event_id": f"chronology_event_{index:03d}"} for index, item in enumerate(payload["work_canon"]["chronology"], 1)],
+    }
+    return record_envelope(run_dir, "genesis_foundation", "genesis_foundation") | {
+        "story_format": "web",
+        **(payload | {"claimant_anchors": anchors, "work_canon": canon}),
+    }
+
+
+def build_genesis_cast(run_dir: Path, payload: dict) -> dict:
+    foundation = committed_record(run_dir, "genesis_foundation")
+    characters = [item | {"character_id": f"character_{index:03d}"} for index, item in enumerate(payload["characters"], 1)]
+    return record_envelope(run_dir, "genesis_cast", "genesis_cast") | {
+        "foundation_commit_id": foundation["commit_id"],
+        "story_format": "web",
+        **(payload | {"characters": characters}),
+    }
+
+
+def build_genesis_constraints(run_dir: Path, payload: dict) -> dict:
+    cast = committed_record(run_dir, "genesis_cast")
+    if payload["new_soft_obligations"] or payload["obligation_updates"]:
+        raise SchemaError("Genesis semantic normalization cannot create or update obligations")
+    foundation = committed_record(run_dir, "genesis_foundation")
+    content_ids = {
+        anchor["technical_slot_id"]: ("genesis", anchor["claimant_id"])
+        for anchor in foundation["claimant_anchors"]
+    }
+    delta = build_semantic_delta(run_dir, "genesis_constraints", payload, content_ids)
+    return record_envelope(run_dir, "genesis_constraints", "genesis_constraints") | {
+        "cast_commit_id": cast["commit_id"], "story_format": "web", "constraint_delta": delta,
+    }
+
+
+def build_architecture_core(run_dir: Path, payload: dict) -> dict:
+    manifest = read_json(run_dir / "run-manifest.json")
+    scope = manifest["scope"]
+    commitment = {
+        "possible_scene_count": scope["possible_scene_count"],
+        "planned_scene_count": scope["possible_scene_count"],
+        "planned_artifact_count": scope["artifact_target"],
+        "planned_ending_count": scope["ending_target"],
+        "planned_formal_composition_count": scope["formal_composition_target"],
+        "saturation_rationale": payload["saturation_rationale"],
+    }
+    artistic = dict(payload)
+    artistic.pop("saturation_rationale")
+    obligation_ids = {item["obligation_id"]: f"obligation_{index:03d}" for index, item in enumerate(artistic["obligation_graph"], 1)}
+    attractor_ids = {item["attractor_id"]: f"attractor_{index:03d}" for index, item in enumerate(artistic["attractors"], 1)}
+    arc_ids = {item["arc_id"]: f"arc_{index:03d}" for index, item in enumerate(artistic["arcs"], 1)}
+    node_ids = {item["node_id"]: f"architecture_node_{index:03d}" for index, item in enumerate(artistic["topology"]["nodes"], 1)}
+    edge_ids = {item["edge_id"]: f"architecture_edge_{index:03d}" for index, item in enumerate(artistic["topology"]["edges"], 1)}
+    remap = obligation_ids | attractor_ids | arc_ids | node_ids | edge_ids
+
+    def ids(values):
+        return [remap.get(value, value) for value in values]
+
+    def relevance(value):
+        return value | {"arc_ids": ids(value.get("arc_ids", [])), "branch_ids": ids(value.get("branch_ids", []))}
+
+    artistic["obligation_graph"] = [item | {
+        "obligation_id": obligation_ids[item["obligation_id"]], "created_by_ids": ids(item["created_by_ids"]),
+        "requires": ids(item["requires"]), "termination_targets": ids(item["termination_targets"]),
+        "relevance": relevance(item["relevance"]),
+    } for item in artistic["obligation_graph"]]
+    artistic["attractors"] = [item | {
+        "attractor_id": attractor_ids[item["attractor_id"]],
+        "prerequisite_obligation_ids": ids(item["prerequisite_obligation_ids"]),
+        "relevance": relevance(item["relevance"]),
+    } for item in artistic["attractors"]]
+    artistic["arcs"] = [item | {"arc_id": arc_ids[item["arc_id"]], "hard_obligation_ids": ids(item["hard_obligation_ids"])} for item in artistic["arcs"]]
+    topology = artistic["topology"]
+    artistic["topology"] = topology | {
+        "entry_segment_id": node_ids[topology["entry_segment_id"]],
+        "opening_branch_node_id": node_ids[topology["opening_branch_node_id"]],
+        "reconvergence_node_ids": ids(topology["reconvergence_node_ids"]),
+        "nodes": [item | {"node_id": node_ids[item["node_id"]], "hard_obligation_ids": ids(item["hard_obligation_ids"]), "generation_dependency_ids": ids(item["generation_dependency_ids"])} for item in topology["nodes"]],
+        "edges": [item | {"edge_id": edge_ids[item["edge_id"]], "from_node_id": node_ids[item["from_node_id"]], "to_node_id": node_ids[item["to_node_id"]], "hard_obligation_ids": ids(item["hard_obligation_ids"])} for item in topology["edges"]],
+    }
+    artistic["constraint_delta"] = {"canonical_facts": [], "knowledge_changes": [], "new_obligations": [], "obligation_updates": [], "motif_events": [], "potential_foreclosures": []}
+    return record_envelope(run_dir, "architecture_core", "architecture_core") | {
+        "genesis_commit_id": committed_record(run_dir, "genesis")["commit_id"],
+        "story_format": "web", "scope_commitment": commitment, **artistic,
+    }
+
+
+def build_architecture_plan_batch(run_dir: Path, payload: dict, specs: list[dict], sequence: int, count: int) -> dict:
+    annotations = {item["packet_slot_id"]: item for item in payload["packet_plans"]}
+    plans = [spec | annotations.get(spec["packet_slot_id"], {}) for spec in specs]
+    return record_envelope(run_dir, "architecture_plan_batch", f"architecture_plan_batch_{sequence:04d}") | {
+        "architecture_core_commit_id": committed_record(run_dir, "architecture_core")["commit_id"],
+        "story_format": "web", "batch_sequence": sequence, "batch_count": count, "packet_plans": plans,
+    }
+
+
+def preserve_packet_payload(run_dir: Path, step_id: str, payload: dict, content: str, response: dict) -> None:
+    base = run_dir / ".staging" / step_id
+    if not base.with_suffix(".artistic.json").exists():
+        write_json(base.with_suffix(".artistic.json"), payload, mode=0o444, exclusive=True)
+        write_atomic(base.with_suffix(".artistic.txt"), content.encode(), mode=0o444, exclusive=True)
+        write_json(base.with_suffix(".artistic.api.json"), response, mode=0o444, exclusive=True)
+
+
+def validate_packet_payload(payload: dict, plan: dict) -> None:
+    content = payload["scenes"] if plan["packet_kind"] == "literary" else payload["endings"]
+    other = payload["endings"] if plan["packet_kind"] == "literary" else payload["scenes"]
+    expected = set(plan["scene_slot_ids"] if plan["packet_kind"] == "literary" else plan["ending_slot_ids"])
+    actual = [item["technical_slot_id"] for item in content]
+    problems = []
+    if other:
+        problems.append(f"expected no {'endings' if plan['packet_kind'] == 'literary' else 'scenes'}")
+    if set(actual) != expected or len(actual) != len(set(actual)):
+        problems.append("technical slots must match the assigned slots exactly once")
+    artifact_count = sum(len(item["artifacts"]) for item in content)
+    composition_count = sum(len(item["formal_compositions"]) for item in content)
+    if artifact_count != plan["artifact_count"]:
+        problems.append(f"expected {plan['artifact_count']} nested artifacts, received {artifact_count}")
+    if composition_count != plan["formal_composition_count"]:
+        problems.append(f"expected {plan['formal_composition_count']} nested formal compositions, received {composition_count}")
+    for item in content:
+        try:
+            validate_markdown_source(item["prose_mdx"], item["technical_slot_id"])
+            for artifact in item["artifacts"]:
+                validate_markdown_source(artifact["body_mdx"], f"artifact under {item['technical_slot_id']}")
+        except SchemaError as error:
+            problems.append(error.reason)
+    if problems:
+        raise SchemaError("Packet payload does not match its frozen allocation: " + "; ".join(problems))
+
+
+def validate_packet_payload_for_run(payload: dict, run_dir: Path, plan: dict) -> None:
+    validate_packet_payload(payload, plan)
+    architecture = committed_record(run_dir, "architecture")
+    genesis = committed_record(run_dir, "genesis")
+    arcs = {item["arc_id"] for item in architecture["arcs"]}
+    claimants = {item["claimant_id"] for item in genesis["claimants"]}
+    slots = {slot for item in architecture["packet_plans"] for slot in item["scene_slot_ids"] + item["ending_slot_ids"]}
+    committed_content = {
+        content_id for record in committed_records(run_dir, "creative_packet")
+        for content_id in [item["scene_id"] for item in record["scenes"]] + [item["ending_id"] for item in record["endings"]]
+    }
+    problems = []
+    for scene in payload["scenes"]:
+        if scene["arc_id"] not in arcs:
+            problems.append(f"{scene['technical_slot_id']} references unknown arc {scene['arc_id']}")
+        unknown = set(scene["claimant_focus_ids"]) - claimants
+        if unknown:
+            problems.append(f"{scene['technical_slot_id']} references unknown claimants: {', '.join(sorted(unknown))}")
+    for item in payload["scenes"] + payload["endings"]:
+        unknown = set(item.get("claimant_pressure_ids", [])) - claimants
+        if unknown:
+            problems.append(f"{item['technical_slot_id']} references unknown claimants: {', '.join(sorted(unknown))}")
+        for choice in item["choices"]:
+            destination = choice["destination"]
+            if destination["kind"] == "technical_slot" and destination["id"] not in slots:
+                problems.append(f"unknown technical destination {destination['id']}")
+            if destination["kind"] == "content" and destination["id"] not in committed_content:
+                problems.append(f"unknown committed content destination {destination['id']}")
+    if problems:
+        raise SchemaError("Packet payload contains unresolved join keys: " + "; ".join(problems))
+
+
+def semantic_source_ref(slot: str, content_ids: dict[str, tuple[str, str]]) -> dict:
+    if slot not in content_ids:
+        raise SchemaError(f"Semantic normalization references unknown technical slot {slot}")
+    artifact_type, artifact_id = content_ids[slot]
+    return {"artifact_type": artifact_type, "artifact_id": artifact_id, "source_locator": f"Authored content at {slot}"}
+
+
+def build_semantic_delta(run_dir: Path, step_id: str, payload: dict, content_ids: dict[str, tuple[str, str]]) -> dict:
+    def source(item):
+        return [semantic_source_ref(item["source"]["technical_slot_id"], content_ids)]
+
+    facts = []
+    fact_aliases = {}
+    for index, item in enumerate(payload["canonical_facts"], 1):
+        identifier = deterministic_id("fact", run_dir.name, step_id, index)
+        fact_aliases[f"fact_{index:02d}"] = identifier
+        facts.append({key: value for key, value in item.items() if key != "source"} | {"fact_id": identifier, "sources": source(item)})
+    known_facts = set(_read_state_map(run_dir, "canonical-facts.json"))
+    knowledge = []
+    for index, item in enumerate(payload["knowledge_changes"], 1):
+        proposition = fact_aliases.get(item["proposition_id"], item["proposition_id"])
+        if proposition not in known_facts | {fact["fact_id"] for fact in facts}:
+            raise SchemaError(f"Semantic knowledge references unknown proposition {item['proposition_id']}")
+        knowledge.append({key: value for key, value in item.items() if key != "source"} | {
+            "knowledge_id": deterministic_id("knowledge", run_dir.name, step_id, index),
+            "proposition_id": proposition, "sources": source(item),
+        })
+    obligations = []
+    for index, item in enumerate(payload["new_soft_obligations"], 1):
+        source_id = source(item)[0]["artifact_id"]
+        obligations.append({key: value for key, value in item.items() if key != "source"} | {
+            "obligation_id": deterministic_id("obligation", run_dir.name, step_id, index),
+            "status": "active", "created_by_ids": [source_id], "hardness": "soft", "sources": source(item),
+        })
+    updates = [
+        {key: value for key, value in item.items() if key != "source"} | {
+            "update_id": deterministic_id("obligation_update", run_dir.name, step_id, index),
+            "evidence_sources": source(item),
+        }
+        for index, item in enumerate(payload["obligation_updates"], 1)
+    ]
+    motifs = [
+        {key: value for key, value in item.items() if key != "source"} | {
+            "motif_event_id": deterministic_id("motif_event", run_dir.name, step_id, index), "sources": source(item),
+        }
+        for index, item in enumerate(payload["motif_events"], 1)
+    ]
+    return {
+        "canonical_facts": facts, "knowledge_changes": knowledge, "new_obligations": obligations,
+        "obligation_updates": updates, "motif_events": motifs, "potential_foreclosures": [],
+    }
+
+
+def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload: dict, context: str, transport=http_json) -> dict:
+    target = run_dir / ".staging" / f"{step_id}.semantic.json"
+    if target.exists():
+        return read_json(target)
+    protocol = load_protocol(run_dir)
+    schema = definition_schema("semanticDeltaPayload", protocol)
+    brief = read_json(run_dir / "generation-brief.json")
+    seed = step_seed(brief["generation_seed"], f"{step_id}_semantic")
+    parameters = {"temperature": 0.0, "max_tokens": 4096, "seed": seed, "stream": False}
+    feedback_path = run_dir / "state" / f"{step_id}.semantic-feedback.txt"
+    feedback = f" Previous normalization failed canonical validation: {feedback_path.read_text(encoding='utf-8')}" if feedback_path.exists() else ""
+    for correction in range(3):
+        attempts = [entry["attempt"] for entry in ledger_entries(run_dir) if entry["planned_step_id"] == f"{step_id}_semantic"]
+        attempt = max(attempts, default=0) + 1
+        prompt = bounded_context([
+            ("IMMUTABLE ARTISTIC PAYLOAD", artistic_payload),
+            ("RELEVANT CANON AND CONSTRAINTS", context),
+            ("INSTRUCTION", "Normalize only semantic facts, knowledge, motif pressure, soft obligations, and updates to existing obligations. Never author prose. New obligations must be soft. Use a content technical_slot_id as every source. For a fact created in this payload, knowledge may refer to fact_01, fact_02, and so on." + feedback),
+        ], 42000)
+        request = {
+            "model": load_state(run_dir)["model"],
+            "messages": [{"role": "system", "content": "Normalize immutable authored content into constraint metadata. Return JSON only."}, {"role": "user", "content": prompt}],
+            **parameters,
+            "response_format": {"type": "json_schema", "json_schema": {"name": "semanticDeltaPayload", "strict": True, "schema": schema}},
+        }
+        response_path = run_dir / "raw" / f"{step_id}-semantic-attempt{attempt}.api.json"
+        started = utc_now()
+        try:
+            response, content = provider_response(transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
+                float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "3600")), started_at=started,
+                preserve=lambda value: write_json(response_path, value, mode=0o444, exclusive=True))
+            normalized = parse_structured_content(content)
+            validate_json_schema(normalized, protocol["$defs"]["semanticDeltaPayload"], protocol)
+            write_json(target, normalized, mode=0o444, exclusive=True)
+            write_json(run_dir / ".staging" / f"{step_id}.semantic.api.json", response, mode=0o444, exclusive=True)
+            feedback_path.unlink(missing_ok=True)
+            return normalized
+        except CathedralsError as error:
+            append_failed_attempt(run_dir, step_id=f"{step_id}_semantic", attempt=attempt, phase="validation", prompt=prompt,
+                context=context, parameters=parameters, started_at=started, failure_class=error.failure_class, step_type="analysis",
+                output_hash=sha256_file(response_path) if response_path.exists() else None,
+                usage=read_json(response_path).get("usage", {}) if response_path.exists() else {})
+            if isinstance(error, SchemaError) and correction < 2:
+                feedback = f" Previous normalization failed: {error.reason}"
+                continue
+            if error.failure_class in RETRYABLE_PROVIDER_FAILURES and correction < 2:
+                feedback = " The provider returned no usable response; return the JSON normalization now."
+                continue
+            raise PausedError("Semantic normalization", f"{step_id} preserved its schema-valid artistic payload, but semantic normalization exhausted 3 attempts. Resume to continue without regenerating prose. Last problem: {error.reason}") from error
+    raise PausedError("Semantic normalization", f"{step_id} semantic normalization paused")
+
+
+def build_creative_packet(run_dir: Path, step_id: str, plan: dict, payload: dict, semantic: dict) -> dict:
+    architecture = committed_record(run_dir, "architecture")
+    geomancy = {item["technical_slot_id"]: item for item in ensure_frozen_geomancy(run_dir)["assignments"]}
+    artifacts, edges, compositions, scenes, endings = [], [], [], [], []
+    content_ids = {
+        item["technical_slot_id"]: ("scene", f"scene_{item['technical_slot_id'].removeprefix('scene_slot_')}")
+        for item in payload["scenes"]
+    } | {
+        item["technical_slot_id"]: ("ending", f"ending_{item['technical_slot_id'].removeprefix('ending_slot_')}")
+        for item in payload["endings"]
+    }
+
+    def expand(item: dict, kind: str) -> tuple[dict, list[dict], list[dict], list[dict]]:
+        slot = item["technical_slot_id"]
+        content_id = content_ids[slot][1]
+        local_artifacts = [artifact | {"artifact_id": deterministic_id("artifact", run_dir.name, slot, index)} for index, artifact in enumerate(item["artifacts"], 1)]
+        local_edges = []
+        for index, choice in enumerate(item["choices"], 1):
+            edge_id = deterministic_id("edge", run_dir.name, slot, index)
+            local_edges.append(choice | {"edge_id": edge_id, "from_content_id": content_id,
+                "decision_group_id": deterministic_id("decision_group", run_dir.name, slot) if choice["major_decision"] else None})
+        local_compositions = [composition | {"composition_id": deterministic_id("composition", run_dir.name, slot, index), "container_id": content_id} for index, composition in enumerate(item["formal_compositions"], 1)]
+        body = {key: value for key, value in item.items() if key not in {"artifacts", "choices", "formal_compositions"}}
+        if kind == "scene":
+            assignment = geomancy[slot]
+            body |= {"scene_id": content_id, "threshold_figure": assignment["figure"], "threshold_resultant": assignment["resultant"],
+                "artifact_ids": [value["artifact_id"] for value in local_artifacts], "choice_edge_ids": [value["edge_id"] for value in local_edges]}
+        else:
+            attractor_id = plan["attractor_ids"][len(endings) % len(plan["attractor_ids"])]
+            attractor = next(value for value in architecture["attractors"] if value["attractor_id"] == attractor_id)
+            evidence = [source["artifact_id"] for obligation_id in attractor["prerequisite_obligation_ids"] for source in _read_state_map(run_dir, "obligations.json").get(obligation_id, {}).get("resolution_event", {}).get("sources", [])]
+            body |= {"ending_id": content_id, "attractor_id": attractor_id,
+                "satisfied_prerequisite_obligation_ids": attractor["prerequisite_obligation_ids"],
+                "prerequisite_evidence_source_ids": sorted(set(evidence)) or [content_id]}
+        return body, local_artifacts, local_edges, local_compositions
+
+    for item in payload["scenes"]:
+        body, local_artifacts, local_edges, local_compositions = expand(item, "scene")
+        scenes.append(body); artifacts += local_artifacts; edges += local_edges; compositions += local_compositions
+    for item in payload["endings"]:
+        body, local_artifacts, local_edges, local_compositions = expand(item, "ending")
+        endings.append(body); artifacts += local_artifacts; edges += local_edges; compositions += local_compositions
+    delta = build_semantic_delta(run_dir, step_id, semantic, content_ids)
+    return record_envelope(run_dir, "creative_packet", step_id) | {
+        "architecture_core_commit_id": architecture["architecture_core_commit_id"],
+        "packet_plan_commit_id": plan_batch_for(run_dir, plan["packet_slot_id"])["commit_id"], "story_format": "web",
+        "packet_slot_id": plan["packet_slot_id"], "packet_kind": plan["packet_kind"],
+        "packet_sequence": 1 + len(committed_records(run_dir, "creative_packet")),
+        "obligations_advanced": sorted({item["obligation_id"] for item in delta["obligation_updates"]}),
+        "scenes": scenes, "artifacts": artifacts, "endings": endings, "decision_edges": edges,
+        "formal_compositions": compositions, "constraint_delta": delta,
+    }
+
+
 def validate_genesis_foundation(record: dict, run_dir: Path) -> None:
     brief = read_json(run_dir / "generation-brief.json")
     if record["generation_id"] != brief["generation_id"] or record["story_format"] != "web":
@@ -2607,16 +2963,23 @@ def validate_genesis_cast(record: dict, run_dir: Path) -> None:
     foundation = committed_record(run_dir, "genesis_foundation")
     if not foundation or record["foundation_commit_id"] != foundation["commit_id"]:
         raise SchemaError("Genesis cast does not descend from the committed foundation")
-    anchors = {item["claimant_id"]: item for item in foundation["claimant_anchors"]}
-    claimants = {item["claimant_id"]: item for item in record["claimants"]}
-    if set(anchors) != set(claimants):
-        raise SchemaError("Genesis cast must expand exactly the five committed claimant anchors")
-    for claimant_id, anchor in anchors.items():
-        claimant = claimants[claimant_id]
-        if any(claimant[key] != anchor[key] for key in ("technical_slot_id", "name", "incident_role")):
-            raise SchemaError(f"Genesis cast changed committed claimant anchor {claimant_id}")
+    anchor_ids = {item["claimant_id"] for item in foundation["claimant_anchors"]}
+    claimant_ids = [item["claimant_id"] for item in record["claimants"]]
+    missing = sorted(anchor_ids - set(claimant_ids))
+    unexpected = sorted(set(claimant_ids) - anchor_ids)
+    duplicates = sorted({item for item in claimant_ids if claimant_ids.count(item) > 1})
+    problems = []
+    if missing:
+        problems.append("missing: " + ", ".join(missing))
+    if unexpected:
+        problems.append("unexpected: " + ", ".join(unexpected))
+    if duplicates:
+        problems.append("duplicated: " + ", ".join(duplicates))
+    if problems:
+        raise SchemaError("Genesis cast claimant IDs do not match committed anchors; " + "; ".join(problems))
+    claimants = set(claimant_ids)
     character_ids = {item["character_id"] for item in record["characters"]}
-    if not set(foundation["work_canon"]["central_incident"]["subjects"]).issubset(set(claimants) | character_ids):
+    if not set(foundation["work_canon"]["central_incident"]["subjects"]).issubset(claimants | character_ids):
         raise SchemaError("Genesis cast did not define every central-incident subject anchored by the foundation")
 
 
@@ -2897,6 +3260,10 @@ def compact_schema(run_dir: Path, record_type: str) -> str:
     return json.dumps(record_schema(record_type, load_protocol(run_dir)), ensure_ascii=False, separators=(",", ":"))
 
 
+def compact_definition(run_dir: Path, definition: str) -> str:
+    return json.dumps(definition_schema(definition, load_protocol(run_dir)), ensure_ascii=False, separators=(",", ":"))
+
+
 def genesis_foundation_prompt(run_dir: Path) -> tuple[str, str]:
     manifest = read_json(run_dir / "run-manifest.json")
     context = bounded_context(
@@ -2909,7 +3276,7 @@ def genesis_foundation_prompt(run_dir: Path) -> tuple[str, str]:
     return render_prompt(
         run_dir,
         "generation-genesis.md",
-        {"FROZEN_GENESIS_CONTEXT": context, "GENESIS_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "genesis_foundation")},
+        {"FROZEN_GENESIS_CONTEXT": context + "\n\nUse claimant_01 through claimant_05 wherever canon needs claimant join keys. The engine adds envelopes, commit IDs, claimant IDs, and technical slots.", "GENESIS_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "genesisFoundationPayload")},
     ), context
 
 
@@ -2925,7 +3292,7 @@ def genesis_cast_prompt(run_dir: Path) -> tuple[str, str]:
     return render_prompt(
         run_dir,
         "generation-genesis-cast.md",
-        {"GENESIS_CAST_CONTEXT": context, "GENESIS_CAST_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "genesis_cast")},
+        {"GENESIS_CAST_CONTEXT": context + "\n\nReturn expansions keyed only by the five committed claimant IDs. The engine adds character IDs and record metadata.", "GENESIS_CAST_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "genesisCastPayload")},
     ), context
 
 
@@ -2943,7 +3310,7 @@ def genesis_constraints_prompt(run_dir: Path) -> tuple[str, str]:
         "generation-genesis-constraints.md",
         {
             "GENESIS_CONSTRAINT_CONTEXT": context,
-            "GENESIS_CONSTRAINT_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "genesis_constraints"),
+            "GENESIS_CONSTRAINT_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "semanticDeltaPayload"),
         },
     ), context
 
@@ -2963,7 +3330,7 @@ def architecture_core_prompt(run_dir: Path) -> tuple[str, str]:
         "generation-architecture.md",
         {
             "FROZEN_ARCHITECTURE_CONTEXT": context,
-            "ARCHITECTURE_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "architecture_core"),
+            "ARCHITECTURE_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "architectureCorePayload"),
         },
     ), context
 
@@ -3003,7 +3370,7 @@ def architecture_plan_prompt(run_dir: Path, specs: list[dict], sequence: int, co
         {
             "ARCHITECTURE_PLAN_CONTEXT": context,
             "ARCHITECTURE_PLAN_ALLOCATIONS": json.dumps(allocation, ensure_ascii=False, indent=2),
-            "ARCHITECTURE_PLAN_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "architecture_plan_batch"),
+            "ARCHITECTURE_PLAN_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "architecturePlanBatchPayload"),
         },
     ), context
 
@@ -3022,20 +3389,20 @@ def packet_prompt(run_dir: Path, architecture: dict, plan: dict) -> tuple[str, s
         },
         ensure_ascii=False,
         indent=2,
-    )
+    ) + "\n\nAuthor only the assigned scenes or endings. Nest each artifact, choice, and formal composition under its owning content. Fill every listed technical slot exactly once and meet the allocated artifact/composition totals. The engine supplies IDs, envelopes, sequences, parent commits, geomancy, reverse references, provenance, and semantic constraint metadata."
     if plan["packet_kind"] == "literary":
         name = "generation-packet.md"
         replacements = {
             "PACKET_CONTEXT": context,
             "PACKET_OBLIGATIONS": obligations,
-            "PACKET_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "creative_packet"),
+            "PACKET_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "creativePacketPayload"),
         }
     else:
         name = "generation-ending-packet.md"
         replacements = {
             "ENDING_PACKET_CONTEXT": context,
             "ENDING_PACKET_OBLIGATIONS": obligations,
-            "ENDING_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "creative_packet"),
+            "ENDING_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "creativePacketPayload"),
         }
     return render_prompt(run_dir, name, replacements), context
 
@@ -3146,6 +3513,13 @@ def request_packet_slice(run_dir: Path, architecture: dict, plan: dict, transpor
             temperature=0.85 if plan["packet_kind"] == "literary" else 0.75,
             max_tokens=maximum,
             transport=transport,
+            response_definition="creativePacketPayload",
+            payload_validator=lambda payload: validate_packet_payload_for_run(payload, run_dir, plan),
+            payload_preserver=lambda payload, content, response: preserve_packet_payload(run_dir, expanded_id, payload, content, response),
+            record_builder=lambda payload: build_creative_packet(
+                run_dir, expanded_id, plan, payload,
+                request_semantic_normalization(run_dir, expanded_id, payload, context, transport),
+            ),
             precommit_validator=lambda record: validate_packet_for_run(record, run_dir, plan),
         )
         return
@@ -3161,6 +3535,13 @@ def request_packet_slice(run_dir: Path, architecture: dict, plan: dict, transpor
             branch_relation=plan["branch_path_relation"],
             temperature=0.85 if plan["packet_kind"] == "literary" else 0.75,
             transport=transport,
+            response_definition="creativePacketPayload",
+            payload_validator=lambda payload: validate_packet_payload_for_run(payload, run_dir, plan),
+            payload_preserver=lambda payload, content, response: preserve_packet_payload(run_dir, step_id, payload, content, response),
+            record_builder=lambda payload: build_creative_packet(
+                run_dir, step_id, plan, payload,
+                request_semantic_normalization(run_dir, step_id, payload, context, transport),
+            ),
             precommit_validator=lambda record: validate_packet_for_run(record, run_dir, plan),
         )
     except TruncationError:
@@ -3209,6 +3590,8 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
             branch_relation="generated_root_foundation",
             temperature=0.8,
             transport=transport,
+            response_definition="genesisFoundationPayload",
+            record_builder=lambda payload: build_genesis_foundation(run_dir, payload),
             precommit_validator=lambda record: validate_genesis_foundation(record, run_dir),
         )
     if not committed_record(run_dir, "genesis_cast"):
@@ -3223,6 +3606,8 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
             branch_relation="generated_root_cast",
             temperature=0.8,
             transport=transport,
+            response_definition="genesisCastPayload",
+            record_builder=lambda payload: build_genesis_cast(run_dir, payload),
             precommit_validator=lambda record: validate_genesis_cast(record, run_dir),
         )
     if not committed_record(run_dir, "genesis_constraints"):
@@ -3237,6 +3622,8 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
             branch_relation="generated_root_constraints",
             temperature=0.4,
             transport=transport,
+            response_definition="semanticDeltaPayload",
+            record_builder=lambda payload: build_genesis_constraints(run_dir, payload),
             precommit_validator=lambda record: validate_genesis_constraints(record, run_dir),
         )
     output_fn("[03] Genesis                       ✓ committed (3 bounded records)")
@@ -3253,6 +3640,8 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
             branch_relation="macroarchitecture",
             temperature=0.7,
             transport=transport,
+            response_definition="architectureCorePayload",
+            record_builder=lambda payload: build_architecture_core(run_dir, payload),
             precommit_validator=lambda record: validate_architecture_core_for_run(record, run_dir),
         )
     core = committed_record(run_dir, "architecture_core")
@@ -3271,6 +3660,10 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
             branch_relation="macroarchitecture_plan_batch",
             temperature=0.65,
             transport=transport,
+            response_definition="architecturePlanBatchPayload",
+            record_builder=lambda payload, frozen_specs=specs, frozen_sequence=sequence: build_architecture_plan_batch(
+                run_dir, payload, frozen_specs, frozen_sequence, len(batches)
+            ),
             precommit_validator=lambda record, frozen_specs=specs, frozen_sequence=sequence: validate_architecture_plan_batch(
                 record, run_dir, frozen_specs, frozen_sequence, len(batches)
             ),
@@ -3353,11 +3746,14 @@ def _mix_hex(first: str, second: str, first_weight: float) -> str:
 
 
 def _force_contrast(foreground: str, backgrounds: tuple[str, ...], minimum: float) -> str:
-    for step in range(101):
-        candidate = _mix_hex(foreground, "#000000", 1 - step / 100)
-        if all(contrast_ratio(candidate, background) >= minimum for background in backgrounds):
-            return candidate
-    return "#000000"
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", foreground):
+        foreground = "#777777"
+    for target in ("#000000", "#ffffff"):
+        for step in range(101):
+            candidate = _mix_hex(foreground, target, 1 - step / 100)
+            if all(contrast_ratio(candidate, background) >= minimum for background in backgrounds):
+                return candidate
+    return max(("#000000", "#ffffff"), key=lambda value: min(contrast_ratio(value, background) for background in backgrounds))
 
 
 def light_art_direction_palette(direction: dict) -> dict[str, str]:
@@ -3471,10 +3867,16 @@ def validate_complete_work(run_dir: Path) -> dict:
     ]
     by_slot = {packet["packet_slot_id"]: packet for packet in packets}
     reasons = []
+    warnings = []
+
+    def warn(code: str, message: str) -> None:
+        warnings.append({"stage": "mechanical_validation", "code": code, "message": message})
     if set(by_slot) != {plan["packet_slot_id"] for plan in required_plans}:
         reasons.append("Committed packets do not match the current lawful plan after prospective foreclosure.")
-    if any(status in {"endangered", "universally_required_but_impossible"} for status in feasibility.values()):
-        reasons.append("An ending attractor remains endangered or universally impossible at completion.")
+    if any(status == "universally_required_but_impossible" for status in feasibility.values()):
+        reasons.append("An ending attractor is universally impossible at completion.")
+    elif any(status == "endangered" for status in feasibility.values()):
+        warn("endangered_attractor", "An ending attractor remains endangered at completion.")
     scenes = [item for packet in packets for item in packet["scenes"]]
     artifacts = [item for packet in packets for item in packet["artifacts"]]
     endings = [item for packet in packets for item in packet["endings"]]
@@ -3519,21 +3921,21 @@ def validate_complete_work(run_dir: Path) -> dict:
         if any(edge_by_id[edge_id]["from_content_id"] != scene["scene_id"] for edge_id in scene["choice_edge_ids"] if edge_id in edge_by_id):
             reasons.append(f"Scene {scene['scene_id']} claims an edge owned by different content.")
         if scene["major_decision"] and not scene["hesitation_consequence"]:
-            reasons.append(f"Major decision {scene['scene_id']} has no consequential hesitation.")
+            warn("missing_hesitation_consequence", f"Major decision {scene['scene_id']} has no consequential hesitation.")
         try:
             validate_markdown_source(scene["prose_mdx"], f"Scene {scene['scene_id']}")
         except SchemaError:
             reasons.append(f"Scene {scene['scene_id']} contains unsafe generated Markdown.")
     for artifact in artifacts:
         if literary_word_count(artifact["body_mdx"]) > 350:
-            reasons.append(f"Artifact {artifact['artifact_id']} exceeds the 350-word hard limit.")
+            warn("artifact_word_target", f"Artifact {artifact['artifact_id']} exceeds the 350-word target.")
         try:
             validate_markdown_source(artifact["body_mdx"], f"Artifact {artifact['artifact_id']}")
         except SchemaError:
             reasons.append(f"Artifact {artifact['artifact_id']} contains unsafe generated Markdown.")
     for ending in endings:
         if literary_word_count(ending["prose_mdx"]) > 500:
-            reasons.append(f"Ending {ending['ending_id']} exceeds the 500-word hard limit.")
+            warn("ending_word_target", f"Ending {ending['ending_id']} exceeds the 500-word target.")
         try:
             validate_markdown_source(ending["prose_mdx"], f"Ending {ending['ending_id']}")
         except SchemaError:
@@ -3543,14 +3945,14 @@ def validate_complete_work(run_dir: Path) -> dict:
         if edge["decision_group_id"] is not None:
             groups.setdefault(edge["decision_group_id"], []).append(edge)
     if any(not 2 <= len(group) <= 5 for group in groups.values()):
-        reasons.append("A decision group does not contain two to five prebuilt choices.")
+        warn("decision_group_shape", "A decision group does not contain two to five prebuilt choices.")
     ordered_scenes = sorted(scenes, key=lambda scene: scene["technical_slot_id"])
     playable_choice_count = lambda scene: sum(edge_by_id[edge_id]["availability"] == "playable" for edge_id in scene["choice_edge_ids"] if edge_id in edge_by_id)
     first_hub = next((index for index, scene in enumerate(ordered_scenes) if playable_choice_count(scene) >= 2), None)
     if first_hub is None or not 3 <= first_hub <= 5:
-        reasons.append("The first live hub does not follow three to five scene surfaces.")
+        warn("opening_hub_shape", "The first live hub does not follow three to five scene surfaces.")
     elif playable_choice_count(ordered_scenes[first_hub]) != 3:
-        reasons.append("The first live hub does not expose exactly three choices.")
+        warn("opening_hub_shape", "The first live hub does not expose exactly three choices.")
     if ordered_scenes:
         reachable = {ordered_scenes[0]["scene_id"]}
         changed = True
@@ -3562,9 +3964,9 @@ def validate_complete_work(run_dir: Path) -> dict:
                     changed = True
         missing_content = content_ids - reachable
         if missing_content:
-            reasons.append(f"Committed content is unreachable from the entry scene: {', '.join(sorted(missing_content)[:8])}.")
+            warn("reachability_quality", f"Committed content is unreachable from the entry scene: {', '.join(sorted(missing_content)[:8])}.")
     if len({scene["branch_depth"] for scene in scenes}) < 2:
-        reasons.append("Branch depth is uniform rather than meaningfully unequal.")
+        warn("branch_depth_quality", "Branch depth is uniform rather than meaningfully unequal.")
     containers = content_ids | artifact_ids
     if any(item["container_id"] not in containers for item in compositions):
         reasons.append("A formal composition anchor container does not resolve.")
@@ -3602,7 +4004,7 @@ def validate_complete_work(run_dir: Path) -> dict:
         obligation = event["data"]
         status = obligation["status"]
         if status == "active":
-            reasons.append(f"Future obligation {identifier} remained active without deliberate resolution.")
+            warn("residual_obligation", f"Future obligation {identifier} remained active without deliberate resolution.")
         if obligation["hardness"] == "hard" and obligation["universality"] == "universal" and status in {"foreclosed", "impossible"}:
             reasons.append(f"Universal hard obligation {identifier} was unlawfully discarded.")
         if status in {"satisfied", "foreclosed", "impossible", "intentionally_unresolved"} and "resolution_event" not in event:
@@ -3670,6 +4072,7 @@ def validate_complete_work(run_dir: Path) -> dict:
         reasons.append("An irreversibility counter is nonzero.")
     verdict = {"result": "FAIL" if reasons else "PASS", "reasons": reasons or ["All committed records, counts, references, budgets, and complete-work constraints are mechanically valid."]}
     write_json(run_dir / "validation/mechanical.json", verdict)
+    write_json(run_dir / "validation/warnings.json", warnings)
     append_deterministic_step(run_dir, "mechanical_validation", "validation", sha256_bytes(canonical_json(verdict)))
     return verdict
 
@@ -3980,6 +4383,73 @@ def parse_node_version(value: str) -> tuple[int, int, int] | None:
     return tuple(map(int, match.groups())) if match else None
 
 
+def baseline_markdown(value: str) -> str:
+    blocks = []
+    for block in re.split(r"\n\s*\n", value.strip()):
+        escaped = html.escape(block.strip())
+        if escaped.startswith("### "):
+            blocks.append(f"<h3>{escaped[4:]}</h3>")
+        elif escaped.startswith("## "):
+            blocks.append(f"<h2>{escaped[3:]}</h2>")
+        elif escaped.startswith("# "):
+            blocks.append(f"<h1>{escaped[2:]}</h1>")
+        else:
+            blocks.append(f"<p>{escaped.replace(chr(10), '<br>')}</p>")
+    return "\n".join(blocks)
+
+
+def build_static_baseline(project: Path) -> None:
+    work = read_json(project / "public/work.json")
+    destination = project / "dist"
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True)
+    for name in ("work.json", "style.css", "state.js", "theme.js"):
+        shutil.copy2(project / "public" / name, destination / name)
+
+    def page(title: str, body: str, *, current=None, effects=None) -> str:
+        attributes = ""
+        scripts = '<script src="/theme.js"></script>'
+        if current:
+            attributes = f' data-generation="{html.escape(work["generation_id"])}" data-current="{html.escape(current)}" data-effects="{html.escape(json.dumps(effects or []), quote=True)}"'
+            scripts += '<script src="/state.js"></script>'
+        return f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="/style.css"><title>{html.escape(title)}</title></head><body{attributes}><button class="theme-toggle" aria-label="Switch day or night theme">◐</button><main>{body}</main>{scripts}</body></html>'
+
+    entry = work["entry_content_id"]
+    index = f'<div class="kicker">{html.escape(work["project_name"])}</div><h1>{html.escape(work["generated_title"])}</h1><p>A complete static Cathedrals work.</p><a class="begin" href="/scenes/{html.escape(entry)}/">Enter the work</a>'
+    write_atomic(destination / "index.html", page(work["generated_title"], index).encode())
+    scene_ids = {item["scene_id"] for item in work["scenes"]}
+    artifacts = {item["artifact_id"]: item for item in work["artifacts"]}
+    edges = {}
+    for edge in work["decision_edges"]:
+        if edge["availability"] == "playable":
+            edges.setdefault(edge["from_content_id"], []).append(edge)
+
+    def link_for(identifier: str) -> str:
+        return f"/scenes/{identifier}/" if identifier in scene_ids else f"/endings/{identifier}/"
+
+    for scene in work["scenes"]:
+        body = f'<header><div class="kicker">{html.escape(work["generated_title"])}</div><h1>{html.escape(scene["title"])}</h1><div class="trace" aria-live="polite"></div></header><article><div class="prose">{baseline_markdown(scene["prose_mdx"])}</div>'
+        for identifier in scene["artifact_ids"]:
+            artifact = artifacts.get(identifier)
+            if artifact:
+                body += f'<details><summary>{html.escape(artifact["title"])}</summary><div class="artifact-body">{baseline_markdown(artifact["body_mdx"])}</div><a href="/artifacts/{identifier}/">Open as evidence</a></details>'
+        body += '<nav class="choices" aria-label="Story choices">'
+        for edge in edges.get(scene["scene_id"], []):
+            body += f'<a class="choice" href="{link_for(edge["resolved_content_id"])}" data-conditions="{html.escape(json.dumps(edge["state_conditions"]), quote=True)}" data-effects="{html.escape(json.dumps(edge["state_effects"]), quote=True)}">{html.escape(edge["label"])}</a>'
+        body += "</nav></article>"
+        target = destination / "scenes" / scene["scene_id"] / "index.html"
+        write_atomic(target, page(f'{scene["title"]} · {work["generated_title"]}', body, current=scene["scene_id"], effects=scene["state_effects"]).encode())
+    for ending in work["endings"]:
+        body = f'<header><div class="kicker">Ending · {html.escape(work["generated_title"])}</div><h1>{html.escape(ending["title"])}</h1><div class="trace" aria-live="polite"></div></header><div class="prose">{baseline_markdown(ending["prose_mdx"])}</div><button class="reset">Start over</button>'
+        target = destination / "endings" / ending["ending_id"] / "index.html"
+        write_atomic(target, page(f'{ending["title"]} · {work["generated_title"]}', body, current=ending["ending_id"], effects=ending["state_effects"]).encode())
+    for artifact in work["artifacts"]:
+        body = f'<header><div class="kicker">Evidence · {html.escape(work["generated_title"])}</div><h1>{html.escape(artifact["title"])}</h1></header><div class="artifact-body">{baseline_markdown(artifact["body_mdx"])}</div><a class="begin" href="/">Return to work</a>'
+        target = destination / "artifacts" / artifact["artifact_id"] / "index.html"
+        write_atomic(target, page(f'{artifact["title"]} · {work["generated_title"]}', body).encode())
+
+
 def download(url: str, destination: Path) -> None:
     request = urllib.request.Request(url, headers={"User-Agent": "Cathedrals generator"})
     with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as handle:
@@ -4024,25 +4494,39 @@ def ensure_node(output_fn=print) -> tuple[Path, Path]:
 
 
 def build_web(run_dir: Path, project: Path, output_fn=print) -> dict:
-    node, npm = ensure_node(output_fn)
-    environment = os.environ.copy()
-    environment["PATH"] = str(node.parent) + os.pathsep + environment.get("PATH", "")
-    environment["npm_config_cache"] = str(RUNTIME_ROOT / "cache/npm")
-    install = run_command([npm, "install", "--no-audit", "--no-fund"], cwd=project, env=environment)
-    (run_dir / "logs/npm-install.log").write_text(install.stdout + install.stderr, encoding="utf-8")
-    if install.returncode:
-        raise CathedralsError("Astro dependency install", "npm install failed; see the run log", "build_failure")
-    build = run_command([npm, "run", "build"], cwd=project, env=environment)
-    (run_dir / "logs/astro-build.log").write_text(build.stdout + build.stderr, encoding="utf-8")
-    if build.returncode:
-        raise CathedralsError("Astro build", "Astro static build failed; see the run log", "build_failure")
+    build_static_baseline(project)
+    work = read_json(project / "public/work.json")
     required = [project / "dist/index.html", project / "dist/work.json"]
-    reasons = [f"Missing static build output: {path.name}" for path in required if not path.exists()]
-    verdict = {"result": "FAIL" if reasons else "PASS", "reasons": reasons or ["Astro emitted the complete static reader and immutable work data."]}
+    required += [project / "dist/scenes" / item["scene_id"] / "index.html" for item in work["scenes"]]
+    required += [project / "dist/endings" / item["ending_id"] / "index.html" for item in work["endings"]]
+    required += [project / "dist/artifacts" / item["artifact_id"] / "index.html" for item in work["artifacts"]]
+    reasons = [f"Missing static build output: {path.relative_to(project / 'dist')}" for path in required if not path.exists()]
+    verdict = {"result": "FAIL" if reasons else "PASS", "reasons": reasons or ["The dependency-free static baseline emitted a complete reader and immutable work data."]}
     write_json(run_dir / "validation/build.json", verdict)
     if reasons:
         raise CathedralsError("Static build validation", reasons[0], "build_failure")
-    append_deterministic_step(run_dir, "static_astro_build", "build_validation", sha256_bytes(canonical_json(verdict)))
+    enhancement = {"result": "NOT_RUN", "reasons": ["No checked-in npm lockfile is present; the dependency-free baseline is the published build."]}
+    lockfile = project / "package-lock.json"
+    if lockfile.exists():
+        try:
+            node, npm = ensure_node(output_fn)
+            environment = os.environ.copy()
+            environment["PATH"] = str(node.parent) + os.pathsep + environment.get("PATH", "")
+            environment["npm_config_cache"] = str(RUNTIME_ROOT / "cache/npm")
+            install = run_command([npm, "ci", "--offline", "--no-audit", "--no-fund"], cwd=project, env=environment)
+            write_atomic(run_dir / "logs/npm-ci.log", (install.stdout + install.stderr).encode())
+            if install.returncode:
+                enhancement = {"result": "WARNING", "reasons": ["Optional npm enhancement could not install from the local cache; baseline retained."]}
+            else:
+                build = run_command([npm, "run", "build"], cwd=project, env=environment)
+                write_atomic(run_dir / "logs/astro-build.log", (build.stdout + build.stderr).encode())
+                enhancement = {"result": "PASS", "reasons": ["Locked optional Astro enhancement built successfully."]} if not build.returncode else {"result": "WARNING", "reasons": ["Optional Astro enhancement failed; baseline retained."]}
+                if build.returncode:
+                    build_static_baseline(project)
+        except CathedralsError as error:
+            enhancement = {"result": "WARNING", "reasons": [f"Optional npm enhancement unavailable: {error.reason}"]}
+    write_json(run_dir / "validation/npm-enhancement.json", enhancement)
+    append_deterministic_step(run_dir, "static_baseline_build", "build_validation", sha256_bytes(canonical_json(verdict)))
     return verdict
 
 
@@ -4097,6 +4581,8 @@ def make_finalization(run_dir: Path, status: str, failure_class: str, reason: st
     mechanical = read_json(run_dir / "validation/mechanical.json") if (run_dir / "validation/mechanical.json").exists() else {"result": "NOT_RUN", "reasons": [reason or "Not reached."]}
     artistic = read_json(run_dir / "validation/artistic.json") if (run_dir / "validation/artistic.json").exists() else {"result": "NOT_RUN", "reasons": [reason or "Not reached."]}
     build = read_json(run_dir / "validation/build.json") if (run_dir / "validation/build.json").exists() else {"result": "NOT_RUN", "reasons": [reason or "Not reached."]}
+    warnings = read_json(run_dir / "validation/warnings.json") if (run_dir / "validation/warnings.json").exists() else []
+    enhancement = read_json(run_dir / "validation/npm-enhancement.json") if (run_dir / "validation/npm-enhancement.json").exists() else {"result": "NOT_RUN", "reasons": ["Not reached."]}
     ready = status == "READY_TO_PLAY"
     if not ready and reason:
         target = mechanical if mechanical["result"] == "NOT_RUN" else build if build["result"] == "NOT_RUN" else None
@@ -4126,6 +4612,8 @@ def make_finalization(run_dir: Path, status: str, failure_class: str, reason: st
         "mechanical_validation": mechanical,
         "artistic_acceptance": artistic,
         "static_build_validation": build,
+        "warnings": warnings,
+        "npm_enhancement": enhancement,
         "complete_work_barrier_satisfied": ready,
         "playable": ready,
         "failure_class": failure_class,
@@ -4196,17 +4684,58 @@ def finalize_failure(run_dir: Path, error: CathedralsError) -> dict:
     return finalization
 
 
-def ensure_resume_ready(run_dir: Path, output_fn=print, transport=http_json) -> None:
+def ensure_resume_ready(run_dir: Path, output_fn=print, transport=http_json, input_fn=input) -> None:
     state = load_state(run_dir)
     reconcile_run(run_dir)
     brief = read_json(run_dir / "generation-brief.json")
     payload = transport("GET", api_url(brief["lm_studio_base_url"], "/v1/models"), timeout=10.0)
-    if state["model"] not in usable_model_ids(payload):
-        raise CathedralsError("Resume preflight", f"Frozen model {state['model']!r} is no longer visible to LM Studio.", "provider_before_creative_output")
+    models = usable_model_ids(payload)
+    override = os.environ.get("CATHEDRALS_MODEL")
+    if override or state["model"] not in models:
+        state["model"] = choose_model(models, override, input_fn, output_fn)
     context_limit = preflight_model_capacity(brief["lm_studio_base_url"], state["model"], output_fn, transport)
     if isinstance(context_limit, int):
         state["model_context_window_tokens"] = context_limit
         save_state(run_dir, state)
+
+
+def run_snapshot_launcher(run_dir: Path, argv, input_fn, output_fn, transport) -> int:
+    launcher = snapshot_root(run_dir) / "cathedrals"
+    name = f"cathedrals_snapshot_{sha256_bytes(str(launcher).encode())[:12]}"
+    loader = importlib.machinery.SourceFileLoader(name, str(launcher))
+    spec = importlib.util.spec_from_loader(name, loader)
+    if not spec or not spec.loader:
+        raise IntegrityError("The run-local launcher cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    previous_bytecode_setting = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous_bytecode_setting
+    module.ROOT = ROOT
+    module.RUNTIME_ROOT = RUNTIME_ROOT
+    module.RUNS_ROOT = RUNS_ROOT
+    module.choose_resume = lambda input_fn=input_fn, output_fn=output_fn: run_dir
+    return module.main(argv, input_fn=input_fn, output_fn=output_fn, transport=transport)
+
+
+def pause_run(run_dir: Path, error: PausedError) -> None:
+    state = load_state(run_dir)
+    state["status"] = "PAUSED_GENERATION"
+    state["stage"] = error.stage
+    state["pause_reason"] = error.reason
+    state.pop("completed_at", None)
+    save_state(run_dir, state)
+
+
+def print_pause(run_dir: Path, error: PausedError, output_fn=print) -> None:
+    output_fn("\nPAUSED_GENERATION\n")
+    output_fn(f"Generation:\n{run_dir.name}\n")
+    output_fn(f"Pause stage:\n{error.stage}\n")
+    output_fn(f"Reason:\n{error.reason}\n")
+    output_fn("Committed work and any schema-valid staged artistic payload were preserved.\nRun ./cathedrals to resume.")
 
 
 def execute_run(run_dir: Path, output_fn=print, transport=http_json) -> tuple[Path, dict, dict]:
@@ -4219,14 +4748,18 @@ def execute_run(run_dir: Path, output_fn=print, transport=http_json) -> tuple[Pa
     if mechanical["result"] != "PASS":
         raise CathedralsError("Mechanical validation", mechanical["reasons"][0], "mechanical_validation")
     output_fn("[06] Mechanical validation          ✓")
-    output_fn("[07] Static Astro build             …")
+    output_fn("[07] Static baseline build          …")
     build_web(run_dir, project, output_fn)
-    output_fn("[07] Static Astro build             ✓")
-    output_fn("[08] Whole-work artistic acceptance …")
-    artistic = artistic_acceptance(run_dir, transport=transport)
-    if artistic["result"] != "PASS":
-        raise CathedralsError("Whole-work artistic acceptance", artistic["reasons"][0], "artistic_rejection")
-    output_fn("[08] Whole-work artistic acceptance ✓")
+    output_fn("[07] Static baseline build          ✓")
+    artistic = {"result": "NOT_RUN", "reasons": ["Artistic review is advisory and is not part of the publication gate."]}
+    write_json(run_dir / "validation/artistic.json", artistic)
+    enhancement_path = run_dir / "validation/npm-enhancement.json"
+    enhancement = read_json(enhancement_path) if enhancement_path.exists() else {"result": "NOT_RUN", "reasons": ["Optional npm enhancement was not run."]}
+    warnings = read_json(run_dir / "validation/warnings.json") if (run_dir / "validation/warnings.json").exists() else []
+    if enhancement.get("result") != "PASS":
+        message = (enhancement.get("reasons") or ["Optional npm enhancement was not run."])[0]
+        warnings.append({"stage": "build", "code": "npm_enhancement_unavailable", "message": message})
+    write_json(run_dir / "validation/warnings.json", warnings)
     build_path, _ = finalize_success(run_dir, project)
     return build_path, counts, read_json(run_dir / "generation-brief.json")
 
@@ -4251,6 +4784,13 @@ def print_success(run_dir: Path, build_path: Path, counts: dict, brief: dict, ou
     output_fn(f"Artifacts: {counts['artifacts']}")
     output_fn(f"Endings: {counts['endings']}\n")
     output_fn(f"Build:\n{build_path}\n")
+    finalization_path = run_dir / "finalization.json"
+    warnings = read_json(finalization_path).get("warnings", []) if finalization_path.exists() else []
+    if warnings:
+        output_fn("Warnings:")
+        for warning in warnings:
+            output_fn(f"- {warning['message']}")
+        output_fn("")
     output_fn(f"Run:\npython3 -m http.server 4321 --directory {build_path}")
 
 
@@ -4262,9 +4802,12 @@ def main(argv=None, *, input_fn=input, output_fn=print, transport=http_json) -> 
         ensure_runtime_layout()
         run_dir = choose_resume(input_fn, output_fn)
         if run_dir:
-            ensure_resume_ready(run_dir, output_fn, transport)
+            launcher = snapshot_root(run_dir) / "cathedrals"
+            if launcher.exists() and Path(__file__).resolve() != launcher.resolve():
+                return run_snapshot_launcher(run_dir, argv, input_fn, output_fn, transport)
+            ensure_resume_ready(run_dir, output_fn, transport, input_fn)
             brief = read_json(run_dir / "generation-brief.json")
-            output_fn(f"Generation: {run_dir.name}\nFormat: web\nModel: {brief['model']}\nRequested scope: up to {brief['possible_scene_count']} scenes\n")
+            output_fn(f"Generation: {run_dir.name}\nFormat: web\nModel: {load_state(run_dir)['model']}\nRequested scope: up to {brief['possible_scene_count']} scenes\n")
             output_fn("[01] Preflight                     ✓ resumed")
             output_fn("[02] Engine snapshot              ✓ verified")
         else:
@@ -4290,7 +4833,19 @@ def main(argv=None, *, input_fn=input, output_fn=print, transport=http_json) -> 
         else:
             output_fn("\nCancelled before generation state was created.")
         return 130
+    except PausedError as error:
+        if run_dir and state_path(run_dir).exists():
+            pause_run(run_dir, error)
+            print_pause(run_dir, error, output_fn)
+        else:
+            output_fn(f"\nPAUSED_GENERATION\n{error.reason}")
+        return 2
     except CathedralsError as error:
+        if run_dir and state_path(run_dir).exists() and error.failure_class in PAUSABLE_FAILURES:
+            paused = PausedError(error.stage, error.reason, error.failure_class)
+            pause_run(run_dir, paused)
+            print_pause(run_dir, paused, output_fn)
+            return 2
         if run_dir and state_path(run_dir).exists():
             try:
                 finalize_failure(run_dir, error)

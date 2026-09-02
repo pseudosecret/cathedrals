@@ -30,14 +30,14 @@ After `./cathedrals` collects and freezes one explicit experience request:
 - source-grounded noncreative analysis calls that cannot author replacement fiction
 - append-only commits, ledgers, constraint events, audited prospective plans, and deterministic projections
 - graph, technical destinations, state, safe Markdown, continuity, resource, hash, and static-build validation
-- whole-work artistic acceptance after creative generation ends
+- advisory artistic diagnostics outside the publication gate
 
 ## Forbidden Actions
 
 - human creative steering after the run starts
 - fictional candidate generation followed by scoring, selection, or discard
 - overwrite, rewrite, regenerate, improve, or retcon any committed creative record
-- retry malformed but creatively substantive output
+- rewrite committed creative output during correction
 - treat artistic weakness as technical failure
 - publish or play a partial or failed work
 - generate missing content during play
@@ -45,7 +45,8 @@ After `./cathedrals` collects and freezes one explicit experience request:
 
 ## Failure
 
-Transport or provider failure before creative output may retry the identical planned
-step. Malformed output, impossible continuity, exhausted frozen budgets, failed
-mechanics, artistic rejection, or generated-content build failure ends the run. A
+Transport or provider failure may retry under the retry law. Invalid uncommitted
+structured output receives three corrective attempts, then pauses for explicit
+resume. Artistic weakness is a warning. Irrecoverable committed-history corruption
+or hard-budget exhaustion ends the run. A
 later attempt requires a new generation ID.
