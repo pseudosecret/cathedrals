@@ -46,7 +46,7 @@ required_generated_dimensions:
     - hesitation_and_retraction_pressure
 
 set_level_hard_constraints:
-  - "All five claimants must interact materially and dramatically with the annex."
+  - "All five claimants must interact materially and dramatically with the generated setting."
   - "All five must exert different interpretive pressures on the same generated incident."
   - "No two may have closely overlapping epistemic regimes."
   - "No two may rely primarily on the same evidence logic."
@@ -57,7 +57,7 @@ set_level_hard_constraints:
   - "At least one claimant must pressure truth through relational or experiential evidence."
   - "At least one claimant must establish a way of knowing the others initially struggle to assimilate."
   - "Claimants may overlap secondarily, but primary evidence and truth logic must remain distinct."
-  - "Every claimant must remain compatible with the engine ontology and hospice-annex frame."
+  - "Every claimant must remain compatible with the generated setting and engine ontology."
 
 set_level_soft_constraints:
   - "Prefer surprising but legible combinations over familiar mystery archetypes."

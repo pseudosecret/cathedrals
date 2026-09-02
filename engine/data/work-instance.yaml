@@ -184,18 +184,21 @@ authorship_boundary:
       - endings
 
 surface_container:
-  id: snowbound_hospice_annex
+  id: cathedral_setting
+
   fixed_law:
-    - "The work begins in an enclosed hospice annex under winter isolation."
-    - "Care, administration, rooms, records, personal traces, and material wear remain legible."
+    - "The work takes place in one concrete, bounded setting."
+    - "The setting must remain materially legible through spaces, objects, traces, routines, evidence, and physical change appropriate to that place."
     - "The reader initially investigates."
     - "Interpretation and commitment exert consequences on reality."
     - "Ambiguity cannot remain cost-free indefinitely."
+
   generated_particulars:
-    - exact_layout_and_rooms
+    - exact_setting_and_environment
+    - exact_layout_and_spaces
     - exact_people_and_relationships
-    - exact_records_objects_and_traces
-    - exact_history_of_the_annex
+    - exact_objects_evidence_and_traces
+    - exact_history_of_the_setting
 
 central_transgression:
   abstraction_level: event_class_only

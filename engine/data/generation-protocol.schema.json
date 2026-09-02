@@ -267,7 +267,7 @@
         "principal_tensions"
       ],
       "properties": {
-        "work_id": { "const": "hospice-annex-v01" },
+        "work_id": { "const": "cathedrals-v01" },
         "generated_title": { "$ref": "#/$defs/nonEmptyString" },
         "premise": { "$ref": "#/$defs/nonEmptyString" },
         "central_incident": {
@@ -356,7 +356,7 @@
         },
         "name": { "$ref": "#/$defs/nonEmptyString" },
         "incident_role": { "$ref": "#/$defs/nonEmptyString" },
-        "annex_relationship": { "$ref": "#/$defs/nonEmptyString" },
+        "setting_relationship": { "$ref": "#/$defs/nonEmptyString" },
         "occupation": { "type": ["string", "null"] },
         "personality": { "$ref": "#/$defs/nonEmptyString" },
         "epistemic_regime": { "$ref": "#/$defs/nonEmptyString" },

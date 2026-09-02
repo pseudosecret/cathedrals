@@ -73,7 +73,7 @@ not rewrite or regenerate it.
 The instrument supports one complete work at the frozen possible-scene scope with:
 
 - one surface setting
-- five claimants in the current `hospice-annex-v01` work instance
+- five claimants in the generated surface setting 
 - one generated incident inside an authored threshold-event class
 - one hidden contamination route
 - static build only

@@ -67,8 +67,8 @@ The setting and flavor is generated, but always keep elements like reader-as-jud
 mechanics, costly ambiguity, and threshold-event class in engine canon. Generate exact
 people, incident, chronology, records, objects, clues, relationships, mutations, and
 consequences. Preserve Cathedrals' thematic pressure around responsibility, emotional cost,
-feeling trapped (to a lesser extent), thresholds, admission/release, memory, documentation, absence, judgment,
-contradiction, commitment, and foreclosure.
+feeling trapped (to a lesser extent), thresholds, admission/release, memory/evidence, absence, judgment,
+contradiction.
 
 ## Branching, Geomancy, Prose, and Artifacts
 
