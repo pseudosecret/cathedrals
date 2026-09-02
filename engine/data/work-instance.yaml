@@ -200,12 +200,13 @@ surface_container:
     - exact_objects_evidence_and_traces
     - exact_history_of_the_setting
 
+
 central_transgression:
   abstraction_level: event_class_only
   class: >
-    A concrete threshold event involving admission, release, transfer, removal,
-    exclusion, or custodial responsibility occurred under mutually incompatible
-    circumstances.
+    A concrete threshold event involving entry, departure, transfer,
+    possession, obligation, recognition, exclusion, or responsibility
+    occurred under mutually incompatible circumstances.
   generated_particulars:
     - event_type
     - subject_or_subjects
@@ -262,13 +263,12 @@ aesthetic_attractor:
     artistic_identity: low
     fictional_instantiation: high
   pressures:
-    - institutional_materiality
-    - care_and_responsibility
-    - isolation_and_winter
-    - interior_enclosure
+    - material_consequence
+    - responsibility_and_obligation
+    - boundedness_and_separation
     - opening_closing_and_thresholds
-    - admission_release_and_exclusion
-    - memory_documentation_and_absence
+    - entry_departure_and_exclusion
+    - memory_evidence_and_absence
     - judgment_contradiction_and_implication
     - commitment_and_foreclosure
     - the_cost_of_refusing_commitment

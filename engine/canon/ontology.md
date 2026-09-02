@@ -6,7 +6,7 @@ The work takes place in a sealed, concrete location. It must offer concrete spac
 
 ## 2. Hidden Reality
 
-The annex is also a quarantined chamber for adjudication. It exists to pressure contradiction into coherence. It cannot sustain all possibilities indefinitely.
+The setting is also a quarantined chamber for adjudication. It exists to pressure contradiction into coherence. It cannot sustain all possibilities indefinitely.
 
 ## 3. The Reader
 
@@ -23,11 +23,9 @@ profiles are generated together in the cast record and freeze at its commit.
 
 ## 5. The Central Transgression
 
-The engine fixes only a class: a concrete threshold event involving admission,
-release, transfer, removal, exclusion, or custodial responsibility occurred under
-mutually incompatible circumstances. The generated work decides the event, subjects,
-chronology, evidence, culpability, relationships, and consequences. The transgression
-is concrete on the surface and metaphysical underneath.
+A concrete threshold event involving entry, departure, transfer,
+possession, obligation, recognition, exclusion, or responsibility
+occurred under mutually incompatible circumstances.
 
 ## 6. Action Semantics
 

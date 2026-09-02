@@ -916,7 +916,6 @@ def choose_resume(input_fn=input, output_fn=print) -> Path | None:
 def generated_ids(record: dict) -> list[str]:
     ids = [record.get("commit_id")]
     if record.get("record_type") == "genesis_foundation":
-        ids += [record["work_canon"]["work_id"]]
         ids += [item["event_id"] for item in record["work_canon"]["chronology"]]
         ids += [item["claimant_id"] for item in record["claimant_anchors"]]
     if record.get("record_type") == "genesis_cast":
