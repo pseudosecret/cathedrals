@@ -18,7 +18,8 @@ Claimants are not merely suspects. Each claimant is a pressure toward a specific
 
 There are exactly five claimant positions. Their identities, roles, relationships,
 ways of knowing, evidence logics, voices, and consequences do not exist before the
-genesis creative step. All five are generated together and freeze at its commit.
+Genesis sequence. Their minimal identities anchor in the foundation; all five full
+profiles are generated together in the cast record and freeze at its commit.
 
 ## 5. The Central Transgression
 

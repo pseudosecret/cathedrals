@@ -59,10 +59,10 @@ defense in depth.
 
 ## Generated Art Direction
 
-Genesis commits one bounded `web_art_direction` informed by the frozen brief. The
+The Genesis foundation commits one bounded `web_art_direction` informed by the frozen brief. The
 model selects only known typography classes, six parsed colors, density, border,
 surface, artifact, transition, ending, and route-pressure enums. Contrast validation
-runs before genesis commit. The deterministic projector maps those values to CSS
+runs before the Genesis foundation commit. The deterministic projector maps those values to CSS
 variables and known declarations inside a stable prose-first Cathedrals layout.
 The alternate reading theme is deterministically tinted from the committed palette;
 foregrounds are darkened only as far as needed to meet the same contrast floors.

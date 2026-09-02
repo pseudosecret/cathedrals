@@ -14,8 +14,8 @@ After `./cathedrals` collects and freezes one explicit experience request:
 3. use only the run-local engine copy and freeze seeds, explicit scene scope, model, derived budgets, and traversal strategy
 4. preflight every planned call against per-step and cumulative limits
 5. write the immutable run manifest and initialize the hash-chained ledger
-6. generate and commit genesis with `engine/prompts/generation-genesis.md`
-7. generate and commit architecture with `engine/prompts/generation-architecture.md`
+6. generate and commit the Genesis foundation, cast, and constraint records
+7. generate and commit the Architecture core, then all bounded plan batches
 8. recompute a prospective plan and follow immutable dependencies using `generation-packet.md` and
    `generation-ending-packet.md`
 9. after each commit apply constraint deltas and recompute feasibility without changing canon

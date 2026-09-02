@@ -52,12 +52,13 @@ The protocol schema validates these independent record types:
 
 - `run_manifest`: immutable brief, frozen engine provenance, limits, traversal
   strategy, providers, retention law, and complete-work barrier.
-- `genesis`: generated root canon, exactly five generated claimants, significant
-  characters, and initial fact/knowledge/motif deltas.
-- `architecture`: generated arcs, major topology, ending and other-scale attractors,
-  backward prerequisite chains, the initial obligation graph, and technical packet
-  envelopes. It freezes dependencies, not tentative execution order.
-- `creative_packet`: several related scenes or endings, associated artifacts/formal
+- `genesis_foundation`, `genesis_cast`, and `genesis_constraints`: bounded,
+  causally linked root canon, five jointly authored claimants, significant characters,
+  and minimal initial fact/knowledge/motif deltas.
+- `architecture_core` and `architecture_plan_batch`: bounded macro structure followed
+  by repeatable batches of at most eight technical packet envelopes.
+- `creative_packet`: one complete packet or one truncation-derived chunk of it,
+  containing related scenes or endings, associated artifacts/formal
   compositions, and source-located constraint deltas.
 - `constraint_event`: source-hashed append-only past-constraint, knowledge,
   future-obligation, motif-pressure, or foreclosure-candidate event.
@@ -138,13 +139,14 @@ JSON Schema cannot enforce the whole run. Deterministic validation must also con
 - the run manifest and generation brief never changed
 - all generation-time engine reads resolve inside the run-local snapshot
 - every committed creative record still matches its ledger output hash
-- all technical claimant slots appear exactly once in genesis
+- all technical claimant slots appear exactly once in the Genesis foundation and are
+  expanded without identity changes in the cast
 - all IDs are unique and every claimant, character, arc, scene, artifact, ending,
   composition, node, edge, packet dependency, constraint, and original source resolves
 - the obligation and packet-dependency graphs resolve and contain no accidental cycle
 - prospective packet choice respects immutable dependencies while remaining mutable
-- each literary packet contains three to eight planned scenes and each ending packet
-  contains two to six prerequisite-satisfied endings
+- each literary plan contains three to eight scenes and each ending plan two to six
+  endings; one or more immutable chunks collectively fill every assigned slot once
 - the complete work honors the explicit possible-scene scope and its derived count and literary-word bounds
 - all architecture nodes receive content exactly once; no unplanned candidate is kept
 - the opening group has exactly three playable options after three to five

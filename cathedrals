@@ -33,6 +33,11 @@ NODE_VERSION = "22.23.2"
 ASTRO_VERSION = "7.2.9"
 MARKDOWN_IT_VERSION = "14.1.0"
 NODE_MINIMUM = (22, 12, 0)
+PROTOCOL_VERSION = "4.0"
+BASE_OUTPUT_TOKENS = 10900
+EXPANDED_OUTPUT_TOKENS = 21800
+PACKET_LITERARY_WORDS = 4800
+PLAN_BATCH_SIZE = 8
 TERMINAL_STATES = {"READY_TO_PLAY", "FAILED_GENERATION"}
 RETRYABLE_PROVIDER_FAILURES = {"transport_before_response", "provider_before_creative_output"}
 FORMAT_ALIASES = {
@@ -44,8 +49,11 @@ FORMAT_ALIASES = {
 }
 RECORD_DEFS = {
     "run_manifest": "runManifest",
-    "genesis": "genesis",
-    "architecture": "architecture",
+    "genesis_foundation": "genesisFoundation",
+    "genesis_cast": "genesisCast",
+    "genesis_constraints": "genesisConstraints",
+    "architecture_core": "architectureCore",
+    "architecture_plan_batch": "architecturePlanBatch",
     "creative_packet": "creativePacket",
     "constraint_event": "constraintEvent",
     "prospective_plan": "prospectivePlan",
@@ -83,6 +91,12 @@ class SchemaError(CathedralsError):
 class IntegrityError(CathedralsError):
     def __init__(self, reason: str):
         super().__init__("Append-only integrity", reason, "mechanical_validation")
+
+
+class TruncationError(CathedralsError):
+    def __init__(self, reason: str, response: dict | None = None):
+        super().__init__("LM Studio response", reason, "provider_truncation")
+        self.response = response
 
 
 @dataclass(frozen=True)
@@ -406,6 +420,28 @@ def collect_inputs(input_fn=input, output_fn=print) -> FrozenInputs:
     return FrozenInputs(project_name, genre, scene_count, requested_format, "web", False)
 
 
+def grouped_counts(total: int, target: int, minimum: int, maximum: int) -> list[int]:
+    """Return stable near-target groups without leaving an undersized tail."""
+    if total <= 0:
+        return []
+    groups = [target] * (total // target)
+    remainder = total % target
+    if remainder >= minimum:
+        groups.append(remainder)
+    elif remainder and groups:
+        last = groups.pop() + remainder
+        if last <= maximum:
+            groups.append(last)
+        else:
+            left = last // 2
+            groups.extend((left, last - left))
+    elif remainder:
+        groups.append(remainder)
+    if any(not minimum <= size <= maximum for size in groups):
+        raise ValueError(f"Cannot group {total} items inside {minimum}..{maximum}")
+    return groups
+
+
 def derive_scope(possible_scene_count: int) -> dict:
     count = possible_scene_count
     profile = "pilot" if count <= 18 else "standard" if count <= 50 else "large" if count <= 100 else "cathedral"
@@ -414,8 +450,11 @@ def derive_scope(possible_scene_count: int) -> dict:
     ending_target = max(5, round(count / 9))
     ending_max = max(ending_target, math.ceil(count / 7))
     formal_target = max(2, round(count / 25))
-    packet_target = max(1, math.ceil(count / 6))
-    max_creative_steps = 2 + math.ceil(count / 3) + math.ceil(ending_max / 2)
+    literary_groups = grouped_counts(max(count, 8), 6, 3, 8)
+    ending_groups = grouped_counts(ending_max, 2, 2, 6)
+    packet_target = len(literary_groups)
+    plan_batch_count = math.ceil((len(literary_groups) + len(ending_groups)) / PLAN_BATCH_SIZE)
+    max_creative_steps = 4 + plan_batch_count + count + ending_max
     max_analysis_steps = max(4, math.ceil(count / 3) + math.ceil(ending_max / 2) + 2)
     return {
         "scope": {
@@ -433,14 +472,15 @@ def derive_scope(possible_scene_count: int) -> dict:
         },
         "budgets": {
             "max_prepared_context_tokens": 49152,
-            "max_creative_packet_output_tokens": 10900,
+            "max_creative_packet_output_tokens": BASE_OUTPUT_TOKENS,
+            "max_expanded_output_tokens": EXPANDED_OUTPUT_TOKENS,
             "max_analysis_output_tokens": 4096,
             "context_safety_reserve_tokens": 4096,
             "max_creative_step_count": max_creative_steps,
             "max_analysis_step_count": max_analysis_steps,
             "max_total_literary_words": count * 600 + artifact_max * 350 + ending_max * 500,
-            "max_cumulative_input_tokens": (max_creative_steps + max_analysis_steps) * 49152,
-            "max_cumulative_output_tokens": max_creative_steps * 10900 + max_analysis_steps * 4096,
+            "max_cumulative_input_tokens": (2 * max_creative_steps + max_analysis_steps) * 49152,
+            "max_cumulative_output_tokens": max_creative_steps * (BASE_OUTPUT_TOKENS + EXPANDED_OUTPUT_TOKENS) + max_analysis_steps * 4096,
             "max_constraint_events": max(1000, count * 45),
             "max_retrieved_source_tokens": 12288,
         },
@@ -673,7 +713,7 @@ def new_ledger_entry(
     usage = usage or {}
     entry = {
         "record_type": "ledger_entry",
-        "protocol_version": "3.0",
+        "protocol_version": PROTOCOL_VERSION,
         "generation_id": load_state(run_dir)["generation_id"],
         "ledger_sequence": len(entries) + 1,
         "planned_step_id": planned_step_id,
@@ -753,7 +793,13 @@ def append_deterministic_step(
     save_state(run_dir, state)
 
 
-def create_run(frozen: FrozenInputs, base_url: str, model: str, output_fn=print) -> Path:
+def create_run(
+    frozen: FrozenInputs,
+    base_url: str,
+    model: str,
+    output_fn=print,
+    model_context_window_tokens: int = 64148,
+) -> Path:
     identifier = generation_id(frozen.project_name)
     ensure_runtime_layout()
     run_dir = RUNS_ROOT / identifier
@@ -771,9 +817,10 @@ def create_run(frozen: FrozenInputs, base_url: str, model: str, output_fn=print)
     }
     brief_hash = sha256_bytes(canonical_json(brief))
     derived = derive_scope(frozen.possible_scene_count)
+    derived["budgets"]["model_context_window_tokens"] = model_context_window_tokens
     manifest = {
         "record_type": "run_manifest",
-        "protocol_version": "3.0",
+        "protocol_version": PROTOCOL_VERSION,
         "generation_id": identifier,
         "created_at": timestamp,
         "generation_brief": brief,
@@ -821,6 +868,7 @@ def create_run(frozen: FrozenInputs, base_url: str, model: str, output_fn=print)
     frozen_context = run_dir / "state/frozen-engine-context.txt"
     write_atomic(frozen_context, engine_context(run_dir).encode(), mode=0o444, exclusive=True)
     run_state = initial_run_state(identifier, brief_hash, manifest_hash, model)
+    run_state["model_context_window_tokens"] = model_context_window_tokens
     save_state(run_dir, run_state)
     append_deterministic_step(run_dir, "preflight", "preflight", brief_hash)
     append_deterministic_step(run_dir, "engine_snapshot", "engine_snapshot", manifest_hash)
@@ -867,17 +915,20 @@ def choose_resume(input_fn=input, output_fn=print) -> Path | None:
 
 def generated_ids(record: dict) -> list[str]:
     ids = [record.get("commit_id")]
-    if record.get("record_type") == "genesis":
+    if record.get("record_type") == "genesis_foundation":
         ids += [record["work_canon"]["work_id"]]
         ids += [item["event_id"] for item in record["work_canon"]["chronology"]]
+        ids += [item["claimant_id"] for item in record["claimant_anchors"]]
+    if record.get("record_type") == "genesis_cast":
         ids += [item["claimant_id"] for item in record["claimants"]]
         ids += [item["character_id"] for item in record["characters"]]
-    if record.get("record_type") == "architecture":
+    if record.get("record_type") == "architecture_core":
         ids += [item["arc_id"] for item in record["arcs"]]
         ids += [item["node_id"] for item in record["topology"]["nodes"]]
         ids += [item["edge_id"] for item in record["topology"]["edges"]]
         ids += [item["obligation_id"] for item in record["obligation_graph"]]
         ids += [item["attractor_id"] for item in record["attractors"]]
+    if record.get("record_type") == "architecture_plan_batch":
         ids += [item["packet_slot_id"] for item in record["packet_plans"]]
     if record.get("record_type") == "creative_packet":
         ids += [item["scene_id"] for item in record["scenes"]]
@@ -895,6 +946,15 @@ def generated_ids(record: dict) -> list[str]:
     return sorted({item for item in ids if item})
 
 
+def reused_generated_ids(run_dir: Path, record: dict) -> set[str]:
+    duplicates = set(generated_ids(record)) & set(_source_index(run_dir))
+    if record.get("record_type") == "genesis_cast":
+        foundation = committed_record(run_dir, "genesis_foundation")
+        if foundation:
+            duplicates -= {item["claimant_id"] for item in foundation["claimant_anchors"]}
+    return duplicates
+
+
 def constraint_deltas(record: dict) -> tuple[dict, list[str], list[str], list[str]]:
     delta = record.get("constraint_delta", {})
     groups = {
@@ -905,7 +965,7 @@ def constraint_deltas(record: dict) -> tuple[dict, list[str], list[str], list[st
         "motif_events": list(delta.get("motif_events", [])),
         "potential_foreclosures": list(delta.get("potential_foreclosures", [])),
     }
-    if record.get("record_type") == "architecture":
+    if record.get("record_type") == "architecture_core":
         groups["new_obligations"] = list(record["obligation_graph"]) + groups["new_obligations"]
     past = [item["fact_id"] for item in groups["canonical_facts"]]
     past += [item["knowledge_id"] for item in groups["knowledge_changes"]]
@@ -964,7 +1024,7 @@ def make_constraint_events(run_dir: Path, record: dict, commit_id: str, record_h
             action = "establish" if item["action"] == "establish" else "update"
         event = {
             "record_type": "constraint_event",
-            "protocol_version": "3.0",
+            "protocol_version": PROTOCOL_VERSION,
             "generation_id": record["generation_id"],
             "constraint_event_sequence": sequence + len(events) + 1,
             "origin_step_id": step_id,
@@ -1168,7 +1228,7 @@ def commit_record(
         for entry in ledger_entries(run_dir)
     ):
         raise IntegrityError(f"Refusing to regenerate committed step {planned_step_id}")
-    duplicate_ids = set(generated_ids(record)) & set(_source_index(run_dir))
+    duplicate_ids = reused_generated_ids(run_dir, record)
     if duplicate_ids:
         raise SchemaError(f"Record reuses previously committed IDs: {', '.join(sorted(duplicate_ids))}")
     record_bytes = canonical_json(record)
@@ -1238,7 +1298,9 @@ def commit_record(
     state["stage"] = step_phase.upper()
     save_state(run_dir, state)
     reconcile_run(run_dir)
-    if record["record_type"] in {"architecture", "creative_packet"}:
+    if record["record_type"] == "creative_packet" or (
+        record["record_type"] == "architecture_plan_batch" and assembled_architecture(run_dir)
+    ):
         recompute_prospective_plan(run_dir, record["commit_id"])
     return destination
 
@@ -1256,6 +1318,7 @@ def append_failed_attempt(
     failure_class: str,
     output_hash: str | None = None,
     step_type: str = "creative",
+    usage: dict | None = None,
 ) -> None:
     state = load_state(run_dir)
     entry = new_ledger_entry(
@@ -1281,6 +1344,7 @@ def append_failed_attempt(
         commit_status="FAILED_BEFORE_COMMIT",
         state_hash_after=state["canonical_state_hash"],
         failure_class=failure_class,
+        usage=usage,
     )
     append_ledger_entry(run_dir, entry)
     state["ledger_sequence"] = entry["ledger_sequence"]
@@ -1288,6 +1352,12 @@ def append_failed_attempt(
 
 
 def committed_record(run_dir: Path, record_type: str, packet_slot_id: str | None = None):
+    if record_type == "genesis":
+        return assembled_genesis(run_dir)
+    if record_type == "architecture":
+        return assembled_architecture(run_dir)
+    if record_type == "creative_packet" and packet_slot_id is not None:
+        return assembled_packet(run_dir, packet_slot_id)
     for directory in committed_directories(run_dir):
         record = read_json(directory / "record.json")
         if record.get("record_type") == record_type and (packet_slot_id is None or record.get("packet_slot_id") == packet_slot_id):
@@ -1297,6 +1367,143 @@ def committed_record(run_dir: Path, record_type: str, packet_slot_id: str | None
 
 def all_committed_records(run_dir: Path) -> list[dict]:
     return [read_json(path / "record.json") for path in committed_directories(run_dir)]
+
+
+def committed_records(run_dir: Path, record_type: str) -> list[dict]:
+    return [record for record in all_committed_records(run_dir) if record.get("record_type") == record_type]
+
+
+def assembled_genesis(run_dir: Path) -> dict | None:
+    foundation = committed_record(run_dir, "genesis_foundation")
+    cast = committed_record(run_dir, "genesis_cast")
+    constraints = committed_record(run_dir, "genesis_constraints")
+    if not foundation or not cast or not constraints:
+        return None
+    return {
+        "record_type": "genesis",
+        "protocol_version": PROTOCOL_VERSION,
+        "generation_id": foundation["generation_id"],
+        "commit_id": constraints["commit_id"],
+        "story_format": "web",
+        "format_composition_law": foundation["format_composition_law"],
+        "work_canon": foundation["work_canon"],
+        "web_art_direction": foundation["web_art_direction"],
+        "claimants": cast["claimants"],
+        "characters": cast["characters"],
+        "constraint_delta": constraints["constraint_delta"],
+    }
+
+
+def assembled_architecture(run_dir: Path) -> dict | None:
+    core = committed_record(run_dir, "architecture_core")
+    if not core:
+        return None
+    batches = sorted(committed_records(run_dir, "architecture_plan_batch"), key=lambda item: item["batch_sequence"])
+    if not batches or len(batches) != batches[0]["batch_count"]:
+        return None
+    return architecture_from_parts(core, batches)
+
+
+def architecture_from_parts(core: dict, batches: list[dict]) -> dict:
+    plans = [plan for batch in batches for plan in batch["packet_plans"]]
+    attractor_slots = {
+        attractor["attractor_id"]: [
+            slot
+            for plan in plans
+            if plan["packet_kind"] == "ending" and attractor["attractor_id"] in plan["attractor_ids"]
+            for slot in plan["ending_slot_ids"]
+        ]
+        for attractor in core["attractors"]
+    }
+    return core | {
+        "record_type": "architecture",
+        "commit_id": batches[-1]["commit_id"],
+        "architecture_core_commit_id": core["commit_id"],
+        "packet_plan_commit_ids": [item["commit_id"] for item in batches],
+        "attractors": [item | {"ending_slot_ids": attractor_slots[item["attractor_id"]]} for item in core["attractors"]],
+        "packet_plans": plans,
+    }
+
+
+def plan_batch_for(run_dir: Path, packet_slot_id: str) -> dict | None:
+    return next(
+        (
+            batch
+            for batch in committed_records(run_dir, "architecture_plan_batch")
+            if any(plan["packet_slot_id"] == packet_slot_id for plan in batch["packet_plans"])
+        ),
+        None,
+    )
+
+
+def packet_chunks(run_dir: Path, packet_slot_id: str) -> list[dict]:
+    return [
+        record for record in committed_records(run_dir, "creative_packet")
+        if record["packet_slot_id"] == packet_slot_id
+    ]
+
+
+def completed_packet_slots(architecture: dict, records: list[dict]) -> set[str]:
+    complete = set()
+    for plan in architecture["packet_plans"]:
+        chunks = [record for record in records if record.get("record_type") == "creative_packet" and record.get("packet_slot_id") == plan["packet_slot_id"]]
+        if not chunks:
+            continue
+        key = "scenes" if plan["packet_kind"] == "literary" else "endings"
+        items = [item for chunk in chunks for item in chunk[key]]
+        if items and "technical_slot_id" not in items[0]:
+            complete.add(plan["packet_slot_id"])
+            continue
+        expected = set(plan["scene_slot_ids"] if plan["packet_kind"] == "literary" else plan["ending_slot_ids"])
+        actual = {item["technical_slot_id"] for item in items}
+        if (
+            actual == expected
+            and sum(len(chunk["artifacts"]) for chunk in chunks) == plan["artifact_count"]
+            and sum(len(chunk["formal_compositions"]) for chunk in chunks) == plan["formal_composition_count"]
+        ):
+            complete.add(plan["packet_slot_id"])
+    return complete
+
+
+def assembled_packet(run_dir: Path, packet_slot_id: str) -> dict | None:
+    architecture = committed_record(run_dir, "architecture")
+    if not architecture:
+        return None
+    plan = next((item for item in architecture["packet_plans"] if item["packet_slot_id"] == packet_slot_id), None)
+    chunks = packet_chunks(run_dir, packet_slot_id)
+    return packet_from_chunks(plan, chunks)
+
+
+def packet_from_chunks(plan: dict | None, chunks: list[dict]) -> dict | None:
+    if not plan or not chunks:
+        return None
+    content_key = "scenes" if plan["packet_kind"] == "literary" else "endings"
+    expected_slots = set(plan["scene_slot_ids"] if plan["packet_kind"] == "literary" else plan["ending_slot_ids"])
+    actual_slots = {
+        item["technical_slot_id"] for chunk in chunks for item in chunk[content_key]
+    }
+    if actual_slots != expected_slots:
+        return None
+    if sum(len(chunk["artifacts"]) for chunk in chunks) != plan["artifact_count"]:
+        return None
+    if sum(len(chunk["formal_compositions"]) for chunk in chunks) != plan["formal_composition_count"]:
+        return None
+    delta = {
+        key: [item for chunk in chunks for item in chunk["constraint_delta"][key]]
+        for key in ("canonical_facts", "knowledge_changes", "new_obligations", "obligation_updates", "motif_events", "potential_foreclosures")
+    }
+    first, last = chunks[0], chunks[-1]
+    return first | {
+        "commit_id": last["commit_id"],
+        "packet_sequence": last["packet_sequence"],
+        "obligations_advanced": sorted({item for chunk in chunks for item in chunk["obligations_advanced"]}),
+        "scenes": [item for chunk in chunks for item in chunk["scenes"]],
+        "artifacts": [item for chunk in chunks for item in chunk["artifacts"]],
+        "endings": [item for chunk in chunks for item in chunk["endings"]],
+        "decision_edges": [item for chunk in chunks for item in chunk["decision_edges"]],
+        "formal_compositions": [item for chunk in chunks for item in chunk["formal_compositions"]],
+        "constraint_delta": delta,
+    }
 
 
 def retrieve_original_sources(
@@ -1485,7 +1692,7 @@ def normalize_provider_response(response) -> str:
             "provider_before_creative_output",
         )
     if choice.get("finish_reason") in {"length", "max_tokens"}:
-        raise SchemaError(f"LM Studio response was truncated ({choice['finish_reason']})")
+        raise TruncationError(f"LM Studio response was truncated ({choice['finish_reason']})", response)
     content = message.get("content")
     reasoning = message.get("reasoning")
     reasoning_content = message.get("reasoning_content")
@@ -1537,7 +1744,7 @@ def request_record(
     context: str,
     branch_relation: str,
     temperature: float,
-    max_tokens: int = 10900,
+    max_tokens: int = BASE_OUTPUT_TOKENS,
     transport=http_json,
     precommit_validator=None,
 ) -> dict:
@@ -1586,7 +1793,24 @@ def request_record(
     inflight = read_json(inflight_path)
     response_path = run_dir / "raw" / f"{step_id}-attempt{attempt}.api.json"
     response = read_json(response_path) if response_path.exists() else None
-    content = normalize_provider_response(response) if response is not None else None
+    try:
+        content = normalize_provider_response(response) if response is not None else None
+    except TruncationError as error:
+        append_failed_attempt(
+            run_dir,
+            step_id=step_id,
+            attempt=attempt,
+            phase=phase,
+            prompt=prompt,
+            context=context,
+            parameters=parameters,
+            started_at=inflight["started_at"],
+            failure_class=error.failure_class,
+            output_hash=sha256_bytes(canonical_json(response)),
+            usage=response.get("usage", {}) if isinstance(response, dict) else {},
+        )
+        inflight_path.unlink(missing_ok=True)
+        raise
     if response is None:
         failures = 0
         while failures < 3:
@@ -1601,6 +1825,7 @@ def request_record(
                 )
                 break
             except CathedralsError as error:
+                failed_response = error.response if isinstance(error, TruncationError) else None
                 append_failed_attempt(
                     run_dir,
                     step_id=step_id,
@@ -1611,6 +1836,8 @@ def request_record(
                     parameters=parameters,
                     started_at=inflight["started_at"],
                     failure_class=error.failure_class,
+                    output_hash=sha256_bytes(canonical_json(failed_response)) if failed_response else None,
+                    usage=failed_response.get("usage", {}) if failed_response else {},
                 )
                 failures += 1
                 if error.failure_class not in RETRYABLE_PROVIDER_FAILURES or failures == 3:
@@ -1625,7 +1852,7 @@ def request_record(
         record = parse_structured_content(content)
         validate_json_schema(record, protocol["$defs"][RECORD_DEFS[expected_record_type]], protocol)
         validate_declared_id_uniqueness(record)
-        duplicate_ids = set(generated_ids(record)) & set(_source_index(run_dir))
+        duplicate_ids = reused_generated_ids(run_dir, record)
         if duplicate_ids:
             raise SchemaError(f"Record reuses previously committed IDs: {', '.join(sorted(duplicate_ids))}")
         if precommit_validator:
@@ -1642,6 +1869,7 @@ def request_record(
             started_at=inflight["started_at"],
             failure_class="malformed_response",
             output_hash=sha256_bytes(content.encode()),
+            usage=response.get("usage", {}) if isinstance(response, dict) else {},
         )
         inflight_path.unlink(missing_ok=True)
         raise
@@ -1764,13 +1992,6 @@ def validate_architecture(architecture: dict, manifest: dict, committed_origin_i
             raise SchemaError("Each ending packet must realize exactly one ending attractor")
         scene_slots += plan["scene_slot_ids"]
         ending_slots += plan["ending_slot_ids"]
-    literary_plan_ids = {item["packet_slot_id"] for item in plans if item["packet_kind"] == "literary"}
-    if any(
-        not literary_plan_ids.issubset(set(item["depends_on_packet_slot_ids"]))
-        for item in plans
-        if item["packet_kind"] == "ending"
-    ):
-        raise SchemaError("Ending packets must depend on every literary packet so ending prose remains late")
     if len(scene_slots) != len(set(scene_slots)) or len(scene_slots) != scope["planned_scene_count"]:
         raise SchemaError("Architecture scene slots are duplicated or do not match planned_scene_count")
     if len(ending_slots) != len(set(ending_slots)) or len(ending_slots) != scope["planned_ending_count"]:
@@ -1788,25 +2009,28 @@ def validate_architecture(architecture: dict, manifest: dict, committed_origin_i
         raise SchemaError("Ending attractors must own every ending slot exactly once")
     for plan in (item for item in plans if item["packet_kind"] == "ending"):
         attractor = attractors[plan["attractor_ids"][0]]
-        if attractor["kind"] != "ending" or set(attractor["ending_slot_ids"]) != set(plan["ending_slot_ids"]):
-            raise SchemaError("Ending packet slots must exactly match its ending attractor")
-    if 2 + len(plans) > manifest["budgets"]["max_creative_step_count"]:
+        if attractor["kind"] != "ending" or not set(plan["ending_slot_ids"]).issubset(attractor["ending_slot_ids"]):
+            raise SchemaError("Ending packet slots must belong to its ending attractor")
+    if 4 + math.ceil(len(plans) / PLAN_BATCH_SIZE) + len(plans) > manifest["budgets"]["max_creative_step_count"]:
         raise SchemaError("Architecture exceeds the derived creative-step budget")
 
 
 def validate_declared_id_uniqueness(record: dict) -> None:
     identifiers = [record.get("commit_id")]
-    if record.get("record_type") == "genesis":
+    if record.get("record_type") == "genesis_foundation":
         identifiers += [record["work_canon"]["work_id"]]
         identifiers += [item["event_id"] for item in record["work_canon"]["chronology"]]
+        identifiers += [item["claimant_id"] for item in record["claimant_anchors"]]
+    elif record.get("record_type") == "genesis_cast":
         identifiers += [item["claimant_id"] for item in record["claimants"]]
         identifiers += [item["character_id"] for item in record["characters"]]
-    elif record.get("record_type") == "architecture":
+    elif record.get("record_type") == "architecture_core":
         identifiers += [item["obligation_id"] for item in record["obligation_graph"]]
         identifiers += [item["arc_id"] for item in record["arcs"]]
         identifiers += [item["node_id"] for item in record["topology"]["nodes"]]
         identifiers += [item["edge_id"] for item in record["topology"]["edges"]]
         identifiers += [item["attractor_id"] for item in record["attractors"]]
+    elif record.get("record_type") == "architecture_plan_batch":
         identifiers += [item["packet_slot_id"] for item in record["packet_plans"]]
     elif record.get("record_type") == "creative_packet":
         identifiers += [item["scene_id"] for item in record["scenes"]]
@@ -1948,9 +2172,11 @@ def select_relevant_constraints(
     path = run_dir / "constraints/constraint-events.jsonl"
     events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
     committed = records if records is not None else all_committed_records(run_dir)
-    packets = {record.get("packet_slot_id"): record for record in committed if record.get("record_type") == "creative_packet"}
-    dependencies = [packets.get(item) for item in plan["depends_on_packet_slot_ids"]]
-    dependency_ids = {identifier for record in dependencies if record for identifier in generated_ids(record)}
+    dependencies = [
+        record for record in committed
+        if record.get("record_type") == "creative_packet" and record.get("packet_slot_id") in plan["depends_on_packet_slot_ids"]
+    ]
+    dependency_ids = {identifier for record in dependencies for identifier in generated_ids(record)}
     scored = [(relevance_score(event, plan, architecture, dependency_ids, len(events)), event) for event in events]
     return [event for score, event in sorted(scored, key=lambda item: (-item[0], item[1]["constraint_event_sequence"])) if score > 0][:limit]
 
@@ -1971,12 +2197,10 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict) -> st
     manifest = read_json(run_dir / "run-manifest.json")
     genesis = committed_record(run_dir, "genesis")
     records = all_committed_records(run_dir)
-    packets = {record.get("packet_slot_id"): record for record in records if record.get("record_type") == "creative_packet"}
     dependency_records = [
-        packets.get(dependency)
-        for dependency in plan["depends_on_packet_slot_ids"]
+        record for record in records
+        if record.get("record_type") == "creative_packet" and record.get("packet_slot_id") in plan["depends_on_packet_slot_ids"]
     ]
-    dependency_records = [record for record in dependency_records if record]
     recent = [record for record in records if record.get("record_type") == "creative_packet"][-2:]
     selected = select_relevant_constraints(run_dir, architecture, plan, records=records)
     selected_fact_ids = {
@@ -2164,12 +2388,9 @@ def build_prospective_plan(run_dir: Path, architecture: dict, recomputed_after_c
     foreclosures = _read_state_map(run_dir, "foreclosure-candidates.json")
     feasibility = evaluate_feasibility(architecture, obligations, foreclosures)
     feasibility_by_id = {item["attractor_id"]: item["status"] for item in feasibility}
-    committed = {
-        record["packet_slot_id"]
-        for record in all_committed_records(run_dir)
-        if record.get("record_type") == "creative_packet"
-    }
+    committed = completed_packet_slots(architecture, all_committed_records(run_dir))
     uncommitted_plans = [plan for plan in architecture["packet_plans"] if plan["packet_slot_id"] not in committed]
+    literary_pending = any(plan["packet_kind"] == "literary" for plan in uncommitted_plans)
     obligation_assignments = []
     for obligation_id, event in obligations.items():
         obligation = event["data"]
@@ -2207,6 +2428,8 @@ def build_prospective_plan(run_dir: Path, architecture: dict, recomputed_after_c
     for plan in uncommitted_plans:
         if plan["packet_slot_id"] in committed or not set(plan["depends_on_packet_slot_ids"]).issubset(committed):
             continue
+        if plan["packet_kind"] == "ending" and literary_pending:
+            continue
         statuses = [feasibility_by_id[item] for item in plan["attractor_ids"]]
         if plan["packet_kind"] == "ending":
             prerequisites = [
@@ -2236,7 +2459,7 @@ def build_prospective_plan(run_dir: Path, architecture: dict, recomputed_after_c
     sequence = len(history.read_text(encoding="utf-8").splitlines()) + 1 if history.exists() else 1
     return {
         "record_type": "prospective_plan",
-        "protocol_version": "3.0",
+        "protocol_version": PROTOCOL_VERSION,
         "generation_id": run_dir.name,
         "plan_id": f"prospective_plan_{sequence:04d}",
         "based_on_canonical_state_hash": load_state(run_dir)["canonical_state_hash"],
@@ -2303,29 +2526,172 @@ def step_is_committed(run_dir: Path, step_id: str) -> bool:
     )
 
 
-def validate_genesis(record: dict, run_dir: Path) -> None:
+def distribute_counts(total: int, groups: int) -> list[int]:
+    quotient, remainder = divmod(total, groups)
+    return [quotient + (index < remainder) for index in range(groups)]
+
+
+def planned_packet_specs(architecture_core: dict) -> list[dict]:
+    scope = architecture_core["scope_commitment"]
+    scene_groups = grouped_counts(scope["planned_scene_count"], 6, 3, 8)
+    ending_groups = grouped_counts(scope["planned_ending_count"], 2, 2, 6)
+    artifact_counts = distribute_counts(scope["planned_artifact_count"], len(scene_groups))
+    composition_counts = distribute_counts(scope["planned_formal_composition_count"], len(scene_groups))
+    if any(value > 6 for value in artifact_counts) or any(value > 4 for value in composition_counts):
+        raise SchemaError("Architecture scope cannot fit bounded packet allocations")
+    specs = []
+    scene_number = 1
+    for index, size in enumerate(scene_groups, 1):
+        slots = [f"scene_slot_{number:04d}" for number in range(scene_number, scene_number + size)]
+        scene_number += size
+        specs.append({
+            "packet_slot_id": f"literary_packet_{index:04d}",
+            "packet_kind": "literary",
+            "scene_slot_ids": slots,
+            "ending_slot_ids": [],
+            "artifact_count": artifact_counts[index - 1],
+            "formal_composition_count": composition_counts[index - 1],
+        })
+    ending_number = 1
+    for index, size in enumerate(ending_groups, 1):
+        slots = [f"ending_slot_{number:04d}" for number in range(ending_number, ending_number + size)]
+        ending_number += size
+        specs.append({
+            "packet_slot_id": f"ending_packet_{index:04d}",
+            "packet_kind": "ending",
+            "scene_slot_ids": [],
+            "ending_slot_ids": slots,
+            "artifact_count": 0,
+            "formal_composition_count": 0,
+        })
+    return specs
+
+
+def plan_batches(architecture_core: dict) -> list[list[dict]]:
+    specs = planned_packet_specs(architecture_core)
+    return [specs[index:index + PLAN_BATCH_SIZE] for index in range(0, len(specs), PLAN_BATCH_SIZE)]
+
+
+def validate_genesis_foundation(record: dict, run_dir: Path) -> None:
     brief = read_json(run_dir / "generation-brief.json")
     if record["generation_id"] != brief["generation_id"] or record["story_format"] != "web":
-        raise SchemaError("Genesis does not match the frozen generation or active web format")
-    slots = [claimant["technical_slot_id"] for claimant in record["claimants"]]
-    if sorted(slots) != [f"claimant_slot_{number:02d}" for number in range(1, 6)]:
-        raise SchemaError("Genesis must fill each of the five semantically blank claimant slots once")
-    propositions = {item["fact_id"] for item in record["constraint_delta"]["canonical_facts"]}
-    if any(item["proposition_id"] not in propositions for item in record["constraint_delta"]["knowledge_changes"]):
-        raise SchemaError("Genesis knowledge state references an unknown proposition")
+        raise SchemaError("Genesis foundation does not match the frozen generation or active web format")
+    anchors = record["claimant_anchors"]
+    if sorted(item["technical_slot_id"] for item in anchors) != [f"claimant_slot_{number:02d}" for number in range(1, 6)]:
+        raise SchemaError("Genesis foundation must anchor each claimant slot once")
+    if len({item["claimant_id"] for item in anchors}) != 5:
+        raise SchemaError("Genesis foundation claimant IDs must be unique")
+    canon = record["work_canon"]
+    claimant_ids = {item["claimant_id"] for item in anchors}
+    if any(not set(item["claimant_ids"]).issubset(claimant_ids) for item in canon["claimant_relationships"]):
+        raise SchemaError("Genesis foundation relationship references an unknown claimant anchor")
+    if len(canon["generated_motifs"]) > 8 or len(canon["principal_tensions"]) > 8:
+        raise SchemaError("Genesis foundation exceeds its bounded motif or tension count")
     validate_art_direction(record["web_art_direction"])
 
 
-def validate_architecture_for_run(record: dict, run_dir: Path) -> None:
+def validate_genesis_cast(record: dict, run_dir: Path) -> None:
+    foundation = committed_record(run_dir, "genesis_foundation")
+    if not foundation or record["foundation_commit_id"] != foundation["commit_id"]:
+        raise SchemaError("Genesis cast does not descend from the committed foundation")
+    anchors = {item["claimant_id"]: item for item in foundation["claimant_anchors"]}
+    claimants = {item["claimant_id"]: item for item in record["claimants"]}
+    if set(anchors) != set(claimants):
+        raise SchemaError("Genesis cast must expand exactly the five committed claimant anchors")
+    for claimant_id, anchor in anchors.items():
+        claimant = claimants[claimant_id]
+        if any(claimant[key] != anchor[key] for key in ("technical_slot_id", "name", "incident_role")):
+            raise SchemaError(f"Genesis cast changed committed claimant anchor {claimant_id}")
+    character_ids = {item["character_id"] for item in record["characters"]}
+    if not set(foundation["work_canon"]["central_incident"]["subjects"]).issubset(set(claimants) | character_ids):
+        raise SchemaError("Genesis cast did not define every central-incident subject anchored by the foundation")
+
+
+def validate_genesis_constraints(record: dict, run_dir: Path) -> None:
+    cast = committed_record(run_dir, "genesis_cast")
+    if not cast or record["cast_commit_id"] != cast["commit_id"]:
+        raise SchemaError("Genesis constraints do not descend from the committed cast")
+    delta = record["constraint_delta"]
+    if len(delta["canonical_facts"]) > 12 or len(delta["knowledge_changes"]) > 24 or len(delta["motif_events"]) > 8:
+        raise SchemaError("Genesis constraints exceed their bounded initial counts")
+    if delta["new_obligations"] or delta["obligation_updates"] or delta["potential_foreclosures"]:
+        raise SchemaError("Genesis constraints cannot create obligations or foreclosures")
+    semantic_facts = {
+        canonical_json({key: item[key] for key in ("subject", "predicate", "value", "status")})
+        for item in delta["canonical_facts"]
+    }
+    if len(semantic_facts) != len(delta["canonical_facts"]):
+        raise SchemaError("Genesis constraints contain duplicate canonical facts")
+    propositions = {item["fact_id"] for item in delta["canonical_facts"]}
+    if any(item["proposition_id"] not in propositions for item in delta["knowledge_changes"]):
+        raise SchemaError("Genesis knowledge state references an unknown proposition")
+
+
+def provisional_architecture(core: dict) -> dict:
+    ending_attractor = next(item["attractor_id"] for item in core["attractors"] if item["kind"] == "ending")
+    plans = [
+        spec | {
+            "initial_priority": index,
+            "depends_on_packet_slot_ids": [],
+            "branch_path_relation": "uncommitted_plan_batch",
+            "attractor_ids": [ending_attractor] if spec["packet_kind"] == "ending" else [],
+            "relevance": {"claimant_ids": [], "arc_ids": [], "motif_ids": [], "keywords": []},
+            "soft_guidance": [],
+        }
+        for index, spec in enumerate(planned_packet_specs(core), 1)
+    ]
+    ending_slots = [slot for plan in plans if plan["packet_kind"] == "ending" for slot in plan["ending_slot_ids"]]
+    return core | {
+        "record_type": "architecture",
+        "packet_plans": plans,
+        "attractors": [item | {"ending_slot_ids": ending_slots if item["attractor_id"] == ending_attractor else []} for item in core["attractors"]],
+    }
+
+
+def validate_architecture_core_for_run(record: dict, run_dir: Path) -> None:
     genesis = committed_record(run_dir, "genesis")
     if not genesis or record["genesis_commit_id"] != genesis["commit_id"]:
-        raise SchemaError("Architecture does not descend from the committed genesis")
+        raise SchemaError("Architecture core does not descend from completed Genesis")
     if record["story_format"] != "web":
         raise SchemaError("The active architecture format must be web")
     claimants = {item["claimant_id"] for item in genesis["claimants"]}
     if any(not set(arc["claimant_pressures"]).issubset(claimants) for arc in record["arcs"]):
         raise SchemaError("Architecture applies pressure from an unknown claimant")
-    validate_architecture(record, read_json(run_dir / "run-manifest.json"), set(_source_index(run_dir)))
+    validate_architecture(provisional_architecture(record), read_json(run_dir / "run-manifest.json"), set(_source_index(run_dir)))
+
+
+def validate_architecture_plan_batch(record: dict, run_dir: Path, expected_specs: list[dict], sequence: int, count: int) -> None:
+    core = committed_record(run_dir, "architecture_core")
+    if not core or record["architecture_core_commit_id"] != core["commit_id"]:
+        raise SchemaError("Architecture plan batch does not descend from the committed core")
+    if record["batch_sequence"] != sequence or record["batch_count"] != count:
+        raise SchemaError("Architecture plan batch sequence does not match its frozen batch")
+    expected = {item["packet_slot_id"]: item for item in expected_specs}
+    actual = {item["packet_slot_id"]: item for item in record["packet_plans"]}
+    if set(actual) != set(expected):
+        raise SchemaError("Architecture plan batch did not fill its assigned packet slots exactly")
+    fixed = ("packet_kind", "scene_slot_ids", "ending_slot_ids", "artifact_count", "formal_composition_count")
+    allowed_dependencies = {
+        plan["packet_slot_id"]
+        for batch in committed_records(run_dir, "architecture_plan_batch")
+        for plan in batch["packet_plans"]
+    }
+    for packet_id, spec in expected.items():
+        if any(actual[packet_id][key] != spec[key] for key in fixed):
+            raise SchemaError(f"Architecture plan batch changed frozen allocation {packet_id}")
+        if not set(actual[packet_id]["depends_on_packet_slot_ids"]).issubset(allowed_dependencies):
+            raise SchemaError(f"Architecture plan {packet_id} depends on an unfrozen future batch")
+        allowed_dependencies.add(packet_id)
+    if sequence == count:
+        batches = sorted(committed_records(run_dir, "architecture_plan_batch") + [record], key=lambda item: item["batch_sequence"])
+        validate_architecture(architecture_from_parts(core, batches), read_json(run_dir / "run-manifest.json"), set(_source_index(run_dir)))
+
+
+def validate_completed_architecture(run_dir: Path) -> None:
+    architecture = committed_record(run_dir, "architecture")
+    if not architecture:
+        raise SchemaError("Architecture plan batches are incomplete")
+    validate_architecture(architecture, read_json(run_dir / "run-manifest.json"), set(_source_index(run_dir)))
 
 
 def validate_ending_prerequisites(
@@ -2357,13 +2723,30 @@ def validate_ending_prerequisites(
 
 def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
     architecture = committed_record(run_dir, "architecture")
-    if not architecture or record["architecture_commit_id"] != architecture["commit_id"]:
-        raise SchemaError("Packet does not descend from the committed architecture")
+    batch = plan_batch_for(run_dir, plan["packet_slot_id"])
+    if (
+        not architecture
+        or not batch
+        or record["architecture_core_commit_id"] != architecture["architecture_core_commit_id"]
+        or record["packet_plan_commit_id"] != batch["commit_id"]
+    ):
+        raise SchemaError("Packet does not descend from its committed architecture and plan batch")
     if record["generation_id"] != run_dir.name or record["story_format"] != "web":
         raise SchemaError("Packet does not match the frozen run or active web format")
     committed_packet_count = sum(item.get("record_type") == "creative_packet" for item in all_committed_records(run_dir))
     if record["packet_sequence"] != committed_packet_count + 1:
         raise SchemaError("Packet sequence does not match immutable forward commit order")
+    content = record["scenes"] if record["packet_kind"] == "literary" else record["endings"]
+    occupied_slots = {
+        item["technical_slot_id"]
+        for chunk in packet_chunks(run_dir, record["packet_slot_id"])
+        for item in (chunk["scenes"] if record["packet_kind"] == "literary" else chunk["endings"])
+    }
+    if occupied_slots & {item["technical_slot_id"] for item in content}:
+        raise SchemaError("Packet chunk attempted to refill a committed technical slot")
+    packet_words = packet_literary_word_count(record)
+    if packet_words > PACKET_LITERARY_WORDS:
+        raise SchemaError(f"Creative packet exceeds its {PACKET_LITERARY_WORDS:,}-word literary allowance")
     obligation_state = _read_state_map(run_dir, "obligations.json")
     obligations = set(obligation_state)
     arcs = {item["arc_id"] for item in architecture["arcs"]}
@@ -2501,40 +2884,113 @@ def compact_schema(run_dir: Path, record_type: str) -> str:
     return json.dumps(record_schema(record_type, load_protocol(run_dir)), ensure_ascii=False, separators=(",", ":"))
 
 
-def genesis_prompt(run_dir: Path) -> tuple[str, str]:
+def genesis_foundation_prompt(run_dir: Path) -> tuple[str, str]:
     manifest = read_json(run_dir / "run-manifest.json")
     context = bounded_context(
         [
             ("FROZEN ENGINE CANON", (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
             ("FROZEN RUN MANIFEST", manifest),
-            ("FROZEN THRESHOLD GEOMANCY", ensure_frozen_geomancy(run_dir)),
         ],
-        manifest["budgets"]["max_prepared_context_tokens"] - 14000,
+        manifest["budgets"]["max_prepared_context_tokens"] - 12000,
     )
     return render_prompt(
         run_dir,
         "generation-genesis.md",
-        {"FROZEN_GENESIS_CONTEXT": context, "GENESIS_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "genesis")},
+        {"FROZEN_GENESIS_CONTEXT": context, "GENESIS_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "genesis_foundation")},
     ), context
 
 
-def architecture_prompt(run_dir: Path) -> tuple[str, str]:
+def genesis_cast_prompt(run_dir: Path) -> tuple[str, str]:
+    manifest = read_json(run_dir / "run-manifest.json")
+    context = bounded_context(
+        [
+            ("FROZEN ENGINE CANON", (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
+            ("IMMUTABLE GENESIS FOUNDATION", committed_record(run_dir, "genesis_foundation")),
+        ],
+        manifest["budgets"]["max_prepared_context_tokens"] - 12000,
+    )
+    return render_prompt(
+        run_dir,
+        "generation-genesis-cast.md",
+        {"GENESIS_CAST_CONTEXT": context, "GENESIS_CAST_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "genesis_cast")},
+    ), context
+
+
+def genesis_constraints_prompt(run_dir: Path) -> tuple[str, str]:
+    manifest = read_json(run_dir / "run-manifest.json")
+    context = bounded_context(
+        [
+            ("IMMUTABLE GENESIS FOUNDATION", committed_record(run_dir, "genesis_foundation")),
+            ("IMMUTABLE GENESIS CAST", committed_record(run_dir, "genesis_cast")),
+        ],
+        manifest["budgets"]["max_prepared_context_tokens"] - 12000,
+    )
+    return render_prompt(
+        run_dir,
+        "generation-genesis-constraints.md",
+        {
+            "GENESIS_CONSTRAINT_CONTEXT": context,
+            "GENESIS_CONSTRAINT_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "genesis_constraints"),
+        },
+    ), context
+
+
+def architecture_core_prompt(run_dir: Path) -> tuple[str, str]:
     manifest = read_json(run_dir / "run-manifest.json")
     context = bounded_context(
         [
             ("FROZEN ENGINE CANON", (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
             ("FROZEN RUN MANIFEST", manifest),
             ("IMMUTABLE GENESIS", committed_record(run_dir, "genesis")),
-            ("FROZEN THRESHOLD GEOMANCY", ensure_frozen_geomancy(run_dir)),
         ],
-        manifest["budgets"]["max_prepared_context_tokens"] - 16000,
+        manifest["budgets"]["max_prepared_context_tokens"] - 14000,
     )
     return render_prompt(
         run_dir,
         "generation-architecture.md",
         {
             "FROZEN_ARCHITECTURE_CONTEXT": context,
-            "ARCHITECTURE_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "architecture"),
+            "ARCHITECTURE_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "architecture_core"),
+        },
+    ), context
+
+
+def architecture_plan_prompt(run_dir: Path, specs: list[dict], sequence: int, count: int) -> tuple[str, str]:
+    manifest = read_json(run_dir / "run-manifest.json")
+    core = committed_record(run_dir, "architecture_core")
+    prior_ids = [
+        plan["packet_slot_id"]
+        for batch in committed_records(run_dir, "architecture_plan_batch")
+        for plan in batch["packet_plans"]
+    ]
+    scene_slots = {slot for spec in specs for slot in spec["scene_slot_ids"]}
+    geomancy = [item for item in ensure_frozen_geomancy(run_dir)["assignments"] if item["technical_slot_id"] in scene_slots]
+    context = bounded_context(
+        [
+            ("IMMUTABLE GENESIS", committed_record(run_dir, "genesis")),
+            ("IMMUTABLE ARCHITECTURE CORE", core),
+            ("PRIOR FROZEN PACKET IDS", prior_ids),
+            ("THIS BATCH THRESHOLD GEOMANCY", geomancy),
+        ],
+        manifest["budgets"]["max_prepared_context_tokens"] - 12000,
+    )
+    allocation = {
+        "record_type": "architecture_plan_batch",
+        "protocol_version": PROTOCOL_VERSION,
+        "generation_id": run_dir.name,
+        "architecture_core_commit_id": core["commit_id"],
+        "story_format": "web",
+        "batch_sequence": sequence,
+        "batch_count": count,
+        "packet_allocations": specs,
+    }
+    return render_prompt(
+        run_dir,
+        "generation-architecture-plan-batch.md",
+        {
+            "ARCHITECTURE_PLAN_CONTEXT": context,
+            "ARCHITECTURE_PLAN_ALLOCATIONS": json.dumps(allocation, ensure_ascii=False, indent=2),
+            "ARCHITECTURE_PLAN_PROTOCOL_DEFINITIONS": compact_schema(run_dir, "architecture_plan_batch"),
         },
     ), context
 
@@ -2544,7 +3000,16 @@ def packet_prompt(run_dir: Path, architecture: dict, plan: dict) -> tuple[str, s
     packet_sequence = 1 + sum(
         record.get("record_type") == "creative_packet" for record in all_committed_records(run_dir)
     )
-    obligations = json.dumps(plan | {"packet_sequence": packet_sequence}, ensure_ascii=False, indent=2)
+    batch = plan_batch_for(run_dir, plan["packet_slot_id"])
+    obligations = json.dumps(
+        plan | {
+            "packet_sequence": packet_sequence,
+            "architecture_core_commit_id": architecture["architecture_core_commit_id"],
+            "packet_plan_commit_id": batch["commit_id"],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
     if plan["packet_kind"] == "literary":
         name = "generation-packet.md"
         replacements = {
@@ -2562,53 +3027,247 @@ def packet_prompt(run_dir: Path, architecture: dict, plan: dict) -> tuple[str, s
     return render_prompt(run_dir, name, replacements), context
 
 
+def step_was_truncated(run_dir: Path, step_id: str) -> bool:
+    return any(
+        entry["planned_step_id"] == step_id and entry["failure_class"] == "provider_truncation"
+        for entry in ledger_entries(run_dir)
+    )
+
+
+def packet_step_id(plan: dict, expanded: bool = False) -> str:
+    slots = plan["scene_slot_ids"] or plan["ending_slot_ids"]
+    identity = canonical_json({
+        "packet": plan["packet_slot_id"],
+        "slots": slots,
+        "artifacts": plan["artifact_count"],
+        "compositions": plan["formal_composition_count"],
+        "obligations": plan["advance_obligation_ids"],
+    })
+    return f"packet_{plan['packet_slot_id']}_{sha256_bytes(identity)[:12]}{'_expanded' if expanded else ''}"
+
+
+def expanded_output_limit(run_dir: Path, prompt: str, base_step_id: str) -> int:
+    manifest = read_json(run_dir / "run-manifest.json")
+    state = load_state(run_dir)
+    observed = max(
+        (
+            entry["token_accounting"]["input_tokens"] or 0
+            for entry in ledger_entries(run_dir)
+            if entry["planned_step_id"] == base_step_id
+        ),
+        default=0,
+    )
+    prompt_tokens = max(observed, math.ceil(len(prompt.encode("utf-8")) / 3))
+    available = (
+        min(
+            manifest["budgets"]["model_context_window_tokens"],
+            state.get("model_context_window_tokens", manifest["budgets"]["model_context_window_tokens"]),
+        )
+        - prompt_tokens
+        - manifest["budgets"]["context_safety_reserve_tokens"]
+    )
+    return min(manifest["budgets"]["max_expanded_output_tokens"], available)
+
+
+def request_bounded_record(run_dir: Path, **arguments) -> dict:
+    step_id = arguments["step_id"]
+    if not step_was_truncated(run_dir, step_id):
+        try:
+            return request_record(run_dir, **arguments)
+        except TruncationError:
+            pass
+    expanded_id = f"{step_id}_expanded"
+    if step_was_truncated(run_dir, expanded_id):
+        raise TruncationError(f"Bounded step {step_id} was truncated after its context-safe expanded retry")
+    maximum = expanded_output_limit(run_dir, arguments["prompt"], step_id)
+    if maximum <= BASE_OUTPUT_TOKENS:
+        raise TruncationError(f"Bounded step {step_id} was truncated and the model context has no safe expansion headroom")
+    return request_record(run_dir, **(arguments | {"step_id": expanded_id, "max_tokens": maximum}))
+
+
+def split_packet_plan(plan: dict) -> tuple[dict, dict]:
+    key = "scene_slot_ids" if plan["packet_kind"] == "literary" else "ending_slot_ids"
+    slots = plan[key]
+    midpoint = len(slots) // 2
+    artifact_counts = distribute_counts(plan["artifact_count"], 2)
+    composition_counts = distribute_counts(plan["formal_composition_count"], 2)
+    left = plan | {
+        key: slots[:midpoint],
+        "artifact_count": artifact_counts[0],
+        "formal_composition_count": composition_counts[0],
+        "advance_obligation_ids": [],
+        "may_satisfy_obligation_ids": [],
+    }
+    right = plan | {
+        key: slots[midpoint:],
+        "artifact_count": artifact_counts[1],
+        "formal_composition_count": composition_counts[1],
+    }
+    return left, right
+
+
+def request_packet_slice(run_dir: Path, architecture: dict, plan: dict, transport=http_json) -> None:
+    slots = plan["scene_slot_ids"] or plan["ending_slot_ids"]
+    step_id = packet_step_id(plan)
+    if step_was_truncated(run_dir, step_id):
+        if len(slots) > 1:
+            left, right = split_packet_plan(plan)
+            request_packet_slice(run_dir, architecture, left, transport)
+            request_packet_slice(run_dir, architecture, right, transport)
+            return
+        expanded_id = packet_step_id(plan, expanded=True)
+        if step_was_truncated(run_dir, expanded_id):
+            raise TruncationError("A single-content packet was truncated after its context-safe expanded retry")
+        prompt, context = packet_prompt(run_dir, architecture, plan)
+        maximum = expanded_output_limit(run_dir, prompt, step_id)
+        if maximum <= BASE_OUTPUT_TOKENS:
+            raise TruncationError("A single-content packet was truncated and the model context has no safe expansion headroom")
+        request_record(
+            run_dir,
+            expected_record_type="creative_packet",
+            step_id=expanded_id,
+            phase="literary_packet" if plan["packet_kind"] == "literary" else "ending_packet",
+            prompt=prompt,
+            context=context,
+            branch_relation=plan["branch_path_relation"],
+            temperature=0.85 if plan["packet_kind"] == "literary" else 0.75,
+            max_tokens=maximum,
+            transport=transport,
+            precommit_validator=lambda record: validate_packet_for_run(record, run_dir, plan),
+        )
+        return
+    prompt, context = packet_prompt(run_dir, architecture, plan)
+    try:
+        request_record(
+            run_dir,
+            expected_record_type="creative_packet",
+            step_id=step_id,
+            phase="literary_packet" if plan["packet_kind"] == "literary" else "ending_packet",
+            prompt=prompt,
+            context=context,
+            branch_relation=plan["branch_path_relation"],
+            temperature=0.85 if plan["packet_kind"] == "literary" else 0.75,
+            transport=transport,
+            precommit_validator=lambda record: validate_packet_for_run(record, run_dir, plan),
+        )
+    except TruncationError:
+        if len(slots) > 1:
+            left, right = split_packet_plan(plan)
+            request_packet_slice(run_dir, architecture, left, transport)
+            request_packet_slice(run_dir, architecture, right, transport)
+            return
+        request_packet_slice(run_dir, architecture, plan, transport)
+
+
+def execute_packet_plan(run_dir: Path, architecture: dict, plan: dict, transport=http_json) -> dict:
+    content_key = "scenes" if plan["packet_kind"] == "literary" else "endings"
+    slot_key = "scene_slot_ids" if plan["packet_kind"] == "literary" else "ending_slot_ids"
+    chunks = packet_chunks(run_dir, plan["packet_slot_id"])
+    filled = {item["technical_slot_id"] for chunk in chunks for item in chunk[content_key]}
+    obligations_done = {item for chunk in chunks for item in chunk["obligations_advanced"]}
+    remaining = plan | {
+        slot_key: [slot for slot in plan[slot_key] if slot not in filled],
+        "artifact_count": plan["artifact_count"] - sum(len(chunk["artifacts"]) for chunk in chunks),
+        "formal_composition_count": plan["formal_composition_count"] - sum(len(chunk["formal_compositions"]) for chunk in chunks),
+        "advance_obligation_ids": [item for item in plan["advance_obligation_ids"] if item not in obligations_done],
+        "may_satisfy_obligation_ids": [item for item in plan["may_satisfy_obligation_ids"] if item not in obligations_done],
+    }
+    if remaining[slot_key]:
+        request_packet_slice(run_dir, architecture, remaining, transport)
+    packet = assembled_packet(run_dir, plan["packet_slot_id"])
+    if not packet:
+        raise IntegrityError(f"Packet {plan['packet_slot_id']} did not complete after its final chunk")
+    return packet
+
+
 def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json) -> None:
     verify_engine_snapshot(run_dir)
     ensure_frozen_geomancy(run_dir)
-    if not committed_record(run_dir, "genesis"):
-        output_fn("[03] Genesis                       …")
-        prompt, context = genesis_prompt(run_dir)
-        request_record(
+    output_fn("[03] Genesis                       …")
+    if not committed_record(run_dir, "genesis_foundation"):
+        prompt, context = genesis_foundation_prompt(run_dir)
+        request_bounded_record(
             run_dir,
-            expected_record_type="genesis",
-            step_id="genesis",
+            expected_record_type="genesis_foundation",
+            step_id="genesis_foundation",
             phase="genesis",
             prompt=prompt,
             context=context,
-            branch_relation="generated_root_canon",
+            branch_relation="generated_root_foundation",
             temperature=0.8,
             transport=transport,
-            precommit_validator=lambda record: validate_genesis(record, run_dir),
+            precommit_validator=lambda record: validate_genesis_foundation(record, run_dir),
         )
-        output_fn("[03] Genesis                       ✓ committed")
-    else:
-        output_fn("[03] Genesis                       ✓ already committed")
-    if not committed_record(run_dir, "architecture"):
-        output_fn("[04] Architecture                  …")
-        prompt, context = architecture_prompt(run_dir)
-        request_record(
+    if not committed_record(run_dir, "genesis_cast"):
+        prompt, context = genesis_cast_prompt(run_dir)
+        request_bounded_record(
             run_dir,
-            expected_record_type="architecture",
-            step_id="architecture",
+            expected_record_type="genesis_cast",
+            step_id="genesis_cast",
+            phase="genesis",
+            prompt=prompt,
+            context=context,
+            branch_relation="generated_root_cast",
+            temperature=0.8,
+            transport=transport,
+            precommit_validator=lambda record: validate_genesis_cast(record, run_dir),
+        )
+    if not committed_record(run_dir, "genesis_constraints"):
+        prompt, context = genesis_constraints_prompt(run_dir)
+        request_bounded_record(
+            run_dir,
+            expected_record_type="genesis_constraints",
+            step_id="genesis_constraints",
+            phase="genesis",
+            prompt=prompt,
+            context=context,
+            branch_relation="generated_root_constraints",
+            temperature=0.4,
+            transport=transport,
+            precommit_validator=lambda record: validate_genesis_constraints(record, run_dir),
+        )
+    output_fn("[03] Genesis                       ✓ committed (3 bounded records)")
+    output_fn("[04] Architecture                  …")
+    if not committed_record(run_dir, "architecture_core"):
+        prompt, context = architecture_core_prompt(run_dir)
+        request_bounded_record(
+            run_dir,
+            expected_record_type="architecture_core",
+            step_id="architecture_core",
             phase="architecture",
             prompt=prompt,
             context=context,
             branch_relation="macroarchitecture",
             temperature=0.7,
             transport=transport,
-            precommit_validator=lambda record: validate_architecture_for_run(record, run_dir),
+            precommit_validator=lambda record: validate_architecture_core_for_run(record, run_dir),
         )
-        output_fn("[04] Architecture                  ✓ committed")
-    else:
-        output_fn("[04] Architecture                  ✓ already committed")
+    core = committed_record(run_dir, "architecture_core")
+    batches = plan_batches(core)
+    for sequence, specs in enumerate(batches, 1):
+        if any(item["batch_sequence"] == sequence for item in committed_records(run_dir, "architecture_plan_batch")):
+            continue
+        prompt, context = architecture_plan_prompt(run_dir, specs, sequence, len(batches))
+        request_bounded_record(
+            run_dir,
+            expected_record_type="architecture_plan_batch",
+            step_id=f"architecture_plan_batch_{sequence:04d}",
+            phase="architecture",
+            prompt=prompt,
+            context=context,
+            branch_relation="macroarchitecture_plan_batch",
+            temperature=0.65,
+            transport=transport,
+            precommit_validator=lambda record, frozen_specs=specs, frozen_sequence=sequence: validate_architecture_plan_batch(
+                record, run_dir, frozen_specs, frozen_sequence, len(batches)
+            ),
+        )
+    validate_completed_architecture(run_dir)
+    output_fn(f"[04] Architecture                  ✓ committed ({len(batches)} bounded plan batches)")
     architecture = committed_record(run_dir, "architecture")
     plans = architecture["packet_plans"]
     while True:
-        committed_slots = {
-            record["packet_slot_id"]
-            for record in all_committed_records(run_dir)
-            if record.get("record_type") == "creative_packet"
-        }
+        committed_slots = completed_packet_slots(architecture, all_committed_records(run_dir))
         pending = [plan for plan in plans if plan["packet_slot_id"] not in committed_slots]
         if not pending:
             break
@@ -2631,30 +3290,22 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
         )
         total_kind = sum(item["packet_kind"] == plan["packet_kind"] for item in plans)
         label = f"{'Literary' if plan['packet_kind'] == 'literary' else 'Ending'} packet {completed_kind + 1:02d}/{total_kind:02d}"
-        step_id = f"packet_{plan['packet_slot_id']}"
         missing = [dependency for dependency in plan["depends_on_packet_slot_ids"] if not committed_record(run_dir, "creative_packet", dependency)]
         if missing:
             raise CathedralsError("Traversal", f"{plan['packet_slot_id']} has uncommitted dependencies: {', '.join(missing)}", "continuity_impossibility")
         output_fn(f"      {label:<31} …")
-        prompt, context = packet_prompt(run_dir, architecture, plan)
-        request_record(
-            run_dir,
-            expected_record_type="creative_packet",
-            step_id=step_id,
-            phase="literary_packet" if plan["packet_kind"] == "literary" else "ending_packet",
-            prompt=prompt,
-            context=context,
-            branch_relation=plan["branch_path_relation"],
-            temperature=0.85 if plan["packet_kind"] == "literary" else 0.75,
-            transport=transport,
-            precommit_validator=lambda record, frozen_plan=plan: validate_packet_for_run(record, run_dir, frozen_plan),
-        )
-        counts = committed_record(run_dir, "creative_packet", plan["packet_slot_id"])
+        counts = execute_packet_plan(run_dir, architecture, plan, transport)
         output_fn(f"      {label:<31} ✓ committed ({len(counts['scenes'])} scenes, {len(counts['artifacts'])} artifacts, {len(counts['endings'])} endings)")
 
 
 def literary_word_count(value: str) -> int:
     return len(re.findall(r"\b[\w’'-]+\b", value, flags=re.UNICODE))
+
+
+def packet_literary_word_count(record: dict) -> int:
+    return sum(literary_word_count(item["prose_mdx"]) for item in record["scenes"] + record["endings"]) + sum(
+        literary_word_count(item["body_mdx"]) for item in record["artifacts"]
+    )
 
 
 HTML_TAG = re.compile(
@@ -2841,8 +3492,6 @@ def validate_complete_work(run_dir: Path) -> dict:
             reasons.append(f"Scene {scene['scene_id']} references an absent artifact.")
         if any(edge_by_id[edge_id]["from_content_id"] != scene["scene_id"] for edge_id in scene["choice_edge_ids"] if edge_id in edge_by_id):
             reasons.append(f"Scene {scene['scene_id']} claims an edge owned by different content.")
-        if literary_word_count(scene["prose_mdx"]) > 600:
-            reasons.append(f"Scene {scene['scene_id']} exceeds the 600-word hard limit.")
         if scene["major_decision"] and not scene["hesitation_consequence"]:
             reasons.append(f"Major decision {scene['scene_id']} has no consequential hesitation.")
         try:
@@ -3070,6 +3719,7 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
             )
             break
         except CathedralsError as error:
+            failed_response = error.response if isinstance(error, TruncationError) else None
             append_failed_attempt(
                 run_dir,
                 step_id=step_id,
@@ -3081,6 +3731,8 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
                 started_at=started_at,
                 failure_class=error.failure_class,
                 step_type="analysis",
+                output_hash=sha256_bytes(canonical_json(failed_response)) if failed_response else None,
+                usage=failed_response.get("usage", {}) if failed_response else {},
             )
             if error.failure_class not in RETRYABLE_PROVIDER_FAILURES or retry == 2:
                 raise
@@ -3101,6 +3753,7 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
             failure_class="malformed_response",
             output_hash=sha256_bytes(content.encode()),
             step_type="analysis",
+            usage=response.get("usage", {}) if isinstance(response, dict) else {},
         )
         raise
     output_hash = sha256_bytes(canonical_json(verdict))
@@ -3141,7 +3794,17 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
 def artistic_acceptance(run_dir: Path, *, transport=http_json) -> dict:
     packet_verdicts = []
     acceptance_law = (engine_root(run_dir) / "canon/acceptance-tests.md").read_text(encoding="utf-8")
-    for packet in [record for record in all_committed_records(run_dir) if record.get("record_type") == "creative_packet"]:
+    architecture = committed_record(run_dir, "architecture")
+    records = all_committed_records(run_dir)
+    packets = [
+        packet_from_chunks(
+            plan,
+            [record for record in records if record.get("record_type") == "creative_packet" and record["packet_slot_id"] == plan["packet_slot_id"]],
+        )
+        for plan in architecture["packet_plans"]
+    ]
+    packets = [packet for packet in packets if packet]
+    for packet in packets:
         step_id = f"artistic_review_{packet['packet_slot_id']}"
         prompt = bounded_context(
             [
@@ -3357,8 +4020,8 @@ def build_web(run_dir: Path, project: Path, output_fn=print) -> dict:
     return verdict
 
 
-def preflight_model_capacity(base_url: str, model: str, output_fn=print, transport=http_json) -> None:
-    required = 49152 + 10900 + 4096
+def preflight_model_capacity(base_url: str, model: str, output_fn=print, transport=http_json) -> int:
+    required = 49152 + BASE_OUTPUT_TOKENS + 4096
     try:
         payload = transport("GET", api_url(base_url, "/api/v1/models"), timeout=10.0)
     except CathedralsError as error:
@@ -3390,6 +4053,7 @@ def preflight_model_capacity(base_url: str, model: str, output_fn=print, transpo
             f"The selected model is loaded with a {max(limits):,}-token context; Cathedrals requires at least {required:,} for a prepared packet, output, and safety reserve.",
             "budget_exhaustion",
         )
+    return max(limits)
 
 
 def committed_hashes(run_dir: Path) -> dict[str, str]:
@@ -3416,7 +4080,7 @@ def make_finalization(run_dir: Path, status: str, failure_class: str, reason: st
     prospective_history = run_dir / "planning/prospective-plans.jsonl"
     finalization = {
         "record_type": "finalization",
-        "protocol_version": "3.0",
+        "protocol_version": PROTOCOL_VERSION,
         "generation_id": run_dir.name,
         "run_status": status,
         "run_manifest_hash": state["manifest_hash"],
@@ -3513,7 +4177,10 @@ def ensure_resume_ready(run_dir: Path, output_fn=print, transport=http_json) -> 
     payload = transport("GET", api_url(brief["lm_studio_base_url"], "/v1/models"), timeout=10.0)
     if state["model"] not in usable_model_ids(payload):
         raise CathedralsError("Resume preflight", f"Frozen model {state['model']!r} is no longer visible to LM Studio.", "provider_before_creative_output")
-    preflight_model_capacity(brief["lm_studio_base_url"], state["model"], output_fn, transport)
+    context_limit = preflight_model_capacity(brief["lm_studio_base_url"], state["model"], output_fn, transport)
+    if isinstance(context_limit, int):
+        state["model_context_window_tokens"] = context_limit
+        save_state(run_dir, state)
 
 
 def execute_run(run_dir: Path, output_fn=print, transport=http_json) -> tuple[Path, dict, dict]:
@@ -3578,8 +4245,14 @@ def main(argv=None, *, input_fn=input, output_fn=print, transport=http_json) -> 
             frozen = collect_inputs(input_fn, output_fn)
             base_url = configured_lm_studio_url()
             model = lm_studio_preflight(base_url, os.environ.get("CATHEDRALS_MODEL"), input_fn, output_fn, transport)
-            preflight_model_capacity(base_url, model, output_fn, transport)
-            run_dir = create_run(frozen, base_url, model, output_fn)
+            model_context_window_tokens = preflight_model_capacity(base_url, model, output_fn, transport)
+            run_dir = create_run(
+                frozen,
+                base_url,
+                model,
+                output_fn,
+                model_context_window_tokens=model_context_window_tokens,
+            )
             output_fn("[01] Preflight                     ✓")
             output_fn("[02] Engine snapshot              ✓")
         build_path, counts, brief = execute_run(run_dir, output_fn, transport)

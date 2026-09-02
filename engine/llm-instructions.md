@@ -40,7 +40,8 @@ directly to LM Studio and owns phase order, commits, constraint propagation, val
 the static build. Current visual-novel aliases resolve to the active web contract;
 Ren'Py is deferred.
 
-Commit genesis, then generated architecture, then literary packets selected by
+Commit the three bounded Genesis records, then the Architecture core and bounded plan
+batches, then literary packets selected by
 current constraint pressure while respecting frozen dependencies, then prerequisite-
 satisfied ending packets. A valid commit is
 immutable source evidence. Later calls may read and react to it, including lawful
@@ -55,7 +56,8 @@ token/cost accounting.
 ## Five Claimants
 
 Use exactly five semantically blank technical slots. Generate all five identities
-together in genesis under `engine/data/claimants.yaml`. No claimant is locked,
+together in the Genesis cast record under `engine/data/claimants.yaml`. Their IDs,
+names, slots, and incident roles are anchored by the preceding foundation. No claimant is otherwise locked,
 prewritten, selected from an archetype menu, or assigned a fictional role in advance.
 The opening hub is exactly three situated actions, not a claimant selector.
 

@@ -31,8 +31,9 @@ particular characters, incident, routes, artifacts, revelations, or endings.
 
 ## Generated Work Canon
 
-Generated work canon begins when genesis commits and grows only through immutable,
-causally forward architecture and packet commits. Within its run it owns
+Generated work canon begins with the Genesis foundation and becomes complete when its
+constraint record commits; it grows only through immutable, causally forward
+Architecture and packet commits. Within its run it owns
 exact fictional facts, claimant profiles, characters, arcs, scenes, artifacts,
 choices, endings, poetry, and prose.
 

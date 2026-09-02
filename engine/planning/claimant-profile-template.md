@@ -2,7 +2,7 @@
 
 This is a documentation view of the `claimants` records in
 `engine/data/generation-protocol.schema.json`. It is not a pre-generation worksheet;
-all five records are authored together in the genesis step.
+all five records are authored together in the Genesis cast step.
 
 ```json
 {

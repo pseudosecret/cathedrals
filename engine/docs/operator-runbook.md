@@ -32,9 +32,9 @@ It then owns this sequence:
 6. Deterministically prepare abstract topology/state capacity and all relevant
    threshold-geomancy assignments.
 7. Write the immutable run manifest, initialize counters, and start the ledger.
-8. Make the genesis call, preserve raw output, validate it, and atomically commit it.
-9. Make and commit architecture; freeze topology, attractors, hard obligations, and
-   packet dependencies without freezing tentative realization order.
+8. Make and commit the bounded Genesis foundation, cast, and constraint calls.
+9. Make and commit the bounded Architecture core and every plan batch; freeze topology,
+   attractors, hard obligations, and packet dependencies without freezing tentative realization order.
 10. Assemble constraint-relevant contexts and execute each dependency-lawful packet
     selected by the current prospective plan. Append constraint and ledger records.
 11. After every commit, update fact/knowledge/obligation/motif state and recompute

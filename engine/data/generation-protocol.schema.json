@@ -1,11 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cathedrals.local/schemas/generation-protocol-v3.json",
+  "$id": "https://cathedrals.local/schemas/generation-protocol-v4.json",
   "title": "Cathedrals bidirectional constraint-propagation protocol",
   "oneOf": [
     { "$ref": "#/$defs/runManifest" },
-    { "$ref": "#/$defs/genesis" },
-    { "$ref": "#/$defs/architecture" },
+    { "$ref": "#/$defs/genesisFoundation" },
+    { "$ref": "#/$defs/genesisCast" },
+    { "$ref": "#/$defs/genesisConstraints" },
+    { "$ref": "#/$defs/architectureCore" },
+    { "$ref": "#/$defs/architecturePlanBatch" },
     { "$ref": "#/$defs/creativePacket" },
     { "$ref": "#/$defs/constraintEvent" },
     { "$ref": "#/$defs/prospectivePlan" },
@@ -103,7 +106,7 @@
       ],
       "properties": {
         "record_type": { "const": "run_manifest" },
-        "protocol_version": { "const": "3.0" },
+        "protocol_version": { "const": "4.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "created_at": { "$ref": "#/$defs/timestamp" },
         "generation_brief": { "$ref": "#/$defs/generationBrief" },
@@ -186,6 +189,8 @@
           "required": [
             "max_prepared_context_tokens",
             "max_creative_packet_output_tokens",
+            "max_expanded_output_tokens",
+            "model_context_window_tokens",
             "max_analysis_output_tokens",
             "context_safety_reserve_tokens",
             "max_creative_step_count",
@@ -199,6 +204,8 @@
           "properties": {
             "max_prepared_context_tokens": { "type": "integer", "minimum": 1 },
             "max_creative_packet_output_tokens": { "type": "integer", "minimum": 1 },
+            "max_expanded_output_tokens": { "type": "integer", "minimum": 1 },
+            "model_context_window_tokens": { "type": "integer", "minimum": 1 },
             "max_analysis_output_tokens": { "type": "integer", "minimum": 1 },
             "context_safety_reserve_tokens": { "type": "integer", "minimum": 0 },
             "max_creative_step_count": { "type": "integer", "minimum": 1 },
@@ -278,7 +285,7 @@
         "chronology": {
           "type": "array",
           "minItems": 3,
-          "maxItems": 64,
+          "maxItems": 12,
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -294,7 +301,7 @@
         "claimant_relationships": {
           "type": "array",
           "minItems": 4,
-          "maxItems": 32,
+          "maxItems": 10,
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -306,9 +313,9 @@
             }
           }
         },
-        "generated_motifs": { "$ref": "#/$defs/stringList" },
+        "generated_motifs": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/nonEmptyString" } },
         "environmental_mutation_law": { "$ref": "#/$defs/nonEmptyString" },
-        "principal_tensions": { "$ref": "#/$defs/stringList" }
+        "principal_tensions": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/nonEmptyString" } }
       }
     },
     "claimant": {
@@ -550,6 +557,19 @@
         "potential_foreclosures": { "type": "array", "items": { "$ref": "#/$defs/foreclosureCandidate" } }
       }
     },
+    "genesisConstraintDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical_facts", "knowledge_changes", "new_obligations", "obligation_updates", "motif_events", "potential_foreclosures"],
+      "properties": {
+        "canonical_facts": { "type": "array", "maxItems": 12, "items": { "$ref": "#/$defs/canonicalFact" } },
+        "knowledge_changes": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/knowledgeChange" } },
+        "new_obligations": { "type": "array", "maxItems": 0, "items": { "$ref": "#/$defs/obligation" } },
+        "obligation_updates": { "type": "array", "maxItems": 0, "items": { "$ref": "#/$defs/obligationUpdate" } },
+        "motif_events": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/motifEvent" } },
+        "potential_foreclosures": { "type": "array", "maxItems": 0, "items": { "$ref": "#/$defs/foreclosureCandidate" } }
+      }
+    },
     "webArtDirection": {
       "type": "object",
       "additionalProperties": false,
@@ -593,7 +613,20 @@
         "route_pressure": { "enum": ["subtle", "moderate", "strong"] }
       }
     },
-    "genesis": {
+    "claimantAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claimant_id", "technical_slot_id", "name", "incident_role"],
+      "properties": {
+        "claimant_id": { "$ref": "#/$defs/id" },
+        "technical_slot_id": {
+          "enum": ["claimant_slot_01", "claimant_slot_02", "claimant_slot_03", "claimant_slot_04", "claimant_slot_05"]
+        },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "incident_role": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "genesisFoundation": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -605,19 +638,39 @@
         "format_composition_law",
         "work_canon",
         "web_art_direction",
-        "claimants",
-        "characters",
-        "constraint_delta"
+        "claimant_anchors"
       ],
       "properties": {
-        "record_type": { "const": "genesis" },
-        "protocol_version": { "const": "3.0" },
+        "record_type": { "const": "genesis_foundation" },
+        "protocol_version": { "const": "4.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "commit_id": { "$ref": "#/$defs/id" },
         "story_format": { "const": "web" },
         "format_composition_law": { "$ref": "#/$defs/nonEmptyString" },
         "work_canon": { "$ref": "#/$defs/workCanon" },
         "web_art_direction": { "$ref": "#/$defs/webArtDirection" },
+        "claimant_anchors": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/claimantAnchor" }
+        }
+      }
+    },
+    "genesisCast": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type", "protocol_version", "generation_id", "commit_id",
+        "foundation_commit_id", "story_format", "claimants", "characters"
+      ],
+      "properties": {
+        "record_type": { "const": "genesis_cast" },
+        "protocol_version": { "const": "4.0" },
+        "generation_id": { "$ref": "#/$defs/id" },
+        "commit_id": { "$ref": "#/$defs/id" },
+        "foundation_commit_id": { "$ref": "#/$defs/id" },
+        "story_format": { "const": "web" },
         "claimants": {
           "type": "array",
           "minItems": 5,
@@ -626,10 +679,26 @@
         },
         "characters": {
           "type": "array",
-          "maxItems": 40,
+          "maxItems": 12,
           "items": { "$ref": "#/$defs/character" }
-        },
-        "constraint_delta": { "$ref": "#/$defs/constraintDelta" }
+        }
+      }
+    },
+    "genesisConstraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type", "protocol_version", "generation_id", "commit_id",
+        "cast_commit_id", "story_format", "constraint_delta"
+      ],
+      "properties": {
+        "record_type": { "const": "genesis_constraints" },
+        "protocol_version": { "const": "4.0" },
+        "generation_id": { "$ref": "#/$defs/id" },
+        "commit_id": { "$ref": "#/$defs/id" },
+        "cast_commit_id": { "$ref": "#/$defs/id" },
+        "story_format": { "const": "web" },
+        "constraint_delta": { "$ref": "#/$defs/genesisConstraintDelta" }
       }
     },
     "arc": {
@@ -815,7 +884,7 @@
       "required": [
         "attractor_id", "kind", "terminal_transformation", "thematic_function",
         "emotional_register", "foreclosable", "prerequisite_obligation_ids",
-        "soft_seed_conditions", "unresolved_realization", "ending_slot_ids", "relevance"
+        "soft_seed_conditions", "unresolved_realization", "relevance"
       ],
       "properties": {
         "attractor_id": { "$ref": "#/$defs/id" },
@@ -827,7 +896,6 @@
         "prerequisite_obligation_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
         "soft_seed_conditions": { "$ref": "#/$defs/stringList" },
         "unresolved_realization": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmptyString" } },
-        "ending_slot_ids": { "$ref": "#/$defs/idList" },
         "relevance": { "$ref": "#/$defs/relevanceTags" }
       }
     },
@@ -851,7 +919,7 @@
         "saturation_rationale": { "$ref": "#/$defs/nonEmptyString" }
       }
     },
-    "architecture": {
+    "architectureCore": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -866,12 +934,11 @@
         "attractors",
         "arcs",
         "topology",
-        "packet_plans",
         "constraint_delta"
       ],
       "properties": {
-        "record_type": { "const": "architecture" },
-        "protocol_version": { "const": "3.0" },
+        "record_type": { "const": "architecture_core" },
+        "protocol_version": { "const": "4.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "commit_id": { "$ref": "#/$defs/id" },
         "genesis_commit_id": { "$ref": "#/$defs/id" },
@@ -880,16 +947,16 @@
         "obligation_graph": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 512,
+          "maxItems": 48,
           "items": { "$ref": "#/$defs/obligation" }
         },
         "attractors": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 128,
+          "maxItems": 16,
           "items": { "$ref": "#/$defs/attractor" }
         },
-        "arcs": { "type": "array", "minItems": 4, "maxItems": 128, "items": { "$ref": "#/$defs/arc" } },
+        "arcs": { "type": "array", "minItems": 4, "maxItems": 24, "items": { "$ref": "#/$defs/arc" } },
         "topology": {
           "type": "object",
           "additionalProperties": false,
@@ -897,13 +964,37 @@
           "properties": {
             "entry_segment_id": { "$ref": "#/$defs/id" },
             "opening_branch_node_id": { "$ref": "#/$defs/id" },
-            "nodes": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/architectureNode" } },
-            "edges": { "type": "array", "minItems": 1, "maxItems": 1024, "items": { "$ref": "#/$defs/architectureEdge" } },
+            "nodes": { "type": "array", "minItems": 1, "maxItems": 48, "items": { "$ref": "#/$defs/architectureNode" } },
+            "edges": { "type": "array", "minItems": 1, "maxItems": 128, "items": { "$ref": "#/$defs/architectureEdge" } },
             "reconvergence_node_ids": { "$ref": "#/$defs/idList" }
           }
         },
-        "packet_plans": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/packetPlan" } },
         "constraint_delta": { "$ref": "#/$defs/constraintDelta" }
+      }
+    },
+    "architecturePlanBatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type", "protocol_version", "generation_id", "commit_id",
+        "architecture_core_commit_id", "story_format", "batch_sequence",
+        "batch_count", "packet_plans"
+      ],
+      "properties": {
+        "record_type": { "const": "architecture_plan_batch" },
+        "protocol_version": { "const": "4.0" },
+        "generation_id": { "$ref": "#/$defs/id" },
+        "commit_id": { "$ref": "#/$defs/id" },
+        "architecture_core_commit_id": { "$ref": "#/$defs/id" },
+        "story_format": { "const": "web" },
+        "batch_sequence": { "type": "integer", "minimum": 1 },
+        "batch_count": { "type": "integer", "minimum": 1 },
+        "packet_plans": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/packetPlan" }
+        }
       }
     },
     "scene": {
@@ -984,7 +1075,7 @@
             "navigational_discovery": { "$ref": "#/$defs/nonEmptyString" }
           }
         },
-        "prose_mdx": { "type": "string", "minLength": 1, "maxLength": 16000 }
+        "prose_mdx": { "type": "string", "minLength": 1 }
       }
     },
     "artifact": {
@@ -1069,7 +1160,8 @@
         "protocol_version",
         "generation_id",
         "commit_id",
-        "architecture_commit_id",
+        "architecture_core_commit_id",
+        "packet_plan_commit_id",
         "story_format",
         "packet_slot_id",
         "packet_kind",
@@ -1084,10 +1176,11 @@
       ],
       "properties": {
         "record_type": { "const": "creative_packet" },
-        "protocol_version": { "const": "3.0" },
+        "protocol_version": { "const": "4.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "commit_id": { "$ref": "#/$defs/id" },
-        "architecture_commit_id": { "$ref": "#/$defs/id" },
+        "architecture_core_commit_id": { "$ref": "#/$defs/id" },
+        "packet_plan_commit_id": { "$ref": "#/$defs/id" },
         "story_format": { "const": "web" },
         "packet_slot_id": { "$ref": "#/$defs/id" },
         "packet_kind": { "enum": ["literary", "ending"] },
@@ -1105,7 +1198,7 @@
           "if": { "properties": { "packet_kind": { "const": "literary" } } },
           "then": {
             "properties": {
-              "scenes": { "minItems": 3 },
+              "scenes": { "minItems": 1 },
               "endings": { "maxItems": 0 }
             }
           }
@@ -1115,7 +1208,7 @@
           "then": {
             "properties": {
               "scenes": { "maxItems": 0 },
-              "endings": { "minItems": 2 }
+              "endings": { "minItems": 1 }
             }
           }
         }
@@ -1139,7 +1232,7 @@
       ],
       "properties": {
         "record_type": { "const": "constraint_event" },
-        "protocol_version": { "const": "3.0" },
+        "protocol_version": { "const": "4.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "constraint_event_sequence": { "type": "integer", "minimum": 1 },
         "origin_step_id": { "$ref": "#/$defs/id" },
@@ -1166,7 +1259,7 @@
       ],
       "properties": {
         "record_type": { "const": "prospective_plan" },
-        "protocol_version": { "const": "3.0" },
+        "protocol_version": { "const": "4.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "plan_id": { "$ref": "#/$defs/id" },
         "based_on_canonical_state_hash": { "$ref": "#/$defs/hash" },
@@ -1263,7 +1356,7 @@
       ],
       "properties": {
         "record_type": { "const": "ledger_entry" },
-        "protocol_version": { "const": "3.0" },
+        "protocol_version": { "const": "4.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "ledger_sequence": { "type": "integer", "minimum": 1 },
         "planned_step_id": { "$ref": "#/$defs/id" },
@@ -1311,6 +1404,7 @@
             "none",
             "transport_before_response",
             "provider_before_creative_output",
+            "provider_truncation",
             "malformed_response",
             "mechanical_validation",
             "continuity_impossibility",
@@ -1424,7 +1518,7 @@
       ],
       "properties": {
         "record_type": { "const": "finalization" },
-        "protocol_version": { "const": "3.0" },
+        "protocol_version": { "const": "4.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "run_status": { "enum": ["READY_TO_PLAY", "FAILED_GENERATION"] },
         "run_manifest_hash": { "$ref": "#/$defs/hash" },
@@ -1455,6 +1549,7 @@
             "none",
             "transport_before_response",
             "provider_before_creative_output",
+            "provider_truncation",
             "malformed_response",
             "mechanical_validation",
             "continuity_impossibility",
@@ -1493,6 +1588,7 @@
                 "enum": [
                   "transport_before_response",
                   "provider_before_creative_output",
+                  "provider_truncation",
                   "malformed_response",
                   "mechanical_validation",
                   "continuity_impossibility",

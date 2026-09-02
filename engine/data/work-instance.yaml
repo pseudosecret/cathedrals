@@ -235,7 +235,7 @@ claimants:
     - claimant_slot_03
     - claimant_slot_04
     - claimant_slot_05
-  authoring_mode: generated_together_in_genesis_creative_step
+  authoring_mode: generated_together_in_genesis_cast_step
   locked_fictional_claimants_allowed: false
   preassigned_slot_semantics_allowed: false
   opening_hub_is_claimant_selector: false
@@ -402,7 +402,7 @@ scope:
       constraint_records_hard_max: 12000
   prose_word_limits:
     scene_target: 450
-    scene_hard_max: 600
+    scene_hard_max: null
     artifact_target: 250
     artifact_hard_max: 350
     ending_target: 350
@@ -430,7 +430,7 @@ format_selection:
   renpy_bootstrap_active: false
 
 generation_budget:
-  calculation_version: 3
+  calculation_version: 4
   primary_scale_input: possible_scene_count
   words_per_token_assumption: 0.75
   max_prepared_context_tokens: 49152
@@ -440,6 +440,7 @@ generation_budget:
   structured_metadata_token_allowance_per_packet: 3500
   json_serialization_token_allowance_per_packet: 1000
   max_creative_packet_output_tokens: 10900
+  max_expanded_single_content_output_tokens: 21800
   context_safety_reserve_tokens: 4096
   minimum_model_context_window_tokens: 64148
   minimum_model_output_tokens: 10900
@@ -458,7 +459,8 @@ generation_budget:
       max_prepared_context_tokens + max_creative_packet_output_tokens +
       context_safety_reserve_tokens <= selected_model_context_window_tokens
     creative_steps: >
-      2 + ceil(possible_scene_count / 3) + ceil(ending_hard_max / 2)
+      three Genesis records + one Architecture core + ceil(packet_plan_count / 8)
+      plan batches + worst-case one committed chunk per scene or ending
     constraint_events: "max(1000, possible_scene_count * 45)"
   preflight_rules:
     - "Record documented context-window and maximum-output limits for each selected model."
@@ -486,16 +488,16 @@ generation_run:
   packet_dependencies_frozen_before_literary_packets: true
   prospective_plan_mutable_after_each_commit: true
   phases:
-    - genesis
-    - macroarchitecture
+    - genesis_foundation_cast_and_constraints
+    - macroarchitecture_core_and_plan_batches
     - forward_literary_packets
     - endings_and_residue
     - validation_and_static_build
   freeze_levels:
     engine_canon: before_run
     generation_brief: before_run
-    generated_root_canon: genesis_commit
-    generated_architecture: architecture_commit
+    generated_root_canon: genesis_constraints_commit
+    generated_architecture: final_architecture_plan_batch_commit
     creative_artifacts: containing_packet_commit
   forbidden_patterns:
     - human_creative_steering_after_start

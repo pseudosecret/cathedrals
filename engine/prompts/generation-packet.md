@@ -5,9 +5,10 @@ supplied frozen protocol definitions. Author only the packet slot and content ID
 the frozen obligation list. Do not generate alternatives, critiques, replacement
 passages, or unplanned candidates.
 
-Write three to eight related web scenes and their assigned artifacts/formal
+Write exactly the supplied one-to-eight-scene chunk and its assigned artifacts/formal
 compositions at the intersection of immutable past constraints and active future
-obligations. Make every scene perform at least two dramatic jobs, make evidence
+obligations. The chunk has one shared 4,800-word literary allowance; scenes have no
+individual word ceiling, so spend length where the drama earns it. Make every scene perform at least two dramatic jobs, make evidence
 change interpretation, preserve meaningful state variation, and keep choices
 concrete and consequential. Use supplied threshold geomancy as symbolic weather
 without recomputing it.

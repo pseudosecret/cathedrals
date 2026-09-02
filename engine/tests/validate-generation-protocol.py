@@ -37,8 +37,11 @@ record_types = {
     schema["$defs"][name]["properties"]["record_type"]["const"]
     for name in (
         "runManifest",
-        "genesis",
-        "architecture",
+        "genesisFoundation",
+        "genesisCast",
+        "genesisConstraints",
+        "architectureCore",
+        "architecturePlanBatch",
         "creativePacket",
         "constraintEvent",
         "prospectivePlan",
@@ -46,13 +49,17 @@ record_types = {
         "finalization",
     )
 }
-assert len(record_types) == 8
-assert schema["$defs"]["runManifest"]["properties"]["protocol_version"]["const"] == "3.0"
+assert len(record_types) == 11
+assert schema["$defs"]["runManifest"]["properties"]["protocol_version"]["const"] == "4.0"
 engine_snapshot = schema["$defs"]["runManifest"]["properties"]["engine_snapshot"]
 assert "path" in engine_snapshot["required"]
 assert set(engine_snapshot["properties"]) == {"work_id", "path", "work_seed", "structural_seed", "geomancy_seed"}
-assert "web_art_direction" in schema["$defs"]["genesis"]["required"]
-assert schema["$defs"]["genesis"]["properties"]["web_art_direction"]["$ref"] == "#/$defs/webArtDirection"
+assert "web_art_direction" in schema["$defs"]["genesisFoundation"]["required"]
+assert schema["$defs"]["genesisFoundation"]["properties"]["web_art_direction"]["$ref"] == "#/$defs/webArtDirection"
+assert schema["$defs"]["architecturePlanBatch"]["properties"]["packet_plans"]["maxItems"] == 8
+assert schema["$defs"]["genesisConstraintDelta"]["properties"]["canonical_facts"]["maxItems"] == 12
+assert schema["$defs"]["genesisConstraintDelta"]["properties"]["knowledge_changes"]["maxItems"] == 24
+assert "maxLength" not in schema["$defs"]["scene"]["properties"]["prose_mdx"]
 assert schema["$defs"]["decisionEdge"]["required"] == [
     "edge_id",
     "from_content_id",

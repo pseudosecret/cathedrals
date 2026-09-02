@@ -130,7 +130,7 @@ def architecture_fixture(plans=None, obligations=None, attractors=None):
 def constraint_event(sequence, kind, data, constraint_class="past_constraint", source="scene_old", action="establish"):
     return {
         "record_type": "constraint_event",
-        "protocol_version": "3.0",
+        "protocol_version": "4.0",
         "generation_id": "generation_test",
         "constraint_event_sequence": sequence,
         "origin_step_id": "packet_one",
@@ -146,7 +146,7 @@ def constraint_event(sequence, kind, data, constraint_class="past_constraint", s
 def genesis_ledger(seed="12345"):
     return {
         "record_type": "ledger_entry",
-        "protocol_version": "3.0",
+        "protocol_version": "4.0",
         "generation_id": "generation_test",
         "ledger_sequence": 1,
         "planned_step_id": "genesis",
@@ -243,7 +243,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             RUNNER.normalize_provider_response(response({"content": "", "reasoning": "{}", "reasoning_content": "[]"}))
         with self.assertRaisesRegex(RUNNER.SchemaError, "complete JSON"):
             RUNNER.normalize_provider_response(response({"content": None, "reasoning": 'notes {"result":"PASS"}'}))
-        with self.assertRaisesRegex(RUNNER.SchemaError, "truncated"):
+        with self.assertRaisesRegex(RUNNER.TruncationError, "truncated"):
             RUNNER.normalize_provider_response(response({"content": "{}"}, "length"))
         for empty in (None, response({"content": "", "reasoning": "", "reasoning_content": None})):
             with self.assertRaises(RUNNER.CathedralsError) as raised:
@@ -774,7 +774,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertNotIn("indexBatch", protocol["$defs"])
         plan = {
             "record_type": "prospective_plan",
-            "protocol_version": "3.0",
+            "protocol_version": "4.0",
             "generation_id": "generation_test",
             "plan_id": "prospective_plan_0001",
             "based_on_canonical_state_hash": "a" * 64,
@@ -849,6 +849,138 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(result, build_path)
         self.assertEqual(order, ["creative", "projection", "mechanical", "build", "artistic", "finalize"])
 
+    def test_two_thousand_scene_scope_uses_bounded_plan_batches(self):
+        core = {
+            "scope_commitment": {
+                "planned_scene_count": 2000,
+                "planned_ending_count": 285,
+                "planned_artifact_count": 400,
+                "planned_formal_composition_count": 80,
+            }
+        }
+        specs = RUNNER.planned_packet_specs(core)
+        literary = [item for item in specs if item["packet_kind"] == "literary"]
+        endings = [item for item in specs if item["packet_kind"] == "ending"]
+        self.assertEqual(sum(len(item["scene_slot_ids"]) for item in literary), 2000)
+        self.assertEqual(sum(len(item["ending_slot_ids"]) for item in endings), 285)
+        self.assertTrue(all(3 <= len(item["scene_slot_ids"]) <= 8 for item in literary))
+        self.assertTrue(all(2 <= len(item["ending_slot_ids"]) <= 6 for item in endings))
+        self.assertTrue(all(len(batch) <= RUNNER.PLAN_BATCH_SIZE for batch in RUNNER.plan_batches(core)))
+        geomancy_slots = {item["technical_slot_id"] for item in RUNNER.precompute_geomancy("scale-seed", 2000)["assignments"]}
+        self.assertEqual({slot for item in literary for slot in item["scene_slot_ids"]}, geomancy_slots)
+        self.assertGreaterEqual(RUNNER.derive_scope(2000)["budgets"]["max_creative_step_count"], 2000 + 285)
+
+    def test_scene_length_is_flexible_inside_packet_budget(self):
+        long_scene = " ".join(["word"] * 1200)
+        packet = {"scenes": [{"prose_mdx": long_scene}], "artifacts": [], "endings": []}
+        self.assertEqual(RUNNER.packet_literary_word_count(packet), 1200)
+        self.assertLess(RUNNER.packet_literary_word_count(packet), RUNNER.PACKET_LITERARY_WORDS)
+        schema = RUNNER.load_protocol()["$defs"]["scene"]["properties"]["prose_mdx"]
+        self.assertNotIn("maxLength", schema)
+
+    def test_truncated_packet_is_bisected_without_committing_partial_output(self):
+        plan = {
+            "packet_slot_id": "literary_packet_0001",
+            "packet_kind": "literary",
+            "scene_slot_ids": [f"scene_slot_{number:04d}" for number in range(1, 7)],
+            "ending_slot_ids": [],
+            "artifact_count": 4,
+            "formal_composition_count": 2,
+            "advance_obligation_ids": ["obligation_one"],
+            "may_satisfy_obligation_ids": ["obligation_one"],
+            "branch_path_relation": "branch",
+        }
+        calls = []
+
+        def request(*_args, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise RUNNER.TruncationError("truncated")
+
+        with mock.patch.object(RUNNER, "packet_prompt", return_value=("prompt", "context")), \
+             mock.patch.object(RUNNER, "step_was_truncated", return_value=False), \
+             mock.patch.object(RUNNER, "request_record", side_effect=request):
+            RUNNER.request_packet_slice(Path("/offline"), {}, plan, transport=lambda *_args, **_kwargs: None)
+        self.assertEqual(len(calls), 3)
+        self.assertNotIn("max_tokens", calls[1])
+        self.assertNotIn("max_tokens", calls[2])
+
+    def test_truncated_provider_response_is_preserved_and_ledgered(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "generation_test"
+            for name in ("state", "raw", "committed", "constraints", ".staging"):
+                (run / name).mkdir(parents=True)
+            RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+            RUNNER.write_json(run / "generation-brief.json", {
+                "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid",
+            })
+            RUNNER.write_json(run / "run-manifest.json", {
+                "budgets": {"max_prepared_context_tokens": 49152},
+            })
+            response = {
+                "choices": [{"finish_reason": "length", "message": {"content": "partial"}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 200},
+            }
+            with self.assertRaises(RUNNER.TruncationError):
+                RUNNER.request_record(
+                    run,
+                    expected_record_type="genesis_foundation",
+                    step_id="genesis_foundation",
+                    phase="genesis",
+                    prompt="prompt",
+                    context="context",
+                    branch_relation="foundation",
+                    temperature=0.8,
+                    transport=lambda *_args, **_kwargs: response,
+                )
+            entries = RUNNER.ledger_entries(run)
+            self.assertEqual(entries[-1]["failure_class"], "provider_truncation")
+            self.assertEqual(entries[-1]["token_accounting"]["output_tokens"], 200)
+            self.assertTrue(next((run / "raw").glob("genesis_foundation-attempt*.api.json"), None))
+            self.assertEqual(list((run / "committed").iterdir()), [])
+
+    def test_single_scene_truncation_gets_one_expanded_retry(self):
+        plan = {
+            "packet_slot_id": "literary_packet_0001",
+            "packet_kind": "literary",
+            "scene_slot_ids": ["scene_slot_0001"],
+            "ending_slot_ids": [],
+            "artifact_count": 0,
+            "formal_composition_count": 0,
+            "advance_obligation_ids": [],
+            "may_satisfy_obligation_ids": [],
+            "branch_path_relation": "branch",
+        }
+        with mock.patch.object(RUNNER, "packet_prompt", return_value=("prompt", "context")), \
+             mock.patch.object(RUNNER, "step_was_truncated", side_effect=lambda _run, step: not step.endswith("_expanded")), \
+             mock.patch.object(RUNNER, "expanded_output_limit", return_value=RUNNER.EXPANDED_OUTPUT_TOKENS), \
+             mock.patch.object(RUNNER, "request_record") as request:
+            RUNNER.request_packet_slice(Path("/offline"), {}, plan, transport=lambda *_args, **_kwargs: None)
+        self.assertEqual(request.call_args.kwargs["max_tokens"], RUNNER.EXPANDED_OUTPUT_TOKENS)
+
+    def test_packet_is_complete_only_after_all_chunks_fill_the_plan(self):
+        plan = {
+            "packet_slot_id": "literary_packet_0001",
+            "packet_kind": "literary",
+            "scene_slot_ids": [f"scene_slot_{number:04d}" for number in range(1, 7)],
+            "ending_slot_ids": [],
+            "artifact_count": 2,
+            "formal_composition_count": 0,
+        }
+        architecture = {"packet_plans": [plan]}
+        first = {
+            "record_type": "creative_packet", "packet_slot_id": plan["packet_slot_id"],
+            "scenes": [{"technical_slot_id": slot} for slot in plan["scene_slot_ids"][:3]],
+            "endings": [], "artifacts": [{}], "formal_compositions": [],
+        }
+        second = {
+            "record_type": "creative_packet", "packet_slot_id": plan["packet_slot_id"],
+            "scenes": [{"technical_slot_id": slot} for slot in plan["scene_slot_ids"][3:]],
+            "endings": [], "artifacts": [{}], "formal_compositions": [],
+        }
+        self.assertEqual(RUNNER.completed_packet_slots(architecture, [first]), set())
+        self.assertEqual(RUNNER.completed_packet_slots(architecture, [first, second]), {plan["packet_slot_id"]})
+
     def test_terminal_schema_has_no_partial_play_state(self):
         protocol = RUNNER.load_protocol()
         statuses = protocol["$defs"]["finalization"]["properties"]["run_status"]["enum"]
@@ -858,7 +990,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(barrier["runtime_generation_allowed"]["const"], False)
         invalid_ready = {
             "record_type": "finalization",
-            "protocol_version": "3.0",
+            "protocol_version": "4.0",
             "generation_id": "generation_test",
             "run_status": "READY_TO_PLAY",
             "run_manifest_hash": "a" * 64,

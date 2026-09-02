@@ -2,8 +2,8 @@ version: 1.0
 
 purpose: >
   Define generative law for a five-claimant set without defining any claimant.
-  Every fictional value is authored together in the genesis creative step of the
-  autonomous generation run, then frozen as generated root canon.
+  Every full fictional profile is authored together in the Genesis cast step of the
+  autonomous generation run, after its minimal identity anchor, then frozen as root canon.
 
 claimant_set:
   count_exact: 5

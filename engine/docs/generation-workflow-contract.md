@@ -65,34 +65,36 @@ A technical retry keeps the same planned step ID, prompt/context hashes, paramet
 and seed, while incrementing `attempt`. A creative step counts when valid output is
 committed. Failed attempts remain visible in the ledger.
 
-### Phase A — Genesis
+### Phase A — Bounded Genesis
 
-Generate in one creative step:
-
-- all five claimants as one differentiated set
-- significant non-claimant characters
-- the exact threshold incident and core chronology
-- relationships, generated motifs, environmental mutation law, and principal tensions
-- one bounded web art direction interpreted from the frozen brief and generated canon
-
-Commit `genesis.json`. It becomes immutable generated root canon.
+Commit three causally linked records: a foundation containing work canon, web art
+direction, and five claimant anchors; one cast record expanding all five claimants
+together plus significant characters; then a minimal source-grounded constraint
+record. Each commit is immutable. Completed Genesis is their deterministic assembled
+view, headed by the constraint commit.
 
 ### Phase B — Macroarchitecture
 
-Using frozen engine canon and genesis, generate major topology, branch families,
-ending/branch/claimant/artifact/thematic/motif attractors, hard obligations, soft
-pressures, narrative promises, and backward prerequisite chains. Commit
-`architecture.json`. Attractors freeze terminal transformations rather than terminal
-choreography. Topology, attractors, hard obligations, and packet dependencies are
-immutable; tentative realization order is not.
+Using frozen engine canon and completed Genesis, commit a bounded macroarchitecture
+core containing topology, arcs, attractors, and initial obligations. Deterministically
+preallocate content slots, then commit packet plans in batches of at most eight.
+Attractors freeze terminal transformations rather than terminal choreography. All
+plan batches commit before literary prose begins; tentative realization order is not
+canonical.
 
 ### Phase C — Forward Literary Packets
 
-Choose the next dependency-lawful packet from the current prospective plan. A packet
-normally contains three to eight related scenes plus associated artifacts, formal
-compositions, and source-grounded constraint deltas. Context is selected by constraint
+Choose the next dependency-lawful packet from the current prospective plan. A planned
+packet contains three to eight related scenes, normally six, plus associated artifacts,
+formal compositions, and source-grounded constraint deltas. Its scenes share one
+4,800-word allowance and have no individual word ceiling. Context is selected by constraint
 relevance, not chronology. Commit a mechanically valid packet even when its art is
 disappointing. Later packets may read and react to it; they may not replace it.
+
+If the provider truncates an uncommitted packet, preserve the failed response and
+deterministically bisect its remaining slots. Committed chunks collectively own the
+original plan. A single-content truncation may retry once with a larger allowance only
+when the frozen model context leaves the safety reserve intact.
 
 After every creative commit: preserve source; apply fact and knowledge events; append
 or resolve obligations; update motif pressure; evaluate viable/endangered/foreclosed/

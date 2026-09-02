@@ -3,7 +3,7 @@
 Return exactly one `creative_packet` with `packet_kind: ending`, conforming to the
 supplied frozen protocol definitions. Generate only assigned endings for the one
 early ending attractor in this packet plan. Its complete hard prerequisite chain and
-source evidence must already be committed before this packet is requested. Return two to six endings plus assigned formal compositions or
+source evidence must already be committed before this packet is requested. Return exactly the supplied one-to-six-ending chunk plus assigned formal compositions or
 artifacts; do not return scenes or candidates.
 
 Each ending must turn accumulated interpretation into foreclosure, transformation,
