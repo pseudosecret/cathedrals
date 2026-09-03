@@ -754,13 +754,12 @@
     "architectureNode": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["node_id", "node_type", "purpose", "hard_obligation_ids", "generation_dependency_ids"],
+      "required": ["node_id", "node_type", "purpose", "hard_obligation_ids"],
       "properties": {
         "node_id": { "$ref": "#/$defs/id" },
         "node_type": { "enum": ["introduction", "branch_family", "threshold", "reconvergence", "ending_family"] },
         "purpose": { "$ref": "#/$defs/nonEmptyString" },
-        "hard_obligation_ids": { "$ref": "#/$defs/idList" },
-        "generation_dependency_ids": { "$ref": "#/$defs/idList" }
+        "hard_obligation_ids": { "$ref": "#/$defs/idList" }
       }
     },
     "architectureEdge": {

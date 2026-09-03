@@ -57,6 +57,9 @@ assert set(engine_snapshot["properties"]) == {"work_id", "path", "work_seed", "s
 assert "web_art_direction" in schema["$defs"]["genesisFoundation"]["required"]
 assert schema["$defs"]["genesisFoundation"]["properties"]["web_art_direction"]["$ref"] == "#/$defs/webArtDirection"
 assert schema["$defs"]["architecturePlanBatch"]["properties"]["packet_plans"]["maxItems"] == 8
+architecture_node = schema["$defs"]["architectureNode"]
+assert "generation_dependency_ids" not in architecture_node["required"]
+assert "generation_dependency_ids" not in architecture_node["properties"]
 assert schema["$defs"]["genesisConstraintDelta"]["properties"]["canonical_facts"]["maxItems"] == 12
 assert schema["$defs"]["genesisConstraintDelta"]["properties"]["knowledge_changes"]["maxItems"] == 24
 assert "maxLength" not in schema["$defs"]["scene"]["properties"]["prose_mdx"]

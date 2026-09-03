@@ -592,34 +592,79 @@ class CathedralsRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(RUNNER.SchemaError, "unknown proposition proposition_03"):
                 RUNNER.build_semantic_delta(run, "genesis_constraints", payload, content_ids)
 
-    def test_architecture_builder_reports_all_undeclared_topology_nodes(self):
+    def test_architecture_builder_reports_all_semantic_reference_problems(self):
         payload = {
-            "saturation_rationale": "Enough structure.",
-            "obligation_graph": [],
-            "attractors": [],
-            "arcs": [{"arc_id": "arc_01"}],
+            "obligation_graph": [{
+                "obligation_id": "obligation_soft",
+                "hardness": "soft",
+                "created_by_ids": ["genesis_commit_01"],
+                "requires": ["obligation_missing"],
+                "termination_targets": ["attractor_missing"],
+                "sources": [{"artifact_id": "source_missing"}],
+            }],
+            "attractors": [{
+                "attractor_id": "attractor_one",
+                "prerequisite_obligation_ids": ["obligation_soft", "obligation_absent"],
+            }],
+            "arcs": [{
+                "arc_id": "arc_01",
+                "claimant_pressures": ["claimant_slot_01"],
+                "hard_obligation_ids": ["obligation_hard_missing"],
+            }],
             "topology": {
                 "entry_segment_id": "node_entry",
-                "opening_branch_node_id": "arc_01",
-                "reconvergence_node_ids": ["arc_02"],
-                "nodes": [{"node_id": "node_entry", "generation_dependency_ids": ["genesis"]}],
-                "edges": [{"edge_id": "edge_01", "from_node_id": "node_entry", "to_node_id": "arc_01"}],
+                "opening_branch_node_id": "node_missing",
+                "reconvergence_node_ids": [],
+                "nodes": [{"node_id": "node_entry", "hard_obligation_ids": []}],
+                "edges": [{
+                    "edge_id": "edge_01",
+                    "from_node_id": "node_entry",
+                    "to_node_id": "edge_node_missing",
+                    "relation": "progression",
+                    "hard_obligation_ids": [],
+                }],
             },
         }
-        manifest = {
-            "scope": {
-                "possible_scene_count": 10,
-                "artifact_target": 1,
-                "ending_target": 1,
-                "formal_composition_target": 2,
-            }
-        }
-        with mock.patch.object(RUNNER, "read_json", return_value=manifest), self.assertRaises(RUNNER.SchemaError) as raised:
+        genesis = {"claimants": [{"claimant_id": "claimant_01"}]}
+        with mock.patch.object(RUNNER, "committed_record", return_value=genesis), mock.patch.object(
+            RUNNER, "_source_index", return_value={"source_known": {}}
+        ), self.assertRaises(RUNNER.SchemaError) as raised:
             RUNNER.build_architecture_core(Path("/offline"), payload)
-        self.assertEqual(
-            raised.exception.reason,
-            "Architecture topology references undeclared nodes: arc_01, arc_02, genesis",
-        )
+        reason = raised.exception.reason
+        for problem in (
+            "undeclared topology nodes: edge_node_missing, node_missing",
+            "unknown claimant pressures: claimant_slot_01",
+            "unknown obligation origins: genesis_commit_01",
+            "unknown obligation references: obligation_absent, obligation_hard_missing, obligation_missing",
+            "unknown obligation termination targets: attractor_missing",
+            "attractor prerequisites are not hard obligations: obligation_soft",
+            "unresolved obligation sources: source_missing",
+            "opening branch node has 0 outgoing branch edges; expected 3",
+        ):
+            self.assertIn(problem, reason)
+
+        architecture_node = RUNNER.load_protocol()["$defs"]["architectureNode"]
+        self.assertNotIn("generation_dependency_ids", architecture_node["required"])
+        self.assertNotIn("generation_dependency_ids", architecture_node["properties"])
+
+    def test_architecture_prompt_lists_allowed_claimant_and_source_ids(self):
+        manifest = {"budgets": {"max_prepared_context_tokens": 20000}}
+        genesis = {"claimants": [{"claimant_id": "claimant_02"}, {"claimant_id": "claimant_01"}]}
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            (run / "state").mkdir()
+            (run / "state/frozen-engine-context.txt").write_text("canon", encoding="utf-8")
+            with mock.patch.object(RUNNER, "read_json", return_value=manifest), mock.patch.object(
+                RUNNER, "committed_record", return_value=genesis
+            ), mock.patch.object(
+                RUNNER, "_source_index", return_value={"source_two": {}, "source_one": {}}
+            ), mock.patch.object(RUNNER, "compact_definition", return_value="{}"), mock.patch.object(
+                RUNNER, "render_prompt", side_effect=lambda _run, _name, replacements: replacements["FROZEN_ARCHITECTURE_CONTEXT"]
+            ):
+                prompt, context = RUNNER.architecture_core_prompt(run)
+        self.assertEqual(prompt, context)
+        self.assertIn("===== ALLOWED GENESIS CLAIMANT IDS =====\nclaimant_01\n\nclaimant_02", context)
+        self.assertIn("===== ALLOWED COMMITTED SOURCE IDS =====\nsource_one\n\nsource_two", context)
 
     def test_scope_is_dynamic_not_clamped_to_profiles(self):
         scope = RUNNER.derive_scope(150)["scope"]
