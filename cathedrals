@@ -2658,6 +2658,13 @@ def build_architecture_core(run_dir: Path, payload: dict) -> dict:
     arc_ids = {item["arc_id"]: f"arc_{index:03d}" for index, item in enumerate(artistic["arcs"], 1)}
     node_ids = {item["node_id"]: f"architecture_node_{index:03d}" for index, item in enumerate(artistic["topology"]["nodes"], 1)}
     edge_ids = {item["edge_id"]: f"architecture_edge_{index:03d}" for index, item in enumerate(artistic["topology"]["edges"], 1)}
+    topology = artistic["topology"]
+    node_references = [topology["entry_segment_id"], topology["opening_branch_node_id"], *topology["reconvergence_node_ids"]]
+    node_references += [value for item in topology["nodes"] for value in item["generation_dependency_ids"]]
+    node_references += [item[key] for item in topology["edges"] for key in ("from_node_id", "to_node_id")]
+    unknown_nodes = sorted(set(node_references) - set(node_ids))
+    if unknown_nodes:
+        raise SchemaError(f"Architecture topology references undeclared nodes: {', '.join(unknown_nodes)}")
     remap = obligation_ids | attractor_ids | arc_ids | node_ids | edge_ids
 
     def ids(values):
@@ -2677,12 +2684,11 @@ def build_architecture_core(run_dir: Path, payload: dict) -> dict:
         "relevance": relevance(item["relevance"]),
     } for item in artistic["attractors"]]
     artistic["arcs"] = [item | {"arc_id": arc_ids[item["arc_id"]], "hard_obligation_ids": ids(item["hard_obligation_ids"])} for item in artistic["arcs"]]
-    topology = artistic["topology"]
     artistic["topology"] = topology | {
         "entry_segment_id": node_ids[topology["entry_segment_id"]],
         "opening_branch_node_id": node_ids[topology["opening_branch_node_id"]],
-        "reconvergence_node_ids": ids(topology["reconvergence_node_ids"]),
-        "nodes": [item | {"node_id": node_ids[item["node_id"]], "hard_obligation_ids": ids(item["hard_obligation_ids"]), "generation_dependency_ids": ids(item["generation_dependency_ids"])} for item in topology["nodes"]],
+        "reconvergence_node_ids": [node_ids[value] for value in topology["reconvergence_node_ids"]],
+        "nodes": [item | {"node_id": node_ids[item["node_id"]], "hard_obligation_ids": ids(item["hard_obligation_ids"]), "generation_dependency_ids": [node_ids[value] for value in item["generation_dependency_ids"]]} for item in topology["nodes"]],
         "edges": [item | {"edge_id": edge_ids[item["edge_id"]], "from_node_id": node_ids[item["from_node_id"]], "to_node_id": node_ids[item["to_node_id"]], "hard_obligation_ids": ids(item["hard_obligation_ids"])} for item in topology["edges"]],
     }
     artistic["constraint_delta"] = {"canonical_facts": [], "knowledge_changes": [], "new_obligations": [], "obligation_updates": [], "motif_events": [], "potential_foreclosures": []}

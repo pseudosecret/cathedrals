@@ -592,6 +592,35 @@ class CathedralsRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(RUNNER.SchemaError, "unknown proposition proposition_03"):
                 RUNNER.build_semantic_delta(run, "genesis_constraints", payload, content_ids)
 
+    def test_architecture_builder_reports_all_undeclared_topology_nodes(self):
+        payload = {
+            "saturation_rationale": "Enough structure.",
+            "obligation_graph": [],
+            "attractors": [],
+            "arcs": [{"arc_id": "arc_01"}],
+            "topology": {
+                "entry_segment_id": "node_entry",
+                "opening_branch_node_id": "arc_01",
+                "reconvergence_node_ids": ["arc_02"],
+                "nodes": [{"node_id": "node_entry", "generation_dependency_ids": ["genesis"]}],
+                "edges": [{"edge_id": "edge_01", "from_node_id": "node_entry", "to_node_id": "arc_01"}],
+            },
+        }
+        manifest = {
+            "scope": {
+                "possible_scene_count": 10,
+                "artifact_target": 1,
+                "ending_target": 1,
+                "formal_composition_target": 2,
+            }
+        }
+        with mock.patch.object(RUNNER, "read_json", return_value=manifest), self.assertRaises(RUNNER.SchemaError) as raised:
+            RUNNER.build_architecture_core(Path("/offline"), payload)
+        self.assertEqual(
+            raised.exception.reason,
+            "Architecture topology references undeclared nodes: arc_01, arc_02, genesis",
+        )
+
     def test_scope_is_dynamic_not_clamped_to_profiles(self):
         scope = RUNNER.derive_scope(150)["scope"]
         self.assertEqual(scope["possible_scene_count"], 150)
