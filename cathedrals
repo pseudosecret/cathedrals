@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import dataclasses
 import datetime as dt
 import hashlib
@@ -75,6 +76,15 @@ ENGINE_CONTEXT_FILES = (
     "docs/artistic-constitution.md",
     "docs/branching-architecture-contract.md",
     "docs/generation-workflow-contract.md",
+    "formats/web.md",
+)
+ARCHITECTURE_CONTEXT_FILES = (
+    "llm-instructions.md",
+    "canon/ontology.md",
+    "canon/arc-grammar.md",
+    "data/state-model.yaml",
+    "docs/artistic-constitution.md",
+    "docs/branching-architecture-contract.md",
     "formats/web.md",
 )
 
@@ -1254,6 +1264,12 @@ def commit_record(
         semantic_usage = read_json(semantic_api_path).get("usage", {})
         for key in ("prompt_tokens", "completion_tokens"):
             usage[key] = (usage.get(key) or 0) + (semantic_usage.get(key) or 0)
+    repair_path = run_dir / ".staging" / f"{planned_step_id}.repair.json"
+    if repair_path.exists():
+        for repair in read_json(repair_path)["history"]:
+            repair_usage = repair["api_response"].get("usage", {})
+            for key in ("prompt_tokens", "completion_tokens"):
+                usage[key] = (usage.get(key) or 0) + (repair_usage.get(key) or 0)
     entry = new_ledger_entry(
         run_dir,
         planned_step_id=planned_step_id,
@@ -1294,6 +1310,7 @@ def commit_record(
         (".artistic.api.json", "artistic-api-response.json"),
         (".semantic.json", "semantic-normalization.json"),
         (".semantic.api.json", "semantic-api-response.json"),
+        (".repair.json", "architecture-repair.json"),
     ):
         source = run_dir / ".staging" / f"{planned_step_id}{suffix}"
         if source.exists():
@@ -1324,7 +1341,7 @@ def commit_record(
     state["stage"] = step_phase.upper()
     save_state(run_dir, state)
     reconcile_run(run_dir)
-    for suffix in (".artistic.json", ".artistic.txt", ".artistic.api.json", ".semantic.json", ".semantic.api.json"):
+    for suffix in (".artistic.json", ".artistic.txt", ".artistic.api.json", ".semantic.json", ".semantic.api.json", ".repair.json"):
         (run_dir / ".staging" / f"{planned_step_id}{suffix}").unlink(missing_ok=True)
     if record["record_type"] == "creative_packet" or (
         record["record_type"] == "architecture_plan_batch" and assembled_architecture(run_dir)
@@ -1650,9 +1667,9 @@ def ensure_frozen_geomancy(run_dir: Path) -> dict:
     return value
 
 
-def engine_context(run_dir: Path | None = None) -> str:
+def engine_context(run_dir: Path | None = None, files=ENGINE_CONTEXT_FILES) -> str:
     sections = []
-    for relative in ENGINE_CONTEXT_FILES:
+    for relative in files:
         path = engine_root(run_dir) / relative
         sections.append(f"===== engine/{relative} =====\n{path.read_text(encoding='utf-8')}")
     return "\n\n".join(sections)
@@ -1783,6 +1800,7 @@ def request_record(
     record_builder=None,
     payload_preserver=None,
     payload_validator=None,
+    payload_repairer=None,
 ) -> dict:
     state = load_state(run_dir)
     brief = read_json(run_dir / "generation-brief.json")
@@ -1843,6 +1861,8 @@ def request_record(
                 payload_validator(authored)
             if payload_preserver:
                 payload_preserver(authored, content, response)
+            if payload_repairer:
+                authored = payload_repairer(step_id, authored, content, response)
             record = record_builder(authored) if record_builder else authored
             validate_json_schema(record, protocol["$defs"][RECORD_DEFS[expected_record_type]], protocol)
             validate_declared_id_uniqueness(record)
@@ -1876,10 +1896,10 @@ def request_record(
                 usage=response.get("usage", {}) if isinstance(response, dict) else {})
             inflight_path.unlink(missing_ok=True)
             if error.failure_class in RETRYABLE_PROVIDER_FAILURES and correction < 2:
-                feedback = "\n\nThe provider returned no usable response. Return the required JSON payload now."
+                feedback += "\n\nThe provider returned no usable response. Return the required JSON payload now."
                 continue
             if isinstance(error, SchemaError) and correction < 2:
-                feedback = f"\n\nCORRECTION REQUIRED\nThe previous uncommitted payload failed validation:\n{error.reason}\nReturn a complete corrected payload."
+                feedback += f"\n\nCORRECTION REQUIRED\nThe previous uncommitted payload failed validation:\n{error.reason}\nReturn a complete corrected payload."
                 continue
             if isinstance(error, SchemaError):
                 raise PausedError("Structured record correction", f"{step_id} exhausted 3 schema-correction attempts in this session. Resume to grant 3 more attempts. Last problem: {error.reason}") from error
@@ -2640,6 +2660,226 @@ def build_genesis_constraints(run_dir: Path, payload: dict) -> dict:
     }
 
 
+def architecture_aliases(run_dir: Path) -> dict[str, str]:
+    foundation = committed_record(run_dir, "genesis_foundation") or {}
+    cast = committed_record(run_dir, "genesis_cast") or {}
+    constraints = committed_record(run_dir, "genesis_constraints") or {}
+    genesis = committed_record(run_dir, "genesis") or {}
+    aliases = {
+        item["technical_slot_id"]: item["claimant_id"]
+        for item in foundation.get("claimant_anchors", [])
+    }
+    for alias, record in (
+        ("genesis", genesis),
+        ("genesis_commit", genesis),
+        ("genesis_foundation", foundation),
+        ("genesis_work_canon", foundation),
+        ("genesis_cast", cast),
+        ("genesis_constraints", constraints),
+    ):
+        if record.get("commit_id"):
+            aliases[alias] = record["commit_id"]
+    return aliases
+
+
+def normalize_architecture_core_payload(payload: dict, run_dir: Path) -> dict:
+    value = copy.deepcopy(payload)
+    aliases = architecture_aliases(run_dir)
+
+    def remap(values):
+        return [aliases.get(item, item) for item in values]
+
+    for arc in value["arcs"]:
+        arc["claimant_pressures"] = remap(arc["claimant_pressures"])
+        if "claimant_ids" in arc.get("relevance", {}):
+            arc["relevance"]["claimant_ids"] = remap(arc["relevance"]["claimant_ids"])
+    for item in value["obligation_graph"]:
+        item["status"] = "active"
+        item["created_by_ids"] = remap(item["created_by_ids"])
+        for source in item["sources"]:
+            source["artifact_id"] = aliases.get(source["artifact_id"], source["artifact_id"])
+        if "claimant_ids" in item.get("relevance", {}):
+            item["relevance"]["claimant_ids"] = remap(item["relevance"]["claimant_ids"])
+    for item in value["attractors"]:
+        if "claimant_ids" in item.get("relevance", {}):
+            item["relevance"]["claimant_ids"] = remap(item["relevance"]["claimant_ids"])
+
+    obligations = {item["obligation_id"]: item for item in value["obligation_graph"]}
+    for attractor in value["attractors"]:
+        for obligation_id in attractor["prerequisite_obligation_ids"]:
+            if obligation_id in obligations:
+                obligation = obligations[obligation_id]
+                obligation["hardness"] = "hard"
+                if attractor["attractor_id"] not in obligation["termination_targets"]:
+                    obligation["termination_targets"].append(attractor["attractor_id"])
+
+    topology = value["topology"]
+    introductions = [item["node_id"] for item in topology["nodes"] if item.get("node_type") == "introduction"]
+    if len(introductions) == 1:
+        topology["entry_segment_id"] = introductions[0]
+    topology["reconvergence_node_ids"] = [
+        item["node_id"] for item in topology["nodes"] if item.get("node_type") == "reconvergence"
+    ]
+    outgoing = {}
+    for edge in topology["edges"]:
+        if edge["relation"] == "branch":
+            outgoing[edge["from_node_id"]] = outgoing.get(edge["from_node_id"], 0) + 1
+    opening = [node_id for node_id, count in outgoing.items() if count == 3]
+    if len(opening) == 1:
+        topology["opening_branch_node_id"] = opening[0]
+    return value
+
+
+def genesis_reference_catalog(run_dir: Path) -> dict[str, str]:
+    genesis = committed_record(run_dir, "genesis")
+    catalog = {identifier: identifier for identifier in _source_index(run_dir)}
+    for record_type in ("genesis_foundation", "genesis_cast", "genesis_constraints"):
+        record = committed_record(run_dir, record_type)
+        if record and record.get("commit_id"):
+            catalog[record["commit_id"]] = f"{record['commit_id']} — committed {record_type.replace('_', ' ')}"
+    for claimant in genesis["claimants"]:
+        details = [
+            claimant.get(key) for key in ("occupation", "setting_relationship", "epistemic_regime")
+            if claimant.get(key)
+        ]
+        catalog[claimant["claimant_id"]] = " — ".join(
+            [claimant["claimant_id"], "; ".join(details)] if details else [claimant["claimant_id"]]
+        )
+    for character in genesis.get("characters", []):
+        catalog[character["character_id"]] = (
+            f"{character['character_id']} — {character['name']}, {character['role']}; "
+            f"{character['dramatic_function']}"
+        )
+    for event in genesis.get("work_canon", {}).get("chronology", []):
+        catalog[event["event_id"]] = f"{event['event_id']} — {event['event']}"
+    delta = genesis.get("constraint_delta", {})
+    for fact in delta.get("canonical_facts", []):
+        catalog[fact["fact_id"]] = (
+            f"{fact['fact_id']} — {fact['subject']} {fact['predicate']} {fact['value']}"
+        )
+    for knowledge in delta.get("knowledge_changes", []):
+        catalog[knowledge["knowledge_id"]] = (
+            f"{knowledge['knowledge_id']} — {knowledge['subject_id']} {knowledge['relation']} "
+            f"{knowledge['proposition_id']}"
+        )
+    for motif in delta.get("motif_events", []):
+        catalog[motif["motif_event_id"]] = (
+            f"{motif['motif_event_id']} — motif {motif['motif_id']}: {motif['current_function']}"
+        )
+    return catalog
+
+
+def architecture_id_catalog(payload: dict, run_dir: Path) -> dict[str, str]:
+    catalog = genesis_reference_catalog(run_dir)
+    for item in payload["obligation_graph"]:
+        catalog[item["obligation_id"]] = f"{item['obligation_id']} — {item['kind']}; {item['description']}"
+    for item in payload["attractors"]:
+        catalog[item["attractor_id"]] = f"{item['attractor_id']} — {item['kind']}; {item['terminal_transformation']}"
+    for item in payload["arcs"]:
+        catalog[item["arc_id"]] = f"{item['arc_id']} — {item['branch_role']}; {item['purpose']}"
+    for item in payload["topology"]["nodes"]:
+        catalog[item["node_id"]] = f"{item['node_id']} — {item['node_type']}; {item['purpose']}"
+    for item in payload["topology"]["edges"]:
+        catalog[item["edge_id"]] = (
+            f"{item['edge_id']} — {item['relation']} from {item['from_node_id']} to {item['to_node_id']}"
+        )
+    return catalog
+
+
+def architecture_topology_problems(payload: dict) -> list[str]:
+    topology = payload["topology"]
+    declared_nodes = [item["node_id"] for item in topology["nodes"]]
+    declared_edges = [item["edge_id"] for item in topology["edges"]]
+    node_ids = set(declared_nodes)
+    referenced = [topology["entry_segment_id"], topology["opening_branch_node_id"], *topology["reconvergence_node_ids"]]
+    referenced += [edge[key] for edge in topology["edges"] for key in ("from_node_id", "to_node_id")]
+    problems = []
+    if len(declared_nodes) != len(node_ids):
+        problems.append("topology node IDs are not unique")
+    if len(declared_edges) != len(set(declared_edges)):
+        problems.append("topology edge IDs are not unique")
+    unknown = sorted(set(referenced) - node_ids)
+    if unknown:
+        problems.append(f"undeclared topology nodes: {', '.join(unknown)}")
+    opening_edges = sum(
+        edge["from_node_id"] == topology["opening_branch_node_id"] and edge["relation"] == "branch"
+        for edge in topology["edges"]
+    )
+    if opening_edges != 3:
+        problems.append(f"opening branch node has {opening_edges} outgoing branch edges; expected 3")
+    return problems
+
+
+def architecture_reference_issues(payload: dict, run_dir: Path) -> list[dict]:
+    genesis = committed_record(run_dir, "genesis")
+    claimant_ids = {item["claimant_id"] for item in genesis["claimants"]}
+    committed_ids = set(_source_index(run_dir))
+    obligation_ids = {item["obligation_id"] for item in payload["obligation_graph"]}
+    attractor_ids = {item["attractor_id"] for item in payload["attractors"]}
+    arc_ids = {item["arc_id"] for item in payload["arcs"]}
+    node_ids = {item["node_id"] for item in payload["topology"]["nodes"]}
+    edge_ids = {item["edge_id"] for item in payload["topology"]["edges"]}
+    local_ids = obligation_ids | attractor_ids | arc_ids | node_ids | edge_ids
+    issues = []
+
+    def add(path, invalid, allowed, label, context, mode="replace"):
+        candidates = sorted(set(allowed))
+        if invalid not in candidates:
+            issues.append({
+                "path": path, "invalid": invalid, "candidates": candidates,
+                "label": label, "context": context, "mode": mode,
+            })
+
+    for arc_index, arc in enumerate(payload["arcs"]):
+        for value_index, value in enumerate(arc["claimant_pressures"]):
+            add(("arcs", arc_index, "claimant_pressures", value_index), value, claimant_ids,
+                "unknown claimant pressure", arc["purpose"])
+        for value_index, value in enumerate(arc["hard_obligation_ids"]):
+            add(("arcs", arc_index, "hard_obligation_ids", value_index), value, obligation_ids,
+                "unknown arc obligation", arc["purpose"])
+    for obligation_index, obligation in enumerate(payload["obligation_graph"]):
+        context = obligation["description"]
+        for field, allowed, label in (
+            ("created_by_ids", committed_ids | attractor_ids | arc_ids | node_ids | edge_ids, "unknown obligation origin"),
+            ("requires", obligation_ids, "unknown obligation prerequisite"),
+            ("termination_targets", obligation_ids | attractor_ids, "unknown obligation termination target"),
+        ):
+            for value_index, value in enumerate(obligation[field]):
+                add(("obligation_graph", obligation_index, field, value_index), value, allowed, label, context)
+        if obligation["range"] == "long_range" and not obligation["termination_targets"]:
+            add(("obligation_graph", obligation_index, "termination_targets"), None,
+                obligation_ids | attractor_ids, "long-range obligation needs a termination target", context, "set_list")
+        for source_index, source in enumerate(obligation["sources"]):
+            add(("obligation_graph", obligation_index, "sources", source_index, "artifact_id"),
+                source["artifact_id"], committed_ids | local_ids, "unresolved obligation source", context)
+    for attractor_index, attractor in enumerate(payload["attractors"]):
+        for value_index, value in enumerate(attractor["prerequisite_obligation_ids"]):
+            add(("attractors", attractor_index, "prerequisite_obligation_ids", value_index), value,
+                obligation_ids, "unknown attractor prerequisite", attractor["terminal_transformation"])
+    for group in ("nodes", "edges"):
+        for item_index, item in enumerate(payload["topology"][group]):
+            for value_index, value in enumerate(item["hard_obligation_ids"]):
+                add(("topology", group, item_index, "hard_obligation_ids", value_index), value,
+                    obligation_ids, "unknown topology obligation", item["purpose"] if group == "nodes" else item["relation"])
+    for index, issue in enumerate(issues, 1):
+        issue["issue_id"] = f"repair_{index:03d}"
+    return issues
+
+
+def apply_architecture_reference_resolutions(payload: dict, issues: list[dict], resolutions: dict) -> dict:
+    value = copy.deepcopy(payload)
+    for issue in issues:
+        cursor = value
+        for part in issue["path"][:-1]:
+            cursor = cursor[part]
+        choice = resolutions[issue["issue_id"]]
+        if issue["mode"] == "set_list":
+            cursor[issue["path"][-1]] = [choice]
+        else:
+            cursor[issue["path"][-1]] = choice
+    return value
+
+
 def validate_architecture_core_payload(payload: dict, run_dir: Path) -> None:
     genesis = committed_record(run_dir, "genesis")
     claimant_ids = {item["claimant_id"] for item in genesis["claimants"]}
@@ -2706,6 +2946,7 @@ def validate_architecture_core_payload(payload: dict, run_dir: Path) -> None:
 
 
 def build_architecture_core(run_dir: Path, payload: dict) -> dict:
+    payload = normalize_architecture_core_payload(payload, run_dir)
     validate_architecture_core_payload(payload, run_dir)
     manifest = read_json(run_dir / "run-manifest.json")
     scope = manifest["scope"]
@@ -2767,12 +3008,281 @@ def build_architecture_plan_batch(run_dir: Path, payload: dict, specs: list[dict
     }
 
 
-def preserve_packet_payload(run_dir: Path, step_id: str, payload: dict, content: str, response: dict) -> None:
+def preserve_artistic_payload(run_dir: Path, step_id: str, payload: dict, content: str, response: dict) -> None:
     base = run_dir / ".staging" / step_id
     if not base.with_suffix(".artistic.json").exists():
         write_json(base.with_suffix(".artistic.json"), payload, mode=0o444, exclusive=True)
         write_atomic(base.with_suffix(".artistic.txt"), content.encode(), mode=0o444, exclusive=True)
         write_json(base.with_suffix(".artistic.api.json"), response, mode=0o444, exclusive=True)
+
+
+def request_architecture_analysis(run_dir: Path, step_id: str, prompt: str, schema: dict, transport, validator=None):
+    brief = read_json(run_dir / "generation-brief.json")
+    seed = step_seed(brief["generation_seed"], step_id)
+    parameters = {"temperature": 0.0, "max_tokens": 4096, "seed": seed, "stream": False}
+    feedback = ""
+    for correction in range(3):
+        current_prompt = prompt + feedback
+        attempts = [entry["attempt"] for entry in ledger_entries(run_dir) if entry["planned_step_id"] == step_id]
+        attempt = max(attempts, default=0) + 1
+        response_path = run_dir / "raw" / f"{step_id}-attempt{attempt}.api.json"
+        started = utc_now()
+        response = read_json(response_path) if response_path.exists() else None
+        try:
+            if response is None:
+                request = {
+                    "model": load_state(run_dir)["model"],
+                    "messages": [
+                        {"role": "system", "content": "Repair only the identified uncommitted Architecture fields. Return JSON only."},
+                        {"role": "user", "content": current_prompt},
+                    ],
+                    **parameters,
+                    "response_format": {"type": "json_schema", "json_schema": {"name": "architectureRepair", "strict": True, "schema": schema}},
+                }
+                response, content = provider_response(
+                    transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
+                    float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "3600")), started_at=started,
+                    preserve=lambda value: write_json(response_path, value, mode=0o444, exclusive=True),
+                )
+            else:
+                content = normalize_provider_response(response)
+            authored = parse_structured_content(content)
+            validate_json_schema(authored, schema)
+            if validator:
+                validator(authored)
+            return authored, response
+        except CathedralsError as error:
+            append_failed_attempt(
+                run_dir, step_id=step_id, attempt=attempt, phase="architecture", prompt=current_prompt,
+                context=prompt, parameters=parameters, started_at=started, failure_class=error.failure_class,
+                step_type="analysis", output_hash=sha256_file(response_path) if response_path.exists() else None,
+                usage=response.get("usage", {}) if isinstance(response, dict) else {},
+            )
+            if correction < 2:
+                feedback += f"\n\nCORRECTION REQUIRED\n{error.reason}\nReturn only a corrected repair response."
+                continue
+            raise PausedError(
+                "Architecture repair", f"{step_id} exhausted 3 focused repair attempts. Last problem: {error.reason}"
+            ) from error
+    raise PausedError("Architecture repair", f"{step_id} exhausted its focused repair attempts")
+
+
+def architecture_reference_repair_request(payload: dict, issues: list[dict], run_dir: Path) -> tuple[str, dict]:
+    catalog = architecture_id_catalog(payload, run_dir)
+    issue_context = [
+        {
+            "issue_id": issue["issue_id"],
+            "problem": issue["label"],
+            "invalid_value": issue["invalid"],
+            "local_context": issue["context"],
+            "allowed_candidates": [catalog.get(identifier, identifier) for identifier in issue["candidates"]],
+        }
+        for issue in issues
+    ]
+    genesis = committed_record(run_dir, "genesis")
+    prompt = bounded_context(
+        [
+            ("STORY PREMISE", genesis["work_canon"]["premise"]),
+            ("CENTRAL INCIDENT", genesis["work_canon"]["central_incident"]),
+            ("REFERENCE ISSUES", issue_context),
+            ("INSTRUCTION", "Choose exactly one allowed candidate for every issue. Preserve all other Architecture content."),
+        ],
+        36000,
+    )
+    properties = {
+        issue["issue_id"]: {"enum": issue["candidates"]}
+        for issue in issues
+    }
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["resolutions"],
+        "properties": {
+            "resolutions": {
+                "type": "object", "additionalProperties": False,
+                "required": list(properties), "properties": properties,
+            }
+        },
+    }
+    return prompt, schema
+
+
+def architecture_obligation_cycle(payload: dict) -> list[str]:
+    graph = {item["obligation_id"]: item["requires"] for item in payload["obligation_graph"]}
+    visiting = []
+    visited = set()
+
+    def visit(node):
+        if node in visiting:
+            return visiting[visiting.index(node):]
+        if node in visited:
+            return []
+        visiting.append(node)
+        for dependency in graph[node]:
+            if dependency in graph:
+                cycle = visit(dependency)
+                if cycle:
+                    return cycle
+        visiting.pop()
+        visited.add(node)
+        return []
+
+    for node in graph:
+        cycle = visit(node)
+        if cycle:
+            return cycle
+    return []
+
+
+def architecture_dependency_repair_request(payload: dict, cycle: list[str], run_dir: Path) -> tuple[str, dict]:
+    obligations = {item["obligation_id"]: item for item in payload["obligation_graph"]}
+    catalog = architecture_id_catalog(payload, run_dir)
+    prompt = bounded_context(
+        [
+            ("CIRCULAR OBLIGATIONS", [catalog[item] for item in cycle]),
+            ("CURRENT DEPENDENCIES", {item: obligations[item]["requires"] for item in cycle}),
+            ("ALLOWED OBLIGATIONS", [catalog[item] for item in sorted(obligations)]),
+            ("INSTRUCTION", "Return replacement requires lists for the circular obligations only. Preserve their descriptions and all other fields, and break the cycle."),
+        ],
+        36000,
+    )
+    properties = {}
+    for item in cycle:
+        candidates = sorted(set(obligations) - {item})
+        properties[item] = {
+            "type": "array", "uniqueItems": True,
+            **({"items": {"enum": candidates}} if candidates else {"maxItems": 0}),
+        }
+    return prompt, {
+        "type": "object", "additionalProperties": False,
+        "required": ["requires"],
+        "properties": {
+            "requires": {
+                "type": "object", "additionalProperties": False,
+                "required": list(properties), "properties": properties,
+            }
+        },
+    }
+
+
+def architecture_topology_repair_request(payload: dict, problems: list[str], run_dir: Path) -> tuple[str, dict]:
+    catalog = architecture_id_catalog(payload, run_dir)
+    obligations = [catalog[item["obligation_id"]] for item in payload["obligation_graph"]]
+    genesis = committed_record(run_dir, "genesis")
+    prompt = bounded_context(
+        [
+            ("STORY PREMISE", genesis["work_canon"]["premise"]),
+            ("CENTRAL INCIDENT", genesis["work_canon"]["central_incident"]),
+            ("CURRENT TOPOLOGY", payload["topology"]),
+            ("TOPOLOGY PROBLEMS", problems),
+            ("ALLOWED HARD OBLIGATIONS", obligations),
+            ("INSTRUCTION", "Return a complete replacement topology only. It must use declared nodes, exactly three outgoing branch edges at the opening hub, and only listed hard obligations. Preserve the existing dramatic design where possible."),
+        ],
+        36000,
+    )
+    protocol = load_protocol(run_dir)
+    schema = copy.deepcopy(protocol["$defs"]["architectureCore"]["properties"]["topology"])
+    schema["$defs"] = definition_schema("architectureCorePayload", protocol)["$defs"]
+    return prompt, schema
+
+
+def repair_architecture_core_payload(run_dir: Path, step_id: str, payload: dict, content: str, response: dict, transport) -> dict:
+    preserve_artistic_payload(run_dir, step_id, payload, content, response)
+    repair_path = run_dir / ".staging" / f"{step_id}.repair.json"
+    state = read_json(repair_path) if repair_path.exists() else {
+        "payload": normalize_architecture_core_payload(payload, run_dir), "history": []
+    }
+
+    def persist(kind, repair_step, result, api_response):
+        state["history"].append({
+            "kind": kind,
+            "step_id": repair_step,
+            "result": result,
+            "api_response": api_response,
+        })
+        write_json(repair_path, state)
+
+    def resolve_reference_batch(issues):
+        signature = sha256_bytes(canonical_json([
+            {key: issue[key] for key in ("path", "invalid", "candidates")}
+            for issue in issues
+        ]))[:12]
+        repair_step = f"{step_id}_reference_repair_{signature}"
+        prompt, schema = architecture_reference_repair_request(state["payload"], issues, run_dir)
+        try:
+            result, api_response = request_architecture_analysis(
+                run_dir, repair_step, prompt, schema, transport
+            )
+        except PausedError:
+            if len(issues) == 1:
+                raise
+            midpoint = len(issues) // 2
+            resolve_reference_batch(issues[:midpoint])
+            resolve_reference_batch(issues[midpoint:])
+            return
+        state["payload"] = normalize_architecture_core_payload(
+            apply_architecture_reference_resolutions(state["payload"], issues, result["resolutions"]), run_dir
+        )
+        persist("reference", repair_step, result, api_response)
+
+    for _ in range(12):
+        state["payload"] = normalize_architecture_core_payload(state["payload"], run_dir)
+        topology_problems = architecture_topology_problems(state["payload"])
+        if topology_problems:
+            signature = sha256_bytes(canonical_json({
+                "topology": state["payload"]["topology"], "problems": topology_problems
+            }))[:12]
+            repair_step = f"{step_id}_topology_repair_{signature}"
+            prompt, schema = architecture_topology_repair_request(state["payload"], topology_problems, run_dir)
+
+            def validate_topology(topology):
+                candidate = copy.deepcopy(state["payload"])
+                candidate["topology"] = topology
+                remaining = architecture_topology_problems(normalize_architecture_core_payload(candidate, run_dir))
+                if remaining:
+                    raise SchemaError("Topology remains invalid: " + "; ".join(remaining))
+
+            result, api_response = request_architecture_analysis(
+                run_dir, repair_step, prompt, schema, transport, validate_topology
+            )
+            state["payload"]["topology"] = result
+            state["payload"] = normalize_architecture_core_payload(state["payload"], run_dir)
+            persist("topology", repair_step, result, api_response)
+            continue
+        issues = architecture_reference_issues(state["payload"], run_dir)
+        if issues:
+            if any(not issue["candidates"] for issue in issues):
+                problem = next(issue for issue in issues if not issue["candidates"])
+                raise PausedError("Architecture repair", f"No valid candidates exist for {problem['label']}: {problem['invalid']}")
+            resolve_reference_batch(issues)
+            continue
+        cycle = architecture_obligation_cycle(state["payload"])
+        if cycle:
+            signature = sha256_bytes(canonical_json(cycle))[:12]
+            repair_step = f"{step_id}_dependency_repair_{signature}"
+            prompt, schema = architecture_dependency_repair_request(state["payload"], cycle, run_dir)
+
+            def validate_dependencies(result):
+                candidate = copy.deepcopy(state["payload"])
+                by_id = {item["obligation_id"]: item for item in candidate["obligation_graph"]}
+                for obligation_id, requires in result["requires"].items():
+                    by_id[obligation_id]["requires"] = requires
+                if architecture_obligation_cycle(candidate):
+                    raise SchemaError("Replacement obligation dependencies remain circular")
+
+            result, api_response = request_architecture_analysis(
+                run_dir, repair_step, prompt, schema, transport, validate_dependencies
+            )
+            by_id = {item["obligation_id"]: item for item in state["payload"]["obligation_graph"]}
+            for obligation_id, requires in result["requires"].items():
+                by_id[obligation_id]["requires"] = requires
+            persist("obligation_dependencies", repair_step, result, api_response)
+            continue
+        validate_architecture_core_payload(state["payload"], run_dir)
+        if state["history"] or state["payload"] != payload:
+            write_json(repair_path, state)
+        return state["payload"]
+    raise PausedError("Architecture repair", "Focused repairs did not converge after 12 validated rounds")
 
 
 def validate_packet_payload(payload: dict, plan: dict) -> None:
@@ -3400,13 +3910,16 @@ def genesis_constraints_prompt(run_dir: Path) -> tuple[str, str]:
 def architecture_core_prompt(run_dir: Path) -> tuple[str, str]:
     manifest = read_json(run_dir / "run-manifest.json")
     genesis = committed_record(run_dir, "genesis")
+    catalog = genesis_reference_catalog(run_dir)
     context = bounded_context(
         [
-            ("FROZEN ENGINE CANON", (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
+            ("FROZEN ARCHITECTURE CANON", engine_context(run_dir, ARCHITECTURE_CONTEXT_FILES)),
             ("FROZEN RUN MANIFEST", manifest),
             ("IMMUTABLE GENESIS", genesis),
-            ("ALLOWED GENESIS CLAIMANT IDS", sorted(item["claimant_id"] for item in genesis["claimants"])),
-            ("ALLOWED COMMITTED SOURCE IDS", sorted(_source_index(run_dir))),
+            ("ALLOWED GENESIS CLAIMANTS", [catalog[item] for item in sorted(
+                claimant["claimant_id"] for claimant in genesis["claimants"]
+            )]),
+            ("ALLOWED COMMITTED SOURCES", [catalog[item] for item in sorted(_source_index(run_dir))]),
         ],
         manifest["budgets"]["max_prepared_context_tokens"] - 14000,
     )
@@ -3600,7 +4113,7 @@ def request_packet_slice(run_dir: Path, architecture: dict, plan: dict, transpor
             transport=transport,
             response_definition="creativePacketPayload",
             payload_validator=lambda payload: validate_packet_payload_for_run(payload, run_dir, plan),
-            payload_preserver=lambda payload, content, response: preserve_packet_payload(run_dir, expanded_id, payload, content, response),
+            payload_preserver=lambda payload, content, response: preserve_artistic_payload(run_dir, expanded_id, payload, content, response),
             record_builder=lambda payload: build_creative_packet(
                 run_dir, expanded_id, plan, payload,
                 request_semantic_normalization(run_dir, expanded_id, payload, context, transport),
@@ -3622,7 +4135,7 @@ def request_packet_slice(run_dir: Path, architecture: dict, plan: dict, transpor
             transport=transport,
             response_definition="creativePacketPayload",
             payload_validator=lambda payload: validate_packet_payload_for_run(payload, run_dir, plan),
-            payload_preserver=lambda payload, content, response: preserve_packet_payload(run_dir, step_id, payload, content, response),
+            payload_preserver=lambda payload, content, response: preserve_artistic_payload(run_dir, step_id, payload, content, response),
             record_builder=lambda payload: build_creative_packet(
                 run_dir, step_id, plan, payload,
                 request_semantic_normalization(run_dir, step_id, payload, context, transport),
@@ -3726,6 +4239,9 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
             temperature=0.7,
             transport=transport,
             response_definition="architectureCorePayload",
+            payload_repairer=lambda effective_step, payload, content, response: repair_architecture_core_payload(
+                run_dir, effective_step, payload, content, response, transport
+            ),
             record_builder=lambda payload: build_architecture_core(run_dir, payload),
             precommit_validator=lambda record: validate_architecture_core_for_run(record, run_dir),
         )

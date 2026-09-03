@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline checks for the end-user executable; no creative call is made."""
 
+import copy
 import dataclasses
 import importlib.machinery
 import importlib.util
@@ -185,6 +186,68 @@ def architecture_fixture(plans=None, obligations=None, attractors=None):
         "obligation_graph": obligations or [obligation()],
         "attractors": attractors or [attractor()],
         "packet_plans": plans or [packet_plan()],
+    }
+
+
+def architecture_core_payload():
+    return {
+        "saturation_rationale": "The macro structure is sufficient.",
+        "obligation_graph": [obligation(created_by_ids=["commit_foundation"], sources=[source_ref("commit_foundation")])],
+        "attractors": [{key: value for key, value in attractor().items() if key != "ending_slot_ids"}],
+        "arcs": [{
+            "arc_id": "arc_one",
+            "purpose": "Pressure the opening contradiction.",
+            "branch_role": "introduction",
+            "required_beats": ["encounter", "choose"],
+            "claimant_pressures": ["claimant_01"],
+            "entry_conditions": ["entry"],
+            "exit_conditions": ["choice"],
+            "state_pressure": "indecision rises",
+            "hard_obligation_ids": ["obligation_one"],
+        }],
+        "topology": {
+            "entry_segment_id": "node_intro",
+            "opening_branch_node_id": "node_intro",
+            "reconvergence_node_ids": [],
+            "nodes": [
+                {"node_id": "node_intro", "node_type": "introduction", "purpose": "Open.", "hard_obligation_ids": []},
+                *[
+                    {"node_id": f"node_branch_{number}", "node_type": "branch_family", "purpose": f"Branch {number}.", "hard_obligation_ids": []}
+                    for number in range(4)
+                ],
+            ],
+            "edges": [
+                {"edge_id": f"edge_{number}", "from_node_id": "node_intro", "to_node_id": f"node_branch_{number}", "relation": "branch", "hard_obligation_ids": []}
+                for number in range(3)
+            ],
+        },
+    }
+
+
+def architecture_genesis_records():
+    claimant = {
+        "claimant_id": "claimant_01",
+        "occupation": "archivist",
+        "setting_relationship": "Keeps the sealed archive.",
+        "epistemic_regime": "Records establish reality.",
+    }
+    foundation = {
+        "record_type": "genesis_foundation", "commit_id": "commit_foundation",
+        "claimant_anchors": [{"technical_slot_id": "claimant_slot_01", "claimant_id": "claimant_01"}],
+    }
+    cast = {"record_type": "genesis_cast", "commit_id": "commit_cast"}
+    constraints = {"record_type": "genesis_constraints", "commit_id": "commit_constraints"}
+    genesis = {
+        "record_type": "genesis", "commit_id": "commit_constraints",
+        "claimants": [claimant], "characters": [],
+        "work_canon": {"premise": "A sealed archive contradicts itself.", "central_incident": {"event": "A record vanished."}, "chronology": []},
+        "constraint_delta": {"canonical_facts": [], "knowledge_changes": [], "motif_events": []},
+    }
+    return {
+        "genesis_foundation": foundation,
+        "genesis_cast": cast,
+        "genesis_constraints": constraints,
+        "genesis": genesis,
     }
 
 
@@ -637,7 +700,6 @@ class CathedralsRunnerTests(unittest.TestCase):
             "unknown obligation origins: genesis_commit_01",
             "unknown obligation references: obligation_absent, obligation_hard_missing, obligation_missing",
             "unknown obligation termination targets: attractor_missing",
-            "attractor prerequisites are not hard obligations: obligation_soft",
             "unresolved obligation sources: source_missing",
             "opening branch node has 0 outgoing branch edges; expected 3",
         ):
@@ -663,8 +725,97 @@ class CathedralsRunnerTests(unittest.TestCase):
             ):
                 prompt, context = RUNNER.architecture_core_prompt(run)
         self.assertEqual(prompt, context)
-        self.assertIn("===== ALLOWED GENESIS CLAIMANT IDS =====\nclaimant_01\n\nclaimant_02", context)
-        self.assertIn("===== ALLOWED COMMITTED SOURCE IDS =====\nsource_one\n\nsource_two", context)
+        self.assertIn("===== ALLOWED GENESIS CLAIMANTS =====\nclaimant_01\n\nclaimant_02", context)
+        self.assertIn("===== ALLOWED COMMITTED SOURCES =====\nsource_one\n\nsource_two", context)
+
+    def test_architecture_normalizes_unambiguous_genesis_and_topology_references(self):
+        payload = architecture_core_payload()
+        payload["obligation_graph"][0] |= {
+            "status": "satisfied", "hardness": "soft", "created_by_ids": ["claimant_slot_01"],
+            "termination_targets": [], "sources": [source_ref("genesis_work_canon")],
+        }
+        payload["arcs"][0]["claimant_pressures"] = ["claimant_slot_01"]
+        payload["topology"] |= {
+            "entry_segment_id": "segment_introduction",
+            "opening_branch_node_id": "opening_alias",
+            "reconvergence_node_ids": ["node_reconverge"],
+        }
+        payload["topology"]["nodes"][-1]["node_type"] = "reconvergence"
+        records = architecture_genesis_records()
+        with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: records[kind]), mock.patch.object(
+            RUNNER, "_source_index", return_value={"commit_foundation": {}}
+        ):
+            normalized = RUNNER.normalize_architecture_core_payload(payload, Path("/offline"))
+        obligation_record = normalized["obligation_graph"][0]
+        self.assertEqual(normalized["arcs"][0]["claimant_pressures"], ["claimant_01"])
+        self.assertEqual(obligation_record["created_by_ids"], ["claimant_01"])
+        self.assertEqual(obligation_record["sources"][0]["artifact_id"], "commit_foundation")
+        self.assertEqual((obligation_record["status"], obligation_record["hardness"]), ("active", "hard"))
+        self.assertEqual(obligation_record["termination_targets"], ["attractor_one"])
+        self.assertEqual(normalized["topology"]["entry_segment_id"], "node_intro")
+        self.assertEqual(normalized["topology"]["opening_branch_node_id"], "node_intro")
+        self.assertEqual(normalized["topology"]["reconvergence_node_ids"], ["node_branch_3"])
+
+    def test_architecture_reference_repair_splits_failed_batch_and_preserves_successes(self):
+        payload = architecture_core_payload()
+        payload["arcs"][0]["claimant_pressures"] = ["claimant_missing"]
+        payload["attractors"][0]["prerequisite_obligation_ids"] = ["obligation_missing"]
+        records = architecture_genesis_records()
+        calls = []
+
+        def repair(_run, _step, _prompt, schema, _transport, validator=None):
+            properties = schema["properties"]["resolutions"]["properties"]
+            calls.append(list(properties))
+            if len(properties) > 1:
+                raise RUNNER.PausedError("Architecture repair", "batch failed")
+            issue_id, definition = next(iter(properties.items()))
+            result = {"resolutions": {issue_id: definition["enum"][0]}}
+            if validator:
+                validator(result)
+            return result, {"usage": {"prompt_tokens": 5, "completion_tokens": 1}}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            (run / ".staging").mkdir()
+            with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: records[kind]), mock.patch.object(
+                RUNNER, "_source_index", return_value={"commit_foundation": {}}
+            ), mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=repair):
+                repaired = RUNNER.repair_architecture_core_payload(
+                    run, "architecture_core", payload, "{}", {"usage": {}}, lambda *_args: None
+                )
+            repair_state = RUNNER.read_json(run / ".staging/architecture_core.repair.json")
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(repaired["arcs"][0]["claimant_pressures"], ["claimant_01"])
+        self.assertEqual(repaired["attractors"][0]["prerequisite_obligation_ids"], ["obligation_one"])
+        self.assertEqual(len(repair_state["history"]), 2)
+
+    def test_architecture_coupled_failure_replaces_only_topology(self):
+        payload = architecture_core_payload()
+        payload["topology"]["edges"].append({
+            "edge_id": "edge_3", "from_node_id": "node_intro", "to_node_id": "node_branch_3",
+            "relation": "branch", "hard_obligation_ids": [],
+        })
+        records = architecture_genesis_records()
+        replacement = copy.deepcopy(payload["topology"])
+        replacement["edges"] = replacement["edges"][:3]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            (run / ".staging").mkdir()
+            with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: records[kind]), mock.patch.object(
+                RUNNER, "_source_index", return_value={"commit_foundation": {}}
+            ), mock.patch.object(
+                RUNNER, "request_architecture_analysis",
+                return_value=(replacement, {"usage": {"prompt_tokens": 5, "completion_tokens": 1}}),
+            ):
+                repaired = RUNNER.repair_architecture_core_payload(
+                    run, "architecture_core", payload, "{}", {"usage": {}}, lambda *_args: None
+                )
+                expected = RUNNER.normalize_architecture_core_payload(payload, run)
+        self.assertEqual({key: value for key, value in repaired.items() if key != "topology"}, {
+            key: value for key, value in expected.items() if key != "topology"
+        })
+        self.assertEqual(len(repaired["topology"]["edges"]), 3)
 
     def test_scope_is_dynamic_not_clamped_to_profiles(self):
         scope = RUNNER.derive_scope(150)["scope"]
@@ -1928,8 +2079,8 @@ class CathedralsRunnerTests(unittest.TestCase):
             RUNNER.write_json(run / "run-manifest.json", {"budgets": {"max_prepared_context_tokens": 49152}})
             calls = []
 
-            def invalid(*_args, **_kwargs):
-                calls.append(1)
+            def invalid(*args, **_kwargs):
+                calls.append(args[2])
                 return {"choices": [{"finish_reason": "stop", "message": {"content": "{}"}}]}
 
             with self.assertRaises(RUNNER.PausedError):
@@ -1939,6 +2090,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                     response_definition="claimantAnchorPayload", transport=invalid,
                 )
             self.assertEqual(len(calls), 3)
+            self.assertEqual(calls[2]["messages"][1]["content"].count("CORRECTION REQUIRED"), 2)
             self.assertEqual(len(RUNNER.ledger_entries(run)), 3)
             self.assertFalse((run / "finalization.json").exists())
 
@@ -1960,7 +2112,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 expected_record_type="genesis_foundation", step_id="staged_test", phase="genesis",
                 prompt="prompt", context="context", branch_relation="foundation", temperature=0.8,
                 response_definition="claimantAnchorPayload", record_builder=paused,
-                payload_preserver=lambda payload, content, api: RUNNER.preserve_packet_payload(run, "staged_test", payload, content, api),
+                payload_preserver=lambda payload, content, api: RUNNER.preserve_artistic_payload(run, "staged_test", payload, content, api),
             )
             with self.assertRaises(RUNNER.PausedError):
                 RUNNER.request_record(run, transport=transport, **arguments)

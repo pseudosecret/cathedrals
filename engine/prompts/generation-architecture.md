@@ -14,10 +14,10 @@ in this record, never packet IDs.
 Every topology reference, including edge endpoints, must use a
 `node_id` declared in `topology.nodes`; arc IDs are separate and cannot substitute.
 The opening branch node must have exactly three outgoing `branch` edges. Use only exact
-`claimant_id` values from ALLOWED GENESIS CLAIMANT IDS in claimant pressures, listing
+`claimant_id` values from ALLOWED GENESIS CLAIMANTS in claimant pressures, listing
 them individually for collective pressure; never use technical slots or group aliases.
 Obligation origins and sources must use IDs authored in this record or exact IDs from
-ALLOWED COMMITTED SOURCE IDS; never invent aliases. Every attractor prerequisite must
+ALLOWED COMMITTED SOURCES; never invent aliases. Every attractor prerequisite must
 name a hard obligation authored in this record.
 
 FROZEN ARCHITECTURE CONTEXT BEGINS
