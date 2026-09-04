@@ -67,12 +67,17 @@ three situated actions, not a claimant selector.
 
 ## Fictional Envelope
 
-The setting and flavor is generated, but always keep elements like reader-as-judge
-mechanics, costly ambiguity, and threshold-event class in engine canon. Generate exact
-people, incident, chronology, records, objects, clues, relationships, mutations, and
-consequences. Preserve Cathedrals' thematic pressure around responsibility, emotional cost,
-feeling trapped (to a lesser extent), thresholds, entry/departure, memory/evidence, absence, judgment,
-contradiction.
+Treat the frozen `generation_brief.genre_flavor` value as the authoritative creative
+brief for all surface fiction. Its explicit premise, setting, flavor, viewpoint, and
+content constraints are binding. Never inherit surface details from documentation,
+examples, fixtures, or earlier generations. Engine terms describe dramatic functions,
+not required settings, professions, objects, institutions, or evidence families.
+
+Keep reader-as-judge mechanics, costly ambiguity, and the threshold-event class in
+engine canon. Generate exact people, incident, chronology, records, objects, clues,
+relationships, mutations, and consequences from the creative brief. Preserve thematic
+pressure around responsibility, emotional cost, judgment, contradiction, and
+ontological consequence.
 
 ## Branching, Geomancy, Prose, and Artifacts
 

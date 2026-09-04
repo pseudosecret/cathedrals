@@ -6,7 +6,7 @@ The work takes place in a sealed, concrete location. It must offer concrete spac
 
 ## 2. Hidden Reality
 
-The setting is also a quarantined chamber for adjudication. It exists to pressure contradiction into coherence. It cannot sustain all possibilities indefinitely.
+The setting is also a bounded field of adjudication. It exists to pressure contradiction into coherence. It cannot sustain all possibilities indefinitely.
 
 ## 3. The Reader
 
@@ -60,7 +60,7 @@ Hidden:
 
 - full metaphysical explanation
 - the system’s original purpose
-- whether the reader is being tested, used, or diagnosed
+- whether the reader is being tested, used, or classified
 
 ## 10. Canon Boundary
 

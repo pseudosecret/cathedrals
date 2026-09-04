@@ -431,7 +431,9 @@ def normalize_requested_format(value: str) -> str:
 def collect_inputs(input_fn=input, output_fn=print) -> FrozenInputs:
     output_fn("Cathedrals\n")
     project_name = input_fn('Name of project (default "Cathedrals"):\n').strip() or "Cathedrals"
-    genre = input_fn('Genre/flavor of story (default "existential mystery"):\n').strip() or "existential mystery"
+    genre = input_fn(
+        'Story premise, setting, genre/flavor, and constraints (default "existential mystery"):\n'
+    ).strip() or "existential mystery"
     while True:
         raw_count = input_fn('Possible number of scenes (default "150"):\n').strip() or "150"
         try:
@@ -3156,26 +3158,39 @@ def genesis_constraint_catalog(run_dir: Path, extensions: list[dict]) -> dict:
             }
             for item in cast["characters"]
         },
-        "motifs": sorted(set(foundation["work_canon"]["generated_motifs"])),
     }
+
+
+def fact_position_aliases(index: int) -> tuple[str, ...]:
+    return (
+        f"fact_{index:02d}", f"prop_{index:02d}", f"proposition_{index:02d}",
+        f"p{index:02d}", f"p{index:03d}", f"p_{index:03d}",
+    )
+
+
+def normalize_genesis_reference_aliases(payload: dict, run_dir: Path, extensions: list[dict]) -> dict:
+    value = copy.deepcopy(payload)
+    sources = genesis_constraint_catalog(run_dir, extensions)["sources"]
+    identity_aliases = {slot: item["artifact_id"] for slot, item in sources.items()}
+    for knowledge in value["knowledge_changes"]:
+        knowledge["subject_id"] = identity_aliases.get(knowledge["subject_id"], knowledge["subject_id"])
+    return value
 
 
 def genesis_reference_issues(payload: dict, run_dir: Path, extensions: list[dict]) -> list[dict]:
     catalog = genesis_constraint_catalog(run_dir, extensions)
+    declared_motifs = {item["motif_id"] for item in payload["motif_events"]}
     allowed = {
         "source": set(catalog["sources"]),
         "claimant": set(catalog["claimants"]),
         "character": set(catalog["characters"]),
         "identity": set(catalog["claimants"]) | set(catalog["characters"]),
-        "motif": set(catalog["motifs"]),
+        "motif": declared_motifs,
         "proposition": {f"fact_{index:02d}" for index in range(1, len(payload["canonical_facts"]) + 1)},
     }
     fact_aliases = set()
     for index in range(1, len(payload["canonical_facts"]) + 1):
-        fact_aliases.update({
-            f"fact_{index:02d}", f"prop_{index:02d}", f"proposition_{index:02d}",
-            f"p{index:02d}", f"p_{index:03d}",
-        })
+        fact_aliases.update(fact_position_aliases(index))
     grouped = {}
 
     def add(kind, path, invalid, context):
@@ -3203,8 +3218,6 @@ def genesis_reference_issues(payload: dict, run_dir: Path, extensions: list[dict
     for index, item in enumerate(payload["knowledge_changes"]):
         add("identity", ("knowledge_changes", index, "subject_id"), item["subject_id"], item)
         add("proposition", ("knowledge_changes", index, "proposition_id"), item["proposition_id"], item)
-    for index, item in enumerate(payload["motif_events"]):
-        add("motif", ("motif_events", index, "motif_id"), item["motif_id"], item)
     issues = list(grouped.values())
     for index, issue in enumerate(issues, 1):
         issue["issue_id"] = f"genesis_reference_{index:03d}"
@@ -3262,7 +3275,7 @@ def claimant_resolution_request(issue: dict, run_dir: Path, extensions: list[dic
         ("EXISTING CLAIMANTS", list(catalog["claimants"].values())),
         ("EXISTING CHARACTERS", list(catalog["characters"].values())),
         ("VALID SOURCE SLOTS", list(catalog["sources"].values())),
-        ("VALID MOTIFS", catalog["motifs"]),
+        ("ALLOWED REPLACEMENTS", issue["candidates"]),
         ("INSTRUCTION", (
             "Resolve the invalid reference to one listed candidate whenever plausible. A supporting witness, technician, "
             "administrator, or other character can source a fact without becoming a claimant. Expand only when the uses "
@@ -3271,7 +3284,50 @@ def claimant_resolution_request(issue: dict, run_dir: Path, extensions: list[dic
             "role, and at least one relationship to an existing claimant. Return only this reference decision; preserve all fiction."
         )),
     ], 36000)
+    if not can_expand:
+        schema["properties"]["replacement"] = {"enum": issue["candidates"]}
+        schema["properties"]["claimant_extension"] = {"type": "null"}
+        schema["properties"]["reason"] = {"type": "string", "minLength": 1, "maxLength": 12000}
+        schema.pop("$defs")
     return prompt, schema
+
+
+def genesis_proposition_resolution_request(payload: dict, issues: list[dict]) -> tuple[str, dict]:
+    facts = [
+        {"fact_alias": f"fact_{index:02d}", **{
+            key: fact[key] for key in ("subject", "predicate", "value", "status")
+        }}
+        for index, fact in enumerate(payload["canonical_facts"], 1)
+    ]
+    prompt = bounded_context([
+        ("CANONICAL FACT CANDIDATES", facts),
+        ("UNRESOLVED KNOWLEDGE REFERENCES", [
+            {
+                "issue_id": issue["issue_id"], "invalid_value": issue["invalid"],
+                "uses": issue["contexts"],
+            }
+            for issue in issues
+        ]),
+        ("INSTRUCTION", (
+            "Map every unresolved knowledge reference to exactly one listed canonical fact. "
+            "Choose by the knowledge subject, relation, provenance, and relevance context. "
+            "Do not add, remove, or rewrite facts or knowledge entries."
+        )),
+    ], 36000)
+    properties = {
+        issue["issue_id"]: {"enum": issue["candidates"]}
+        for issue in issues
+    }
+    return prompt, {
+        "type": "object", "additionalProperties": False,
+        "required": ["resolutions"],
+        "properties": {
+            "resolutions": {
+                "type": "object", "additionalProperties": False,
+                "required": list(properties), "properties": properties,
+            }
+        },
+    }
 
 
 def apply_genesis_resolution(payload: dict, issue: dict, replacement: str) -> dict:
@@ -3323,14 +3379,61 @@ def repair_genesis_constraints_payload(
     state = read_json(repair_path) if repair_path.exists() else {
         "payload": payload, "claimant_extensions": [], "history": [],
     }
+
+    def persist(kind, repair_step, result, api_response, **details):
+        state["history"].append({
+            "kind": kind, **details, "step_id": repair_step,
+            "result": result, "api_response": api_response,
+        })
+        write_json(repair_path, state)
+
+    def resolve_proposition_batch(issues):
+        signature = sha256_bytes(canonical_json([
+            {key: issue[key] for key in ("invalid", "paths", "candidates")}
+            for issue in issues
+        ]))[:12]
+        repair_step = f"{step_id}_proposition_repair_{signature}"
+        prompt, schema = genesis_proposition_resolution_request(state["payload"], issues)
+        try:
+            result, api_response = request_architecture_analysis(
+                run_dir, repair_step, prompt, schema, transport,
+                phase="genesis", system_prompt="Resolve Genesis knowledge references. Return JSON only.",
+                response_name="genesisPropositionResolutions", pause_stage="Genesis reference resolution",
+            )
+        except PausedError:
+            if len(issues) == 1:
+                raise
+            midpoint = len(issues) // 2
+            resolve_proposition_batch(issues[:midpoint])
+            resolve_proposition_batch(issues[midpoint:])
+            return
+        for issue in issues:
+            state["payload"] = apply_genesis_resolution(
+                state["payload"], issue, result["resolutions"][issue["issue_id"]]
+            )
+        persist("proposition", repair_step, result, api_response)
+
     for _ in range(64):
+        state["payload"] = normalize_genesis_reference_aliases(
+            state["payload"], run_dir, state["claimant_extensions"]
+        )
         issues = genesis_reference_issues(state["payload"], run_dir, state["claimant_extensions"])
         if not issues:
             enriched = state["payload"] | {"_claimant_extensions": state["claimant_extensions"]}
             build_genesis_constraints(run_dir, enriched)
             return enriched
         preserve_artistic_payload(run_dir, step_id, payload, content, response)
-        issue = issues[0]
+        proposition_issues = [issue for issue in issues if issue["kind"] == "proposition"]
+        if proposition_issues and len(proposition_issues) == len(issues):
+            if any(not issue["candidates"] for issue in proposition_issues):
+                problem = next(issue for issue in proposition_issues if not issue["candidates"])
+                raise PausedError(
+                    "Genesis reference resolution",
+                    f"No canonical fact can replace proposition reference {problem['invalid']}",
+                )
+            resolve_proposition_batch(proposition_issues)
+            continue
+        issue = next(issue for issue in issues if issue["kind"] != "proposition")
         can_expand = (
             issue["kind"] in {"source", "claimant", "identity"}
             and len(genesis_constraint_catalog(run_dir, state["claimant_extensions"])["claimants"]) < MAX_CLAIMANTS
@@ -3348,13 +3451,15 @@ def repair_genesis_constraints_payload(
 
         def validate_resolution(result):
             if result["action"] == "resolve":
-                if result["replacement"] not in issue["candidates"] or result["claimant_extension"] is not None:
+                if result["replacement"] not in issue["candidates"]:
                     raise SchemaError("Reference resolution must choose one allowed candidate")
-            elif result["replacement"] is not None or result["claimant_extension"] is None:
+                result["claimant_extension"] = None
+            elif result["claimant_extension"] is None:
                 raise SchemaError("Claimant expansion must return exactly one complete extension")
             elif len(genesis_constraint_catalog(run_dir, state["claimant_extensions"])["claimants"]) >= MAX_CLAIMANTS:
                 raise SchemaError("Claimant expansion exceeds the twelve-claimant maximum")
             else:
+                result["replacement"] = None
                 materialize_claimant_extension(
                     result["claimant_extension"], run_dir, state["claimant_extensions"]
                 )
@@ -3376,11 +3481,10 @@ def repair_genesis_constraints_payload(
         else:
             replacement = result["replacement"]
         state["payload"] = apply_genesis_resolution(state["payload"], issue, replacement)
-        state["history"].append({
-            "kind": issue["kind"], "invalid": issue["invalid"], "replacement": replacement,
-            "step_id": repair_step, "result": result, "api_response": api_response,
-        })
-        write_json(repair_path, state)
+        persist(
+            issue["kind"], repair_step, result, api_response,
+            invalid=issue["invalid"], replacement=replacement,
+        )
     raise PausedError("Genesis reference resolution", "Genesis reference repairs did not converge")
 
 
@@ -3692,10 +3796,7 @@ def build_semantic_delta(run_dir: Path, step_id: str, payload: dict, content_ids
                     fact["sources"].append(fact_source)
             for key, values in item["relevance"].items():
                 fact["relevance"][key] = list(dict.fromkeys(fact["relevance"].get(key, []) + values))
-        for alias in (
-            f"fact_{index:02d}", f"prop_{index:02d}", f"proposition_{index:02d}",
-            f"p{index:02d}", f"p_{index:03d}",
-        ):
+        for alias in fact_position_aliases(index):
             fact_aliases[alias] = fact["fact_id"]
     known_facts = set(_read_state_map(run_dir, "canonical-facts.json"))
     knowledge = []

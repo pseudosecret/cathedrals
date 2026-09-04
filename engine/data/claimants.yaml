@@ -79,7 +79,7 @@ set_level_hard_constraints:
 set_level_soft_constraints:
   - "Prefer surprising but legible combinations over familiar mystery archetypes."
   - "Avoid redundant genre feel."
-  - "Avoid variations of one institutional authority, grief, haunting, or diagnosis pattern."
+  - "Avoid variations of any one authority, emotional, supernatural, or explanatory pattern."
   - "Let claimant influence emerge unevenly across branches, artifacts, reconvergence, and endings."
 
 prose_differentiation_law:

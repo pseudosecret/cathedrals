@@ -13,6 +13,13 @@ to at most 12 events, claimant relationships to at most 10, motifs to at most 8,
 principal tensions to at most 8. Be concise. Do not emit characters, full claimant
 profiles, constraint events, obligations, scenes, or prose.
 
+Treat `generation_brief.genre_flavor` as the authoritative creative brief for the
+premise, setting, flavor, viewpoint, and content constraints. Every explicit user
+constraint is binding. Do not inherit surface fiction from engine documentation,
+examples, fixtures, or previous generations. Engine concepts such as thresholds,
+evidence, contamination, judgment, and responsibility describe dramatic functions,
+not required settings, professions, objects, or institutions.
+
 The active format is web. The engine owns record metadata and deterministic IDs. The
 deterministic projector owns frontend code. A valid payload commits immediately and
 cannot be rewritten.

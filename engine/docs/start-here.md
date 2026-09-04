@@ -29,7 +29,7 @@ hidden.
 
 ## Current Truth
 
-- work: `hospice-annex-v01`
+- work: `cathedrals-v01`
 - phase: `engine_revision`
 - generated work present: no
 - claimant positions: five to eight semantically blank initial slots; resolve-or-expand ceiling twelve

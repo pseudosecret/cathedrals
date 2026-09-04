@@ -856,16 +856,16 @@ figures:
       collapse: 0
       confession: 0
   - id: 2-3-3-2
-    name: The Waiting Patient
+    name: The Waiting One
     summary: inward suspension, private holding pattern, muted blockage, partial arrest
-    archetype: The Waiting Patient, one held in quiet postponement
-    object_action: a waiting-room chair, counting the minutes
+    archetype: The Waiting One, held in quiet postponement
+    object_action: an empty chair, counting the minutes
     scene_motion: Begins in inward suspension, passes through private holding pattern, muted blockage, and tends toward partial arrest.
     pressure_type: threshold / suspension
     likely_effects:
       - steers the scene toward inward suspension
       - colors transitions with partial arrest
-      - introduces imagery like a waiting-room chair, counting the minutes
+      - introduces imagery like an empty chair, counting the minutes
     termination_bias:
       death: 0
       unresolved: 2
