@@ -19,7 +19,7 @@ The human authors doctrine, thematic gravity, world law, formal composition law,
 branching/state mechanics, threshold geomancy, acceptance tests, scope, rendering,
 and technical architecture. The autonomous creative run authors:
 
-- all five claimant identities and every non-claimant character
+- all initial claimant identities, any Genesis extensions, and every non-claimant character
 - exact relationships, roles, voices, evidence logics, incident, chronology,
   culpability, clues, and contradictions
 - generated arc purposes, scene events, choices, artifacts, endings, poetry, prose,
@@ -53,13 +53,17 @@ Preserve raw responses, append the hash-chained ledger, and record step-specific
 models, parameters, seeds, prompt/context/output hashes, timestamps, deltas, and
 token/cost accounting.
 
-## Five Claimants
+## Variable Claimants
 
-Use exactly five semantically blank technical slots. Generate all five identities
-together in the Genesis cast record under `engine/data/claimants.yaml`. Their IDs,
-names, slots, and incident roles are anchored by the preceding foundation. No claimant is otherwise locked,
-prewritten, selected from an archetype menu, or assigned a fictional role in advance.
-The opening hub is exactly three situated actions, not a claimant selector.
+Use five to eight semantically blank initial technical slots. Generate every initial
+identity together in the Genesis cast record under `engine/data/claimants.yaml`. Their
+IDs, names, slots, and incident roles are anchored by the preceding foundation. During
+the still-uncommitted Genesis constraints step, resolve an invalid reference to an
+existing claimant or supporting character when plausible. Expand only for a genuinely
+distinct world-logic, preferring promotion of an existing character, and never exceed
+twelve claimants. No claimant is otherwise locked, prewritten, selected from an
+archetype menu, or assigned a fictional role in advance. The opening hub is exactly
+three situated actions, not a claimant selector.
 
 ## Fictional Envelope
 

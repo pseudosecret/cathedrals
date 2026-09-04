@@ -4,8 +4,8 @@ Return exactly one Genesis foundation payload conforming to the supplied schema.
 Return JSON only: no Markdown fence, commentary, alternatives, or placeholders.
 
 Establish the immutable work canon, format composition law, bounded web art direction,
-and exactly five claimant anchors. Use the supplied claimant join keys in canon. Do not
-invent, imply, or reference additional claimant IDs. Each anchor authors only name and
+and 5 to 8 claimant anchors. Use sequential claimant join keys from `claimant_01`
+through `claimant_N` in canon. Do not invent, imply, or reference additional claimant IDs. Each anchor authors only name and
 incident role; the engine assigns its claimant ID and technical slot. If a relationship
 involves some other person, describe that person in dramatic_pressure without assigning 
 them a claimant_id. Keep chronology

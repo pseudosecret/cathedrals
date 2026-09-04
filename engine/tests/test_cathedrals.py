@@ -96,7 +96,7 @@ def claimant_expansion(identifier):
     }
 
 
-def genesis_foundation_fixture():
+def genesis_foundation_fixture(count=5):
     anchors = [
         {
             "claimant_id": f"claimant_{number:02d}",
@@ -104,16 +104,51 @@ def genesis_foundation_fixture():
             "name": f"Claimant {number}",
             "incident_role": f"Incident role {number}",
         }
-        for number in range(1, 6)
+        for number in range(1, count + 1)
     ]
     return {
         "record_type": "genesis_foundation",
         "generation_id": "generation_test",
         "commit_id": "commit_foundation",
         "format_composition_law": "Composition law",
-        "work_canon": {"central_incident": {"subjects": ["claimant_01"]}},
+        "work_canon": {
+            "central_incident": {"subjects": ["claimant_01"]},
+            "claimant_relationships": [],
+            "generated_motifs": ["motif_one"],
+            "principal_tensions": [],
+        },
         "web_art_direction": {},
         "claimant_anchors": anchors,
+    }
+
+
+def genesis_cast_fixture(count=5):
+    return {
+        "record_type": "genesis_cast",
+        "commit_id": "commit_cast",
+        "claimants": [claimant_expansion(f"claimant_{number:02d}") for number in range(1, count + 1)],
+        "characters": [{
+            "character_id": "character_001",
+            "technical_slot_id": "character_slot_001",
+            "name": "Supporting Witness",
+            "role": "Witnessed the transfer",
+            "relationships": ["Works beside Claimant 1"],
+            "dramatic_function": "Supplies independent provenance",
+        }],
+    }
+
+
+def genesis_semantic_payload(source_slot="claimant_slot_01"):
+    return {
+        "canonical_facts": [{
+            "source": {"technical_slot_id": source_slot},
+            "subject": "threshold", "predicate": "opened", "value": True,
+            "status": "established", "relevance": {"technical_slot_ids": [source_slot]},
+        }],
+        "knowledge_changes": [],
+        "new_soft_obligations": [],
+        "obligation_updates": [],
+        "motif_events": [],
     }
 
 
@@ -227,6 +262,7 @@ def architecture_core_payload():
 def architecture_genesis_records():
     claimant = {
         "claimant_id": "claimant_01",
+        "technical_slot_id": "claimant_slot_01",
         "occupation": "archivist",
         "setting_relationship": "Keeps the sealed archive.",
         "epistemic_regime": "Records establish reality.",
@@ -261,7 +297,7 @@ def constraint_event(
 ):
     return {
         "record_type": "constraint_event",
-        "protocol_version": "5.0",
+        "protocol_version": "6.0",
         "generation_id": "generation_test",
         "constraint_event_sequence": sequence,
         "origin_step_id": "packet_one",
@@ -282,7 +318,7 @@ def constraint_event(
 def genesis_ledger(seed="12345"):
     return {
         "record_type": "ledger_entry",
-        "protocol_version": "5.0",
+        "protocol_version": "6.0",
         "generation_id": "generation_test",
         "ledger_sequence": 1,
         "planned_step_id": "genesis",
@@ -328,6 +364,17 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(brief.possible_scene_count, 150)
         self.assertEqual(brief.story_format, "web")
         self.assertFalse(brief.mutable)
+
+    def test_incomplete_runs_ignore_pre_protocol_6_generations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, version in (("old", "5.0"), ("current", "6.0")):
+                run = root / name
+                (run / "state").mkdir(parents=True)
+                RUNNER.write_json(run / "state/run-state.json", {"status": "GENESIS"})
+                RUNNER.write_json(run / "run-manifest.json", {"protocol_version": version})
+            with mock.patch.object(RUNNER, "RUNS_ROOT", root):
+                self.assertEqual(RUNNER.incomplete_runs(), [root / "current"])
 
     def test_scene_count_rejects_nonpositive_and_noninteger(self):
         for value in ("0", "-1", "3.5", "many"):
@@ -545,6 +592,134 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertIn("unexpected:", reason)
         self.assertIn("duplicated:", reason)
 
+    def test_genesis_initial_claimant_range_and_character_slots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            RUNNER.write_json(run / "generation-brief.json", {"generation_id": "generation_test"})
+            for count in (5, 8):
+                foundation = genesis_foundation_fixture(count) | {"story_format": "web"}
+                RUNNER.validate_genesis_foundation(foundation, run)
+            for count in (4, 9):
+                foundation = genesis_foundation_fixture(count) | {"story_format": "web"}
+                with self.assertRaisesRegex(RUNNER.SchemaError, "five to eight"):
+                    RUNNER.validate_genesis_foundation(foundation, run)
+
+        foundation = genesis_foundation_fixture()
+        payload = genesis_cast_fixture()
+        payload["characters"] = [{
+            key: value for key, value in payload["characters"][0].items()
+            if key not in {"character_id", "technical_slot_id"}
+        }]
+        with mock.patch.object(RUNNER, "committed_record", return_value=foundation):
+            built = RUNNER.build_genesis_cast(Path("/generation_test"), payload)
+        self.assertEqual(built["characters"][0]["technical_slot_id"], "character_slot_001")
+
+    def test_genesis_reference_repair_resolves_repeated_unknown_slot_to_character(self):
+        foundation = genesis_foundation_fixture()
+        cast = genesis_cast_fixture()
+        records = {"genesis_foundation": foundation, "genesis_cast": cast}
+        payload = genesis_semantic_payload("claimant_slot_07")
+        calls = []
+
+        def resolve(_run, _step, _prompt, _schema, _transport, validator=None, **_kwargs):
+            result = {
+                "action": "resolve", "replacement": "character_slot_001",
+                "claimant_extension": None, "reason": "The supporting witness is the source.",
+            }
+            validator(result)
+            calls.append(result)
+            return result, {"usage": {}}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "generation_test"
+            (run / ".staging").mkdir(parents=True)
+            with mock.patch.object(
+                RUNNER, "committed_record", side_effect=lambda _run, kind: records[kind]
+            ), mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=resolve):
+                repaired = RUNNER.repair_genesis_constraints_payload(
+                    run, "genesis_constraints", payload, "{}", {"usage": {}}, None
+                )
+                record = RUNNER.build_genesis_constraints(run, repaired)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(repaired["canonical_facts"][0]["source"]["technical_slot_id"], "character_slot_001")
+        self.assertEqual(repaired["canonical_facts"][0]["relevance"]["technical_slot_ids"], ["character_slot_001"])
+        self.assertEqual(record["constraint_delta"]["canonical_facts"][0]["sources"][0]["artifact_id"], "character_001")
+        self.assertEqual(repaired["_claimant_extensions"], [])
+
+    def test_genesis_reference_repair_can_promote_or_create_one_claimant(self):
+        for origin, name in (("character_001", "Supporting Witness"), (None, "New Claimant")):
+            with self.subTest(origin=origin):
+                foundation = genesis_foundation_fixture()
+                cast = genesis_cast_fixture()
+                records = {"genesis_foundation": foundation, "genesis_cast": cast}
+                profile = claimant_expansion("draft")
+                profile.pop("claimant_id")
+                decision = {
+                    "action": "expand", "replacement": None,
+                    "claimant_extension": {
+                        "name": name,
+                        "incident_role": "Held the unrepresented threshold authority",
+                        "origin_character_id": origin,
+                        "profile": profile,
+                        "relationships_to_existing": [{
+                            "claimant_id": "claimant_01",
+                            "relationship": "Contests the first claimant's custody",
+                            "dramatic_pressure": "Their records cannot both govern the transfer.",
+                        }],
+                    },
+                    "reason": "The fact requires a distinct world-logic.",
+                }
+
+                def expand(_run, _step, _prompt, _schema, _transport, validator=None, **_kwargs):
+                    validator(decision)
+                    return decision, {"usage": {}}
+
+                with tempfile.TemporaryDirectory() as temporary:
+                    run = Path(temporary) / "generation_test"
+                    (run / ".staging").mkdir(parents=True)
+                    with mock.patch.object(
+                        RUNNER, "committed_record", side_effect=lambda _run, kind: records[kind]
+                    ), mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=expand):
+                        repaired = RUNNER.repair_genesis_constraints_payload(
+                            run, "genesis_constraints", genesis_semantic_payload("claimant_slot_07"),
+                            "{}", {"usage": {}}, None,
+                        )
+                        record = RUNNER.build_genesis_constraints(run, repaired)
+                        protocol = RUNNER.load_protocol()
+                        RUNNER.validate_json_schema(record, protocol["$defs"]["genesisConstraints"], protocol)
+                        RUNNER.validate_genesis_constraints(record, run)
+                        events = RUNNER.make_constraint_events(
+                            run, record, record["commit_id"], "a" * 64, "genesis_constraints"
+                        )
+                extension = record["claimant_extensions"][0]
+                self.assertEqual(extension["anchor"]["claimant_id"], "claimant_06")
+                self.assertEqual(extension["anchor"]["technical_slot_id"], "claimant_slot_06")
+                self.assertEqual(extension["origin_character_id"], origin)
+                self.assertEqual(repaired["canonical_facts"][0]["source"]["technical_slot_id"], "claimant_slot_06")
+                self.assertEqual(events[0]["sources"][0]["artifact_id"], "claimant_06")
+                self.assertEqual(events[0]["sources"][0]["source_commit_id"], record["commit_id"])
+
+    def test_genesis_expansion_cap_disables_expansion(self):
+        foundation = genesis_foundation_fixture(8)
+        cast = genesis_cast_fixture(8)
+        records = {"genesis_foundation": foundation, "genesis_cast": cast}
+        extensions = []
+        with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: records[kind]):
+            for number in range(4):
+                profile = claimant_expansion("draft")
+                profile.pop("claimant_id")
+                extensions.append(RUNNER.materialize_claimant_extension({
+                    "name": f"Extension {number}", "incident_role": f"Role {number}",
+                    "origin_character_id": None, "profile": profile,
+                    "relationships_to_existing": [{
+                        "claimant_id": "claimant_01", "relationship": "Opposes",
+                        "dramatic_pressure": "Distinct pressure",
+                    }],
+                }, Path("/offline"), extensions))
+            issue = {"kind": "source", "invalid": "claimant_slot_99", "contexts": [], "candidates": ["claimant_slot_01"]}
+            _prompt, schema = RUNNER.claimant_resolution_request(issue, Path("/offline"), extensions)
+        self.assertEqual(schema["properties"]["action"]["enum"], ["resolve"])
+
     def test_assembled_genesis_merges_anchors_with_cast_expansions(self):
         foundation = genesis_foundation_fixture()
         cast = {
@@ -629,6 +804,22 @@ class CathedralsRunnerTests(unittest.TestCase):
                     "action": "establish",
                     "relevance": {},
                 },
+                {
+                    "source": {"technical_slot_id": "claimant_slot_01"},
+                    "subject_id": "claimant_01",
+                    "relation": "believes",
+                    "proposition_id": "p01",
+                    "action": "establish",
+                    "relevance": {},
+                },
+                {
+                    "source": {"technical_slot_id": "claimant_slot_01"},
+                    "subject_id": "claimant_01",
+                    "relation": "claims",
+                    "proposition_id": "p_001",
+                    "action": "establish",
+                    "relevance": {},
+                },
             ],
             "new_soft_obligations": [],
             "obligation_updates": [],
@@ -651,9 +842,119 @@ class CathedralsRunnerTests(unittest.TestCase):
             self.assertEqual(fact["relevance"]["keywords"], ["archive", "seal"])
             self.assertEqual({item["proposition_id"] for item in delta["knowledge_changes"]}, {fact["fact_id"]})
 
-            payload["knowledge_changes"][0]["proposition_id"] = "proposition_03"
-            with self.assertRaisesRegex(RUNNER.SchemaError, "unknown proposition proposition_03"):
-                RUNNER.build_semantic_delta(run, "genesis_constraints", payload, content_ids)
+            for unknown in ("proposition_03", "p03", "p_003"):
+                payload["knowledge_changes"][0]["proposition_id"] = unknown
+                with self.assertRaisesRegex(RUNNER.SchemaError, f"unknown proposition {unknown}"):
+                    RUNNER.build_semantic_delta(run, "genesis_constraints", payload, content_ids)
+
+    def test_genesis_constraints_schema_bounds_raw_normalization(self):
+        schema = RUNNER.genesis_constraints_schema(Path("/offline"))
+        payload = {
+            "canonical_facts": [{
+                "source": {"technical_slot_id": "claimant_slot_01"},
+                "subject": "room_one", "predicate": "sealed", "value": True,
+                "status": "established",
+                "relevance": {
+                    "claimant_ids": ["claimant_01"],
+                    "character_ids": ["character_001"],
+                    "motif_ids": ["motif_one"],
+                    "technical_slot_ids": ["claimant_slot_01"],
+                },
+            }],
+            "knowledge_changes": [],
+            "new_soft_obligations": [],
+            "obligation_updates": [],
+            "motif_events": [{
+                "source": {"technical_slot_id": "claimant_slot_01"},
+                "motif_id": "motif_one", "action": "establish",
+                "current_function": "Marks the sealed room.", "pressure": "The seal persists.",
+                "overuse_risk": "low", "relevance": {},
+            }],
+        }
+        RUNNER.validate_json_schema(payload, schema)
+        self.assertEqual(schema["properties"]["canonical_facts"]["maxItems"], 24)
+        self.assertEqual(schema["properties"]["knowledge_changes"]["maxItems"], 24)
+        self.assertEqual(schema["properties"]["new_soft_obligations"]["maxItems"], 0)
+        invalid = copy.deepcopy(payload)
+        invalid["canonical_facts"] *= 25
+        with self.assertRaises(RUNNER.SchemaError):
+            RUNNER.validate_json_schema(invalid, schema)
+
+        too_many_unique = copy.deepcopy(payload)
+        too_many_unique["canonical_facts"] = [
+            payload["canonical_facts"][0] | {"subject": f"subject_{number}"}
+            for number in range(13)
+        ]
+        with self.assertRaisesRegex(RUNNER.SchemaError, "twelve unique"):
+            RUNNER.validate_genesis_constraints_payload(too_many_unique)
+
+        slots = [f"claimant_slot_{number:02d}" for number in range(1, 13)] + [
+            f"character_slot_{number:03d}" for number in range(1, 13)
+        ]
+        duplicate_payload = copy.deepcopy(payload)
+        duplicate_payload["canonical_facts"] = [
+            payload["canonical_facts"][0] | {"source": {"technical_slot_id": slot}}
+            for slot in slots
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            fact = RUNNER.build_semantic_delta(
+                Path(temporary), "genesis_constraints", duplicate_payload,
+                {slot: ("genesis", f"source_{number:02d}") for number, slot in enumerate(slots, 1)},
+            )["canonical_facts"][0]
+        self.assertEqual(len(fact["sources"]), 24)
+        protocol = RUNNER.load_protocol()
+        RUNNER.validate_json_schema(fact, protocol["$defs"]["canonicalFact"], protocol)
+
+    def test_genesis_constraints_uses_fixed_8192_token_request_without_expanded_retry(self):
+        captured = {}
+
+        def committed(_run, kind):
+            return {"commit_id": f"commit_{kind}"} if kind in {"genesis_foundation", "genesis_cast"} else None
+
+        def stop_after_request(_run, **kwargs):
+            captured.update(kwargs)
+            raise RuntimeError("captured")
+
+        with mock.patch.object(RUNNER, "verify_engine_snapshot"), mock.patch.object(
+            RUNNER, "ensure_frozen_geomancy"
+        ), mock.patch.object(RUNNER, "committed_record", side_effect=committed), mock.patch.object(
+            RUNNER, "genesis_constraints_prompt", return_value=("prompt", "context")
+        ), mock.patch.object(RUNNER, "request_record", side_effect=stop_after_request), mock.patch.object(
+            RUNNER, "request_bounded_record"
+        ) as bounded, self.assertRaisesRegex(RuntimeError, "captured"):
+            RUNNER.execute_creative_phases(Path("/offline"), output_fn=lambda _value: None)
+        self.assertEqual(captured["max_tokens"], 8192)
+        self.assertIsNotNone(captured["payload_repairer"])
+        self.assertIsNotNone(captured["response_schema"])
+        bounded.assert_not_called()
+
+    def test_packet_semantic_request_constrains_sources_to_authored_slots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "generation_test"
+            for name in ("state", "raw", ".staging"):
+                (run / name).mkdir(parents=True)
+            RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+            RUNNER.write_json(run / "generation-brief.json", {
+                "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid"
+            })
+            seen = []
+
+            def transport(_method, _url, request, **_kwargs):
+                seen.extend(request["response_format"]["json_schema"]["schema"]["$defs"]
+                    ["semanticSource"]["properties"]["technical_slot_id"]["enum"])
+                return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps({
+                    "canonical_facts": [], "knowledge_changes": [], "new_soft_obligations": [],
+                    "obligation_updates": [], "motif_events": [],
+                })}}]}
+
+            result = RUNNER.request_semantic_normalization(
+                run, "packet_one", {
+                    "scenes": [{"technical_slot_id": "scene_slot_0002"}],
+                    "endings": [{"technical_slot_id": "ending_slot_0001"}],
+                }, "context", transport,
+            )
+        self.assertEqual(result["canonical_facts"], [])
+        self.assertEqual(seen, ["ending_slot_0001", "scene_slot_0002"])
 
     def test_architecture_builder_reports_all_semantic_reference_problems(self):
         payload = {
@@ -671,7 +972,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             }],
             "arcs": [{
                 "arc_id": "arc_01",
-                "claimant_pressures": ["claimant_slot_01"],
+                "claimant_pressures": ["claimant_slot_02"],
                 "hard_obligation_ids": ["obligation_hard_missing"],
             }],
             "topology": {
@@ -688,7 +989,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 }],
             },
         }
-        genesis = {"claimants": [{"claimant_id": "claimant_01"}]}
+        genesis = {"claimants": [{"claimant_id": "claimant_01", "technical_slot_id": "claimant_slot_01"}]}
         with mock.patch.object(RUNNER, "committed_record", return_value=genesis), mock.patch.object(
             RUNNER, "_source_index", return_value={"source_known": {}}
         ), self.assertRaises(RUNNER.SchemaError) as raised:
@@ -696,7 +997,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         reason = raised.exception.reason
         for problem in (
             "undeclared topology nodes: edge_node_missing, node_missing",
-            "unknown claimant pressures: claimant_slot_01",
+            "unknown claimant pressures: claimant_slot_02",
             "unknown obligation origins: genesis_commit_01",
             "unknown obligation references: obligation_absent, obligation_hard_missing, obligation_missing",
             "unknown obligation termination targets: attractor_missing",
@@ -1805,7 +2106,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertNotIn("indexBatch", protocol["$defs"])
         plan = {
             "record_type": "prospective_plan",
-            "protocol_version": "5.0",
+            "protocol_version": "6.0",
             "generation_id": "generation_test",
             "plan_id": "prospective_plan_0001",
             "based_on_canonical_state_hash": "a" * 64,
@@ -2222,7 +2523,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(barrier["runtime_generation_allowed"]["const"], False)
         invalid_ready = {
             "record_type": "finalization",
-            "protocol_version": "5.0",
+            "protocol_version": "6.0",
             "generation_id": "generation_test",
             "run_status": "READY_TO_PLAY",
             "run_manifest_hash": "a" * 64,

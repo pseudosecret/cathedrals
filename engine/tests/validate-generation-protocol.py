@@ -50,7 +50,7 @@ record_types = {
     )
 }
 assert len(record_types) == 11
-assert schema["$defs"]["runManifest"]["properties"]["protocol_version"]["const"] == "5.0"
+assert schema["$defs"]["runManifest"]["properties"]["protocol_version"]["const"] == "6.0"
 engine_snapshot = schema["$defs"]["runManifest"]["properties"]["engine_snapshot"]
 assert "path" in engine_snapshot["required"]
 assert set(engine_snapshot["properties"]) == {"work_id", "path", "work_seed", "structural_seed", "geomancy_seed"}
@@ -62,6 +62,12 @@ assert "generation_dependency_ids" not in architecture_node["required"]
 assert "generation_dependency_ids" not in architecture_node["properties"]
 assert schema["$defs"]["genesisConstraintDelta"]["properties"]["canonical_facts"]["maxItems"] == 12
 assert schema["$defs"]["genesisConstraintDelta"]["properties"]["knowledge_changes"]["maxItems"] == 24
+assert schema["$defs"]["genesisFoundationPayload"]["properties"]["claimant_anchors"]["minItems"] == 5
+assert schema["$defs"]["genesisFoundationPayload"]["properties"]["claimant_anchors"]["maxItems"] == 8
+assert schema["$defs"]["genesisConstraints"]["properties"]["claimant_extensions"]["maxItems"] == 7
+assert "technical_slot_id" in schema["$defs"]["character"]["required"]
+assert schema["$defs"]["canonicalFact"]["properties"]["sources"]["maxItems"] == 24
+assert schema["$defs"]["constraintEvent"]["properties"]["sources"]["maxItems"] == 24
 assert "maxLength" not in schema["$defs"]["scene"]["properties"]["prose_mdx"]
 assert schema["$defs"]["decisionEdge"]["required"] == [
     "edge_id",

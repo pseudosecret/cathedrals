@@ -53,7 +53,8 @@ The protocol schema validates these independent record types:
 - `run_manifest`: immutable brief, frozen engine provenance, limits, traversal
   strategy, providers, retention law, and complete-work barrier.
 - `genesis_foundation`, `genesis_cast`, and `genesis_constraints`: bounded,
-  causally linked root canon, five jointly authored claimants, significant characters,
+  causally linked root canon, five to eight jointly authored initial claimants,
+  optional resolve-or-expand claimant extensions, significant characters,
   and minimal initial fact/knowledge/motif deltas.
 - `architecture_core` and `architecture_plan_batch`: bounded macro structure followed
   by repeatable batches of at most eight technical packet envelopes.

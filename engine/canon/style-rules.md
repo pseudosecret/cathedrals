@@ -37,7 +37,8 @@
 
 ## 6. Generated Claimant Registers
 
-- Generate all five registers together with the claimant identities.
+- Generate every initial register together with the claimant identities; generate any
+  extension register with its full claimant profile before Genesis commits.
 - Make each register substantially different in diction, cadence, syntax, paragraph
   behavior, rhetoric, and emotional pressure.
 - Derive register from the claimant's generated way of knowing and dramatic function.

@@ -79,8 +79,8 @@ The hidden contamination route requires:
 - route differences that are only cosmetic
 - endings that merely explain lore
 
-Branches may distribute these beats unevenly and may reconverge. Five claimants do
-not imply five routes or five copies of this sequence.
+Branches may distribute these beats unevenly and may reconverge. The claimant count
+does not imply an equal number of routes or copies of this sequence.
 
 ## 9. Threshold-Geometric Scene Progression
 

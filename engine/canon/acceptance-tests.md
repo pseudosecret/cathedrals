@@ -7,15 +7,17 @@ acceptance. Failure kills the generation. Nothing here authorizes creative repai
 
 Before generation, all answers must be `No`:
 
-1. Can the human know the five fictional claimant identities?
+1. Can the human know the fictional claimant identities?
 2. Can the human know their exact roles, relationships, voices, or evidence modes?
 3. Can the human know the exact central incident beyond its event-class envelope?
 4. Can the human know what happens scene by scene?
 5. Can the human know which exact artifacts, formal compositions, or endings exist?
 
-Pass only when exactly five semantically blank slots were instantiated together in
-genesis and no fictional claimant menu, archetype, name, occupation, evidence family,
-genre, contradiction mode, or consequence existed in engine canon.
+Pass only when five to eight semantically blank initial slots were instantiated
+together in Genesis; any extension was justified by an unresolved distinct
+world-logic before the constraints commit; the completed set has at most twelve
+claimants; and no fictional claimant menu, archetype, name, occupation, evidence
+family, genre, contradiction mode, or consequence existed in engine canon.
 
 ## Autonomous Run and Irreversibility
 
@@ -58,7 +60,9 @@ Fail for any of the following:
 Fail when:
 
 - IDs duplicate or references dangle
-- claimant slots are missing, repeated, or not exactly five
+- initial claimant slots are missing, repeated, outside five to eight, or nonsequential
+- a Genesis extension exceeds twelve claimants, lacks an incident role or relationship
+  to an existing claimant, or promotes a character under a different identity
 - any architecture node lacks exactly one committed reader-facing output
 - prospective packet choice violates frozen dependencies or mutates canon
 - literary/ending packet sizes or whole-work derived scope bounds fail
@@ -111,7 +115,7 @@ Pass only if every pair is substantially different on the axes in
 `engine/data/claimants.yaml`; at least one claimant pressures truth materially or
 institutionally; at least one pressures it relationally or experientially; at least
 one way of knowing is initially difficult for the others to assimilate; and influence
-emerges unevenly rather than as five symmetrical routes.
+emerges unevenly rather than as symmetrical routes.
 
 Fail a renamed prewritten archetype, assigned difference role, or claimant
 interchangeable with another after surface adjectives are removed.

@@ -37,9 +37,14 @@ NODE_VERSION = "22.23.2"
 ASTRO_VERSION = "7.2.9"
 MARKDOWN_IT_VERSION = "14.1.0"
 NODE_MINIMUM = (22, 12, 0)
-PROTOCOL_VERSION = "5.0"
+PROTOCOL_VERSION = "6.0"
 BASE_OUTPUT_TOKENS = 10900
 EXPANDED_OUTPUT_TOKENS = 21800
+GENESIS_CONSTRAINT_TOKENS = 8192
+INITIAL_CLAIMANT_MIN = 5
+INITIAL_CLAIMANT_MAX = 8
+MAX_CLAIMANTS = 12
+GENESIS_RAW_FACT_MAX = 24
 PACKET_LITERARY_WORDS = 4800
 PLAN_BATCH_SIZE = 8
 TERMINAL_STATES = {"READY_TO_PLAY", "FAILED_GENERATION"}
@@ -913,10 +918,15 @@ def incomplete_runs() -> list[Path]:
     candidates = []
     for run_dir in RUNS_ROOT.iterdir():
         path = state_path(run_dir)
-        if not path.exists():
+        manifest_path = run_dir / "run-manifest.json"
+        if not path.exists() or not manifest_path.exists():
             continue
         state = read_json(path)
-        if state.get("status") not in TERMINAL_STATES and not state.get("resume_declined"):
+        if (
+            read_json(manifest_path).get("protocol_version") == PROTOCOL_VERSION
+            and state.get("status") not in TERMINAL_STATES
+            and not state.get("resume_declined")
+        ):
             candidates.append(run_dir)
     return sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)
 
@@ -943,6 +953,8 @@ def generated_ids(record: dict) -> list[str]:
         ids += [item["claimant_id"] for item in record["claimant_anchors"]]
     if record.get("record_type") == "genesis_cast":
         ids += [item["character_id"] for item in record["characters"]]
+    if record.get("record_type") == "genesis_constraints":
+        ids += [item["anchor"]["claimant_id"] for item in record.get("claimant_extensions", [])]
     if record.get("record_type") == "architecture_core":
         ids += [item["arc_id"] for item in record["arcs"]]
         ids += [item["node_id"] for item in record["topology"]["nodes"]]
@@ -1310,7 +1322,7 @@ def commit_record(
         (".artistic.api.json", "artistic-api-response.json"),
         (".semantic.json", "semantic-normalization.json"),
         (".semantic.api.json", "semantic-api-response.json"),
-        (".repair.json", "architecture-repair.json"),
+        (".repair.json", "reference-repair.json"),
     ):
         source = run_dir / ".staging" / f"{planned_step_id}{suffix}"
         if source.exists():
@@ -1425,6 +1437,13 @@ def assembled_genesis(run_dir: Path) -> dict | None:
     if not foundation or not cast or not constraints:
         return None
     expansions = {item["claimant_id"]: item for item in cast["claimants"]}
+    extensions = constraints.get("claimant_extensions", [])
+    work_canon = copy.deepcopy(foundation["work_canon"])
+    for extension in extensions:
+        claimant_id = extension["anchor"]["claimant_id"]
+        if claimant_id not in work_canon["central_incident"]["subjects"]:
+            work_canon["central_incident"]["subjects"].append(claimant_id)
+        work_canon["claimant_relationships"].extend(extension["claimant_relationships"])
     return {
         "record_type": "genesis",
         "protocol_version": PROTOCOL_VERSION,
@@ -1432,12 +1451,12 @@ def assembled_genesis(run_dir: Path) -> dict | None:
         "commit_id": constraints["commit_id"],
         "story_format": "web",
         "format_composition_law": foundation["format_composition_law"],
-        "work_canon": foundation["work_canon"],
+        "work_canon": work_canon,
         "web_art_direction": foundation["web_art_direction"],
         "claimants": [
             expansions[anchor["claimant_id"]] | anchor
             for anchor in foundation["claimant_anchors"]
-        ],
+        ] + [extension["profile"] | extension["anchor"] for extension in extensions],
         "characters": cast["characters"],
         "constraint_delta": constraints["constraint_delta"],
     }
@@ -1797,6 +1816,7 @@ def request_record(
     transport=http_json,
     precommit_validator=None,
     response_definition: str | None = None,
+    response_schema: dict | None = None,
     record_builder=None,
     payload_preserver=None,
     payload_validator=None,
@@ -1809,7 +1829,7 @@ def request_record(
     seed = step_seed(brief["generation_seed"], step_id)
     protocol = load_protocol(run_dir)
     response_definition = response_definition or RECORD_DEFS[expected_record_type]
-    schema = definition_schema(response_definition, protocol)
+    schema = response_schema or definition_schema(response_definition, protocol)
     parameters = {"temperature": temperature, "max_tokens": max_tokens, "seed": seed, "stream": False}
     feedback = ""
     for correction in range(3):
@@ -1856,7 +1876,7 @@ def request_record(
                 content = normalize_provider_response(response)
             if not preserved_payload.exists():
                 authored = parse_structured_content(content)
-            validate_json_schema(authored, protocol["$defs"][response_definition], protocol)
+            validate_json_schema(authored, schema)
             if payload_validator:
                 payload_validator(authored)
             if payload_preserver:
@@ -2058,6 +2078,8 @@ def validate_declared_id_uniqueness(record: dict) -> None:
         identifiers += [item["claimant_id"] for item in record["claimant_anchors"]]
     elif record.get("record_type") == "genesis_cast":
         identifiers += [item["character_id"] for item in record["characters"]]
+    elif record.get("record_type") == "genesis_constraints":
+        identifiers += [item["anchor"]["claimant_id"] for item in record["claimant_extensions"]]
     elif record.get("record_type") == "architecture_core":
         identifiers += [item["obligation_id"] for item in record["obligation_graph"]]
         identifiers += [item["arc_id"] for item in record["arcs"]]
@@ -2637,7 +2659,10 @@ def build_genesis_foundation(run_dir: Path, payload: dict) -> dict:
 
 def build_genesis_cast(run_dir: Path, payload: dict) -> dict:
     foundation = committed_record(run_dir, "genesis_foundation")
-    characters = [item | {"character_id": f"character_{index:03d}"} for index, item in enumerate(payload["characters"], 1)]
+    characters = [
+        item | {"character_id": f"character_{index:03d}", "technical_slot_id": f"character_slot_{index:03d}"}
+        for index, item in enumerate(payload["characters"], 1)
+    ]
     return record_envelope(run_dir, "genesis_cast", "genesis_cast") | {
         "foundation_commit_id": foundation["commit_id"],
         "story_format": "web",
@@ -2650,13 +2675,21 @@ def build_genesis_constraints(run_dir: Path, payload: dict) -> dict:
     if payload["new_soft_obligations"] or payload["obligation_updates"]:
         raise SchemaError("Genesis semantic normalization cannot create or update obligations")
     foundation = committed_record(run_dir, "genesis_foundation")
+    extensions = payload.get("_claimant_extensions", [])
     content_ids = {
         anchor["technical_slot_id"]: ("genesis", anchor["claimant_id"])
         for anchor in foundation["claimant_anchors"]
+    } | {
+        character["technical_slot_id"]: ("genesis", character["character_id"])
+        for character in cast["characters"]
+    } | {
+        extension["anchor"]["technical_slot_id"]: ("genesis", extension["anchor"]["claimant_id"])
+        for extension in extensions
     }
     delta = build_semantic_delta(run_dir, "genesis_constraints", payload, content_ids)
     return record_envelope(run_dir, "genesis_constraints", "genesis_constraints") | {
-        "cast_commit_id": cast["commit_id"], "story_format": "web", "constraint_delta": delta,
+        "cast_commit_id": cast["commit_id"], "story_format": "web",
+        "claimant_extensions": extensions, "constraint_delta": delta,
     }
 
 
@@ -2667,7 +2700,7 @@ def architecture_aliases(run_dir: Path) -> dict[str, str]:
     genesis = committed_record(run_dir, "genesis") or {}
     aliases = {
         item["technical_slot_id"]: item["claimant_id"]
-        for item in foundation.get("claimant_anchors", [])
+        for item in genesis.get("claimants", [])
     }
     for alias, record in (
         ("genesis", genesis),
@@ -3016,7 +3049,11 @@ def preserve_artistic_payload(run_dir: Path, step_id: str, payload: dict, conten
         write_json(base.with_suffix(".artistic.api.json"), response, mode=0o444, exclusive=True)
 
 
-def request_architecture_analysis(run_dir: Path, step_id: str, prompt: str, schema: dict, transport, validator=None):
+def request_architecture_analysis(
+    run_dir: Path, step_id: str, prompt: str, schema: dict, transport, validator=None,
+    *, phase="architecture", system_prompt="Repair only the identified uncommitted Architecture fields. Return JSON only.",
+    response_name="architectureRepair", pause_stage="Architecture repair",
+):
     brief = read_json(run_dir / "generation-brief.json")
     seed = step_seed(brief["generation_seed"], step_id)
     parameters = {"temperature": 0.0, "max_tokens": 4096, "seed": seed, "stream": False}
@@ -3033,11 +3070,11 @@ def request_architecture_analysis(run_dir: Path, step_id: str, prompt: str, sche
                 request = {
                     "model": load_state(run_dir)["model"],
                     "messages": [
-                        {"role": "system", "content": "Repair only the identified uncommitted Architecture fields. Return JSON only."},
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": current_prompt},
                     ],
                     **parameters,
-                    "response_format": {"type": "json_schema", "json_schema": {"name": "architectureRepair", "strict": True, "schema": schema}},
+                    "response_format": {"type": "json_schema", "json_schema": {"name": response_name, "strict": True, "schema": schema}},
                 }
                 response, content = provider_response(
                     transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
@@ -3053,7 +3090,7 @@ def request_architecture_analysis(run_dir: Path, step_id: str, prompt: str, sche
             return authored, response
         except CathedralsError as error:
             append_failed_attempt(
-                run_dir, step_id=step_id, attempt=attempt, phase="architecture", prompt=current_prompt,
+                run_dir, step_id=step_id, attempt=attempt, phase=phase, prompt=current_prompt,
                 context=prompt, parameters=parameters, started_at=started, failure_class=error.failure_class,
                 step_type="analysis", output_hash=sha256_file(response_path) if response_path.exists() else None,
                 usage=response.get("usage", {}) if isinstance(response, dict) else {},
@@ -3062,9 +3099,279 @@ def request_architecture_analysis(run_dir: Path, step_id: str, prompt: str, sche
                 feedback += f"\n\nCORRECTION REQUIRED\n{error.reason}\nReturn only a corrected repair response."
                 continue
             raise PausedError(
-                "Architecture repair", f"{step_id} exhausted 3 focused repair attempts. Last problem: {error.reason}"
+                pause_stage, f"{step_id} exhausted 3 focused repair attempts. Last problem: {error.reason}"
             ) from error
-    raise PausedError("Architecture repair", f"{step_id} exhausted its focused repair attempts")
+    raise PausedError(pause_stage, f"{step_id} exhausted its focused repair attempts")
+
+
+def validate_genesis_constraints_payload(payload: dict) -> None:
+    if payload["new_soft_obligations"] or payload["obligation_updates"]:
+        raise SchemaError("Genesis semantic normalization cannot create or update obligations")
+    identities = {
+        canonical_json({key: item[key] for key in ("subject", "predicate", "value", "status")})
+        for item in payload["canonical_facts"]
+    }
+    if len(identities) > 12:
+        raise SchemaError("Genesis constraints exceed twelve unique canonical facts")
+    if any(
+        item.get("relevance", {}).get(key)
+        for item in payload["canonical_facts"] + payload["knowledge_changes"] + payload["motif_events"]
+        for key in ("arc_ids", "branch_ids")
+    ):
+        raise SchemaError("Genesis constraints cannot reference Architecture IDs")
+
+
+def genesis_constraint_catalog(run_dir: Path, extensions: list[dict]) -> dict:
+    foundation = committed_record(run_dir, "genesis_foundation")
+    cast = committed_record(run_dir, "genesis_cast")
+    claimants = [
+        expansion | anchor
+        for anchor in foundation["claimant_anchors"]
+        for expansion in cast["claimants"]
+        if expansion["claimant_id"] == anchor["claimant_id"]
+    ] + [extension["profile"] | extension["anchor"] for extension in extensions]
+    return {
+        "claimants": {item["claimant_id"]: item for item in claimants},
+        "characters": {item["character_id"]: item for item in cast["characters"]},
+        "sources": {
+            item["technical_slot_id"]: {
+                "technical_slot_id": item["technical_slot_id"], "artifact_id": item["claimant_id"],
+                "kind": "claimant", "name": item["name"], "role": item["incident_role"],
+            }
+            for item in claimants
+        } | {
+            item["technical_slot_id"]: {
+                "technical_slot_id": item["technical_slot_id"], "artifact_id": item["character_id"],
+                "kind": "character", "name": item["name"], "role": item["role"],
+            }
+            for item in cast["characters"]
+        },
+        "motifs": sorted(set(foundation["work_canon"]["generated_motifs"])),
+    }
+
+
+def genesis_reference_issues(payload: dict, run_dir: Path, extensions: list[dict]) -> list[dict]:
+    catalog = genesis_constraint_catalog(run_dir, extensions)
+    allowed = {
+        "source": set(catalog["sources"]),
+        "claimant": set(catalog["claimants"]),
+        "character": set(catalog["characters"]),
+        "identity": set(catalog["claimants"]) | set(catalog["characters"]),
+        "motif": set(catalog["motifs"]),
+        "proposition": {f"fact_{index:02d}" for index in range(1, len(payload["canonical_facts"]) + 1)},
+    }
+    fact_aliases = set()
+    for index in range(1, len(payload["canonical_facts"]) + 1):
+        fact_aliases.update({
+            f"fact_{index:02d}", f"prop_{index:02d}", f"proposition_{index:02d}",
+            f"p{index:02d}", f"p_{index:03d}",
+        })
+    grouped = {}
+
+    def add(kind, path, invalid, context):
+        if invalid in (fact_aliases if kind == "proposition" else allowed[kind]):
+            return
+        issue = grouped.setdefault((kind, invalid), {
+            "kind": kind, "invalid": invalid, "paths": [], "contexts": [],
+        })
+        issue["paths"].append(path)
+        issue["contexts"].append(context)
+
+    groups = ("canonical_facts", "knowledge_changes", "new_soft_obligations", "obligation_updates", "motif_events")
+    for group in groups:
+        for item_index, item in enumerate(payload[group]):
+            if "source" in item:
+                add("source", (group, item_index, "source", "technical_slot_id"),
+                    item["source"]["technical_slot_id"], item)
+            relevance = item.get("relevance", {})
+            for field, kind in (
+                ("claimant_ids", "claimant"), ("character_ids", "character"),
+                ("motif_ids", "motif"), ("technical_slot_ids", "source"),
+            ):
+                for value_index, value in enumerate(relevance.get(field, [])):
+                    add(kind, (group, item_index, "relevance", field, value_index), value, item)
+    for index, item in enumerate(payload["knowledge_changes"]):
+        add("identity", ("knowledge_changes", index, "subject_id"), item["subject_id"], item)
+        add("proposition", ("knowledge_changes", index, "proposition_id"), item["proposition_id"], item)
+    for index, item in enumerate(payload["motif_events"]):
+        add("motif", ("motif_events", index, "motif_id"), item["motif_id"], item)
+    issues = list(grouped.values())
+    for index, issue in enumerate(issues, 1):
+        issue["issue_id"] = f"genesis_reference_{index:03d}"
+        issue["candidates"] = sorted(allowed[issue["kind"]])
+    return issues
+
+
+def claimant_resolution_request(issue: dict, run_dir: Path, extensions: list[dict]) -> tuple[str, dict]:
+    catalog = genesis_constraint_catalog(run_dir, extensions)
+    protocol = load_protocol(run_dir)
+    profile = copy.deepcopy(protocol["$defs"]["claimant"])
+    profile["required"].remove("claimant_id")
+    profile["properties"].pop("claimant_id")
+    characters = sorted(catalog["characters"])
+    draft = {
+        "type": "object", "additionalProperties": False,
+        "required": ["name", "incident_role", "origin_character_id", "profile", "relationships_to_existing"],
+        "properties": {
+            "name": {"$ref": "#/$defs/nonEmptyString"},
+            "incident_role": {"$ref": "#/$defs/nonEmptyString"},
+            "origin_character_id": {
+                "anyOf": ([{"enum": characters}] if characters else []) + [{"type": "null"}]
+            },
+            "profile": profile,
+            "relationships_to_existing": {
+                "type": "array", "minItems": 1, "maxItems": 4,
+                "items": {
+                    "type": "object", "additionalProperties": False,
+                    "required": ["claimant_id", "relationship", "dramatic_pressure"],
+                    "properties": {
+                        "claimant_id": {"enum": sorted(catalog["claimants"])},
+                        "relationship": {"$ref": "#/$defs/nonEmptyString"},
+                        "dramatic_pressure": {"$ref": "#/$defs/nonEmptyString"},
+                    },
+                },
+            },
+        },
+    }
+    can_expand = issue["kind"] in {"source", "claimant", "identity"} and len(catalog["claimants"]) < MAX_CLAIMANTS
+    schema = {
+        "type": "object", "additionalProperties": False,
+        "required": ["action", "replacement", "claimant_extension", "reason"],
+        "properties": {
+            "action": {"enum": ["resolve", "expand"] if can_expand else ["resolve"]},
+            "replacement": {"anyOf": [{"enum": issue["candidates"]}, {"type": "null"}]},
+            "claimant_extension": {"anyOf": [draft, {"type": "null"}]},
+            "reason": {"$ref": "#/$defs/nonEmptyString"},
+        },
+        "$defs": definition_schema("claimant", protocol)["$defs"],
+    }
+    prompt = bounded_context([
+        ("INVALID REFERENCE", {
+            "kind": issue["kind"], "value": issue["invalid"], "uses": issue["contexts"],
+        }),
+        ("EXISTING CLAIMANTS", list(catalog["claimants"].values())),
+        ("EXISTING CHARACTERS", list(catalog["characters"].values())),
+        ("VALID SOURCE SLOTS", list(catalog["sources"].values())),
+        ("VALID MOTIFS", catalog["motifs"]),
+        ("INSTRUCTION", (
+            "Resolve the invalid reference to one listed candidate whenever plausible. A supporting witness, technician, "
+            "administrator, or other character can source a fact without becoming a claimant. Expand only when the uses "
+            "clearly require a genuinely distinct world-logic that no existing claimant represents. Prefer promotion of "
+            "an existing character over a new identity. On expansion, return a complete differentiated profile, an incident "
+            "role, and at least one relationship to an existing claimant. Return only this reference decision; preserve all fiction."
+        )),
+    ], 36000)
+    return prompt, schema
+
+
+def apply_genesis_resolution(payload: dict, issue: dict, replacement: str) -> dict:
+    value = copy.deepcopy(payload)
+    for path in issue["paths"]:
+        cursor = value
+        for part in path[:-1]:
+            cursor = cursor[part]
+        cursor[path[-1]] = replacement
+    return value
+
+
+def materialize_claimant_extension(draft: dict, run_dir: Path, extensions: list[dict]) -> dict:
+    foundation = committed_record(run_dir, "genesis_foundation")
+    cast = committed_record(run_dir, "genesis_cast")
+    index = len(foundation["claimant_anchors"]) + len(extensions) + 1
+    claimant_id = f"claimant_{index:02d}"
+    origin = draft["origin_character_id"]
+    if origin is not None:
+        character = next((item for item in cast["characters"] if item["character_id"] == origin), None)
+        if not character or any(item["origin_character_id"] == origin for item in extensions):
+            raise SchemaError("Claimant expansion references an unavailable character")
+        if draft["name"] != character["name"]:
+            raise SchemaError("Promoted claimant must retain the committed character name")
+    related = [item["claimant_id"] for item in draft["relationships_to_existing"]]
+    if len(related) != len(set(related)):
+        raise SchemaError("Claimant expansion repeats an existing claimant relationship")
+    return {
+        "anchor": {
+            "claimant_id": claimant_id, "technical_slot_id": f"claimant_slot_{index:02d}",
+            "name": draft["name"], "incident_role": draft["incident_role"],
+        },
+        "profile": {"claimant_id": claimant_id, **draft["profile"]},
+        "origin_character_id": origin,
+        "claimant_relationships": [
+            {
+                "claimant_ids": [claimant_id, item["claimant_id"]],
+                "relationship": item["relationship"], "dramatic_pressure": item["dramatic_pressure"],
+            }
+            for item in draft["relationships_to_existing"]
+        ],
+    }
+
+
+def repair_genesis_constraints_payload(
+    run_dir: Path, step_id: str, payload: dict, content: str, response: dict, transport
+) -> dict:
+    repair_path = run_dir / ".staging" / f"{step_id}.repair.json"
+    state = read_json(repair_path) if repair_path.exists() else {
+        "payload": payload, "claimant_extensions": [], "history": [],
+    }
+    for _ in range(64):
+        issues = genesis_reference_issues(state["payload"], run_dir, state["claimant_extensions"])
+        if not issues:
+            enriched = state["payload"] | {"_claimant_extensions": state["claimant_extensions"]}
+            build_genesis_constraints(run_dir, enriched)
+            return enriched
+        preserve_artistic_payload(run_dir, step_id, payload, content, response)
+        issue = issues[0]
+        can_expand = (
+            issue["kind"] in {"source", "claimant", "identity"}
+            and len(genesis_constraint_catalog(run_dir, state["claimant_extensions"])["claimants"]) < MAX_CLAIMANTS
+        )
+        if not issue["candidates"] and not can_expand:
+            raise PausedError(
+                "Genesis reference resolution",
+                f"No valid Genesis candidate can replace {issue['kind']} reference {issue['invalid']}",
+            )
+        signature = sha256_bytes(canonical_json({
+            "kind": issue["kind"], "invalid": issue["invalid"], "paths": issue["paths"],
+        }))[:12]
+        repair_step = f"{step_id}_resolve_{signature}"
+        prompt, schema = claimant_resolution_request(issue, run_dir, state["claimant_extensions"])
+
+        def validate_resolution(result):
+            if result["action"] == "resolve":
+                if result["replacement"] not in issue["candidates"] or result["claimant_extension"] is not None:
+                    raise SchemaError("Reference resolution must choose one allowed candidate")
+            elif result["replacement"] is not None or result["claimant_extension"] is None:
+                raise SchemaError("Claimant expansion must return exactly one complete extension")
+            elif len(genesis_constraint_catalog(run_dir, state["claimant_extensions"])["claimants"]) >= MAX_CLAIMANTS:
+                raise SchemaError("Claimant expansion exceeds the twelve-claimant maximum")
+            else:
+                materialize_claimant_extension(
+                    result["claimant_extension"], run_dir, state["claimant_extensions"]
+                )
+
+        result, api_response = request_architecture_analysis(
+            run_dir, repair_step, prompt, schema, transport, validate_resolution,
+            phase="genesis", system_prompt="Resolve one uncommitted Genesis reference. Return JSON only.",
+            response_name="genesisReferenceResolution", pause_stage="Genesis reference resolution",
+        )
+        if result["action"] == "expand":
+            extension = materialize_claimant_extension(
+                result["claimant_extension"], run_dir, state["claimant_extensions"]
+            )
+            state["claimant_extensions"].append(extension)
+            replacement = (
+                extension["anchor"]["technical_slot_id"]
+                if issue["kind"] == "source" else extension["anchor"]["claimant_id"]
+            )
+        else:
+            replacement = result["replacement"]
+        state["payload"] = apply_genesis_resolution(state["payload"], issue, replacement)
+        state["history"].append({
+            "kind": issue["kind"], "invalid": issue["invalid"], "replacement": replacement,
+            "step_id": repair_step, "result": result, "api_response": api_response,
+        })
+        write_json(repair_path, state)
+    raise PausedError("Genesis reference resolution", "Genesis reference repairs did not converge")
 
 
 def architecture_reference_repair_request(payload: dict, issues: list[dict], run_dir: Path) -> tuple[str, dict]:
@@ -3375,8 +3682,11 @@ def build_semantic_delta(run_dir: Path, step_id: str, payload: dict, content_ids
                     fact["sources"].append(fact_source)
             for key, values in item["relevance"].items():
                 fact["relevance"][key] = list(dict.fromkeys(fact["relevance"].get(key, []) + values))
-        for prefix in ("fact", "prop", "proposition"):
-            fact_aliases[f"{prefix}_{index:02d}"] = fact["fact_id"]
+        for alias in (
+            f"fact_{index:02d}", f"prop_{index:02d}", f"proposition_{index:02d}",
+            f"p{index:02d}", f"p_{index:03d}",
+        ):
+            fact_aliases[alias] = fact["fact_id"]
     known_facts = set(_read_state_map(run_dir, "canonical-facts.json"))
     knowledge = []
     for index, item in enumerate(payload["knowledge_changes"], 1):
@@ -3417,8 +3727,11 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
     target = run_dir / ".staging" / f"{step_id}.semantic.json"
     if target.exists():
         return read_json(target)
-    protocol = load_protocol(run_dir)
-    schema = definition_schema("semanticDeltaPayload", protocol)
+    source_slots = [
+        item["technical_slot_id"]
+        for item in artistic_payload["scenes"] + artistic_payload["endings"]
+    ]
+    schema = semantic_delta_schema(run_dir, source_slots)
     brief = read_json(run_dir / "generation-brief.json")
     seed = step_seed(brief["generation_seed"], f"{step_id}_semantic")
     parameters = {"temperature": 0.0, "max_tokens": 4096, "seed": seed, "stream": False}
@@ -3445,7 +3758,7 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
                 float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "3600")), started_at=started,
                 preserve=lambda value: write_json(response_path, value, mode=0o444, exclusive=True))
             normalized = parse_structured_content(content)
-            validate_json_schema(normalized, protocol["$defs"]["semanticDeltaPayload"], protocol)
+            validate_json_schema(normalized, schema)
             write_json(target, normalized, mode=0o444, exclusive=True)
             write_json(run_dir / ".staging" / f"{step_id}.semantic.api.json", response, mode=0o444, exclusive=True)
             feedback_path.unlink(missing_ok=True)
@@ -3524,9 +3837,13 @@ def validate_genesis_foundation(record: dict, run_dir: Path) -> None:
     if record["generation_id"] != brief["generation_id"] or record["story_format"] != "web":
         raise SchemaError("Genesis foundation does not match the frozen generation or active web format")
     anchors = record["claimant_anchors"]
-    if sorted(item["technical_slot_id"] for item in anchors) != [f"claimant_slot_{number:02d}" for number in range(1, 6)]:
-        raise SchemaError("Genesis foundation must anchor each claimant slot once")
-    if len({item["claimant_id"] for item in anchors}) != 5:
+    count = len(anchors)
+    expected_slots = [f"claimant_slot_{number:02d}" for number in range(1, count + 1)]
+    if not INITIAL_CLAIMANT_MIN <= count <= INITIAL_CLAIMANT_MAX or sorted(
+        item["technical_slot_id"] for item in anchors
+    ) != expected_slots:
+        raise SchemaError("Genesis foundation must anchor five to eight sequential claimant slots")
+    if len({item["claimant_id"] for item in anchors}) != count:
         raise SchemaError("Genesis foundation claimant IDs must be unique")
     canon = record["work_canon"]
     claimant_ids = {item["claimant_id"] for item in anchors}
@@ -3569,6 +3886,10 @@ def validate_genesis_cast(record: dict, run_dir: Path) -> None:
         problems.append("duplicated: " + ", ".join(duplicates))
     if problems:
         raise SchemaError("Genesis cast claimant IDs do not match committed anchors; " + "; ".join(problems))
+    character_slots = [item["technical_slot_id"] for item in record["characters"]]
+    expected_character_slots = [f"character_slot_{number:03d}" for number in range(1, len(character_slots) + 1)]
+    if character_slots != expected_character_slots:
+        raise SchemaError("Genesis cast characters must use sequential technical slots")
     claimants = set(claimant_ids)
     character_ids = {item["character_id"] for item in record["characters"]}
     if not set(foundation["work_canon"]["central_incident"]["subjects"]).issubset(claimants | character_ids):
@@ -3579,6 +3900,33 @@ def validate_genesis_constraints(record: dict, run_dir: Path) -> None:
     cast = committed_record(run_dir, "genesis_cast")
     if not cast or record["cast_commit_id"] != cast["commit_id"]:
         raise SchemaError("Genesis constraints do not descend from the committed cast")
+    foundation = committed_record(run_dir, "genesis_foundation")
+    known_claimants = {item["claimant_id"] for item in foundation["claimant_anchors"]}
+    characters = {item["character_id"]: item for item in cast["characters"]}
+    promoted = set()
+    initial_count = len(known_claimants)
+    extensions = record["claimant_extensions"]
+    if initial_count + len(extensions) > MAX_CLAIMANTS:
+        raise SchemaError("Genesis constraints exceed the twelve-claimant maximum")
+    for offset, extension in enumerate(extensions, initial_count + 1):
+        anchor = extension["anchor"]
+        claimant_id = f"claimant_{offset:02d}"
+        if anchor["claimant_id"] != claimant_id or anchor["technical_slot_id"] != f"claimant_slot_{offset:02d}":
+            raise SchemaError("Genesis claimant extensions must use sequential engine-assigned IDs and slots")
+        if extension["profile"]["claimant_id"] != claimant_id:
+            raise SchemaError("Genesis claimant extension profile does not match its anchor")
+        origin = extension["origin_character_id"]
+        if origin is not None:
+            if origin not in characters or origin in promoted:
+                raise SchemaError("Genesis claimant extension has an unknown or repeated character origin")
+            if anchor["name"] != characters[origin]["name"]:
+                raise SchemaError("Promoted claimant name does not match its committed character")
+            promoted.add(origin)
+        for relationship in extension["claimant_relationships"]:
+            related = set(relationship["claimant_ids"])
+            if claimant_id not in related or not related - {claimant_id} or not related.issubset(known_claimants | {claimant_id}):
+                raise SchemaError("Genesis claimant extension relationship must connect it to an existing claimant")
+        known_claimants.add(claimant_id)
     delta = record["constraint_delta"]
     if len(delta["canonical_facts"]) > 12 or len(delta["knowledge_changes"]) > 24 or len(delta["motif_events"]) > 8:
         raise SchemaError("Genesis constraints exceed their bounded initial counts")
@@ -3856,6 +4204,27 @@ def compact_definition(run_dir: Path, definition: str) -> str:
     return json.dumps(definition_schema(definition, load_protocol(run_dir)), ensure_ascii=False, separators=(",", ":"))
 
 
+def semantic_delta_schema(run_dir: Path, source_slots) -> dict:
+    schema = copy.deepcopy(definition_schema("semanticDeltaPayload", load_protocol(run_dir)))
+    schema["$defs"]["semanticSource"]["properties"]["technical_slot_id"] = {
+        "enum": sorted(set(source_slots))
+    }
+    return schema
+
+
+def genesis_constraints_schema(run_dir: Path) -> dict:
+    schema = copy.deepcopy(definition_schema("semanticDeltaPayload", load_protocol(run_dir)))
+    for field, maximum in {
+        "canonical_facts": GENESIS_RAW_FACT_MAX,
+        "knowledge_changes": 24,
+        "new_soft_obligations": 0,
+        "obligation_updates": 0,
+        "motif_events": 8,
+    }.items():
+        schema["properties"][field]["maxItems"] = maximum
+    return schema
+
+
 def genesis_foundation_prompt(run_dir: Path) -> tuple[str, str]:
     manifest = read_json(run_dir / "run-manifest.json")
     context = bounded_context(
@@ -3868,7 +4237,7 @@ def genesis_foundation_prompt(run_dir: Path) -> tuple[str, str]:
     return render_prompt(
         run_dir,
         "generation-genesis.md",
-        {"FROZEN_GENESIS_CONTEXT": context + "\n\nUse claimant_01 through claimant_05 wherever canon needs claimant join keys. The engine adds envelopes, commit IDs, claimant IDs, and technical slots.", "GENESIS_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "genesisFoundationPayload")},
+        {"FROZEN_GENESIS_CONTEXT": context + "\n\nAuthor 5 to 8 claimant anchors. Use sequential claimant join keys from claimant_01 through claimant_N wherever canon needs them. The engine adds envelopes, commit IDs, claimant IDs, and technical slots.", "GENESIS_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "genesisFoundationPayload")},
     ), context
 
 
@@ -3884,7 +4253,7 @@ def genesis_cast_prompt(run_dir: Path) -> tuple[str, str]:
     return render_prompt(
         run_dir,
         "generation-genesis-cast.md",
-        {"GENESIS_CAST_CONTEXT": context + "\n\nReturn expansions keyed only by the five committed claimant IDs. The engine adds character IDs and record metadata.", "GENESIS_CAST_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "genesisCastPayload")},
+        {"GENESIS_CAST_CONTEXT": context + "\n\nReturn expansions keyed only by every committed claimant ID. The engine adds character IDs, character technical slots, and record metadata.", "GENESIS_CAST_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "genesisCastPayload")},
     ), context
 
 
@@ -3902,7 +4271,9 @@ def genesis_constraints_prompt(run_dir: Path) -> tuple[str, str]:
         "generation-genesis-constraints.md",
         {
             "GENESIS_CONSTRAINT_CONTEXT": context,
-            "GENESIS_CONSTRAINT_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "semanticDeltaPayload"),
+            "GENESIS_CONSTRAINT_PROTOCOL_DEFINITIONS": json.dumps(
+                genesis_constraints_schema(run_dir), ensure_ascii=False, separators=(",", ":")
+            ),
         },
     ), context
 
@@ -4210,7 +4581,7 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
         )
     if not committed_record(run_dir, "genesis_constraints"):
         prompt, context = genesis_constraints_prompt(run_dir)
-        request_bounded_record(
+        request_record(
             run_dir,
             expected_record_type="genesis_constraints",
             step_id="genesis_constraints",
@@ -4219,8 +4590,14 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
             context=context,
             branch_relation="generated_root_constraints",
             temperature=0.4,
+            max_tokens=GENESIS_CONSTRAINT_TOKENS,
             transport=transport,
             response_definition="semanticDeltaPayload",
+            response_schema=genesis_constraints_schema(run_dir),
+            payload_validator=validate_genesis_constraints_payload,
+            payload_repairer=lambda effective_step, payload, content, response: repair_genesis_constraints_payload(
+                run_dir, effective_step, payload, content, response, transport
+            ),
             record_builder=lambda payload: build_genesis_constraints(run_dir, payload),
             precommit_validator=lambda record: validate_genesis_constraints(record, run_dir),
         )

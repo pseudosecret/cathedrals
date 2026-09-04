@@ -16,10 +16,14 @@ The reader believes they are investigating. In fact, they are judging. Their int
 
 Claimants are not merely suspects. Each claimant is a pressure toward a specific world-logic. To accuse one is to strengthen that logic and starve rival realities.
 
-There are exactly five claimant positions. Their identities, roles, relationships,
-ways of knowing, evidence logics, voices, and consequences do not exist before the
-Genesis sequence. Their minimal identities anchor in the foundation; all five full
-profiles are generated together in the cast record and freeze at its commit.
+Genesis begins with five to eight claimant positions and may expand to at most twelve
+while its constraint record remains uncommitted. Their identities, roles,
+relationships, ways of knowing, evidence logics, voices, and consequences do not exist
+before the Genesis sequence. Initial minimal identities anchor in the foundation and
+their full profiles are generated together in the cast record. A genuinely distinct
+world-logic discovered during constraint normalization may promote an existing
+character or add a new claimant, with an incident role and relationship to an existing
+claimant. The completed set freezes when the constraints record commits.
 
 ## 5. The Central Transgression
 

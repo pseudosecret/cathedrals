@@ -230,14 +230,24 @@ reader_role:
     - "Extractive completionism increases contamination."
 
 claimants:
-  count_exact: 5
+  initial_count_min: 5
+  initial_count_max: 8
+  total_count_max: 12
   slot_ids:
     - claimant_slot_01
     - claimant_slot_02
     - claimant_slot_03
     - claimant_slot_04
     - claimant_slot_05
+    - claimant_slot_06
+    - claimant_slot_07
+    - claimant_slot_08
+    - claimant_slot_09
+    - claimant_slot_10
+    - claimant_slot_11
+    - claimant_slot_12
   authoring_mode: generated_together_in_genesis_cast_step
+  extension_mode: resolve_or_expand_during_uncommitted_genesis_constraints
   locked_fictional_claimants_allowed: false
   preassigned_slot_semantics_allowed: false
   opening_hub_is_claimant_selector: false

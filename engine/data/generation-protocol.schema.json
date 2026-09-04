@@ -106,7 +106,7 @@
       ],
       "properties": {
         "record_type": { "const": "run_manifest" },
-        "protocol_version": { "const": "5.0" },
+        "protocol_version": { "const": "6.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "created_at": { "$ref": "#/$defs/timestamp" },
         "generation_brief": { "$ref": "#/$defs/generationBrief" },
@@ -307,7 +307,7 @@
             "additionalProperties": false,
             "required": ["claimant_ids", "relationship", "dramatic_pressure"],
             "properties": {
-              "claimant_ids": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/id" } },
+              "claimant_ids": { "type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
               "relationship": { "$ref": "#/$defs/nonEmptyString" },
               "dramatic_pressure": { "$ref": "#/$defs/nonEmptyString" }
             }
@@ -364,9 +364,10 @@
     "character": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["character_id", "name", "role", "relationships", "dramatic_function"],
+      "required": ["character_id", "technical_slot_id", "name", "role", "relationships", "dramatic_function"],
       "properties": {
         "character_id": { "$ref": "#/$defs/id" },
+        "technical_slot_id": { "$ref": "#/$defs/id" },
         "name": { "$ref": "#/$defs/nonEmptyString" },
         "role": { "$ref": "#/$defs/nonEmptyString" },
         "relationships": { "$ref": "#/$defs/stringList" },
@@ -431,7 +432,7 @@
         "predicate": { "$ref": "#/$defs/nonEmptyString" },
         "value": {},
         "status": { "enum": ["established", "contested"] },
-        "sources": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/sourceRef" } },
+        "sources": { "type": "array", "minItems": 1, "maxItems": 24, "items": { "$ref": "#/$defs/sourceRef" } },
         "relevance": { "$ref": "#/$defs/relevanceTags" },
         "supersedes_fact_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] }
       }
@@ -606,7 +607,11 @@
       "properties": {
         "claimant_id": { "$ref": "#/$defs/id" },
         "technical_slot_id": {
-          "enum": ["claimant_slot_01", "claimant_slot_02", "claimant_slot_03", "claimant_slot_04", "claimant_slot_05"]
+          "enum": [
+            "claimant_slot_01", "claimant_slot_02", "claimant_slot_03", "claimant_slot_04",
+            "claimant_slot_05", "claimant_slot_06", "claimant_slot_07", "claimant_slot_08",
+            "claimant_slot_09", "claimant_slot_10", "claimant_slot_11", "claimant_slot_12"
+          ]
         },
         "name": { "$ref": "#/$defs/nonEmptyString" },
         "incident_role": { "$ref": "#/$defs/nonEmptyString" }
@@ -628,7 +633,7 @@
       ],
       "properties": {
         "record_type": { "const": "genesis_foundation" },
-        "protocol_version": { "const": "5.0" },
+        "protocol_version": { "const": "6.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "commit_id": { "$ref": "#/$defs/id" },
         "story_format": { "const": "web" },
@@ -638,7 +643,7 @@
         "claimant_anchors": {
           "type": "array",
           "minItems": 5,
-          "maxItems": 5,
+          "maxItems": 8,
           "items": { "$ref": "#/$defs/claimantAnchor" }
         }
       }
@@ -652,7 +657,7 @@
       ],
       "properties": {
         "record_type": { "const": "genesis_cast" },
-        "protocol_version": { "const": "5.0" },
+        "protocol_version": { "const": "6.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "commit_id": { "$ref": "#/$defs/id" },
         "foundation_commit_id": { "$ref": "#/$defs/id" },
@@ -660,7 +665,7 @@
         "claimants": {
           "type": "array",
           "minItems": 5,
-          "maxItems": 5,
+          "maxItems": 8,
           "items": { "$ref": "#/$defs/claimant" }
         },
         "characters": {
@@ -675,16 +680,43 @@
       "additionalProperties": false,
       "required": [
         "record_type", "protocol_version", "generation_id", "commit_id",
-        "cast_commit_id", "story_format", "constraint_delta"
+        "cast_commit_id", "story_format", "claimant_extensions", "constraint_delta"
       ],
       "properties": {
         "record_type": { "const": "genesis_constraints" },
-        "protocol_version": { "const": "5.0" },
+        "protocol_version": { "const": "6.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "commit_id": { "$ref": "#/$defs/id" },
         "cast_commit_id": { "$ref": "#/$defs/id" },
         "story_format": { "const": "web" },
+        "claimant_extensions": {
+          "type": "array", "maxItems": 7, "items": { "$ref": "#/$defs/claimantExtension" }
+        },
         "constraint_delta": { "$ref": "#/$defs/genesisConstraintDelta" }
+      }
+    },
+    "claimantExtension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchor", "profile", "origin_character_id", "claimant_relationships"],
+      "properties": {
+        "anchor": { "$ref": "#/$defs/claimantAnchor" },
+        "profile": { "$ref": "#/$defs/claimant" },
+        "origin_character_id": {
+          "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }]
+        },
+        "claimant_relationships": {
+          "type": "array", "minItems": 1, "maxItems": 4,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["claimant_ids", "relationship", "dramatic_pressure"],
+            "properties": {
+              "claimant_ids": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/id" } },
+              "relationship": { "$ref": "#/$defs/nonEmptyString" },
+              "dramatic_pressure": { "$ref": "#/$defs/nonEmptyString" }
+            }
+          }
+        }
       }
     },
     "arc": {
@@ -923,7 +955,7 @@
       ],
       "properties": {
         "record_type": { "const": "architecture_core" },
-        "protocol_version": { "const": "5.0" },
+        "protocol_version": { "const": "6.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "commit_id": { "$ref": "#/$defs/id" },
         "genesis_commit_id": { "$ref": "#/$defs/id" },
@@ -967,7 +999,7 @@
       ],
       "properties": {
         "record_type": { "const": "architecture_plan_batch" },
-        "protocol_version": { "const": "5.0" },
+        "protocol_version": { "const": "6.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "commit_id": { "$ref": "#/$defs/id" },
         "architecture_core_commit_id": { "$ref": "#/$defs/id" },
@@ -1161,7 +1193,7 @@
       ],
       "properties": {
         "record_type": { "const": "creative_packet" },
-        "protocol_version": { "const": "5.0" },
+        "protocol_version": { "const": "6.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "commit_id": { "$ref": "#/$defs/id" },
         "architecture_core_commit_id": { "$ref": "#/$defs/id" },
@@ -1217,7 +1249,7 @@
       ],
       "properties": {
         "record_type": { "const": "constraint_event" },
-        "protocol_version": { "const": "5.0" },
+        "protocol_version": { "const": "6.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "constraint_event_sequence": { "type": "integer", "minimum": 1 },
         "origin_step_id": { "$ref": "#/$defs/id" },
@@ -1229,7 +1261,7 @@
         "sources": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 16,
+          "maxItems": 24,
           "items": { "$ref": "#/$defs/hashedSourceRef" }
         }
       }
@@ -1244,7 +1276,7 @@
       ],
       "properties": {
         "record_type": { "const": "prospective_plan" },
-        "protocol_version": { "const": "5.0" },
+        "protocol_version": { "const": "6.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "plan_id": { "$ref": "#/$defs/id" },
         "based_on_canonical_state_hash": { "$ref": "#/$defs/hash" },
@@ -1341,7 +1373,7 @@
       ],
       "properties": {
         "record_type": { "const": "ledger_entry" },
-        "protocol_version": { "const": "5.0" },
+        "protocol_version": { "const": "6.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "ledger_sequence": { "type": "integer", "minimum": 1 },
         "planned_step_id": { "$ref": "#/$defs/id" },
@@ -1508,7 +1540,7 @@
         "work_canon": { "$ref": "#/$defs/workCanonPayload" },
         "web_art_direction": { "$ref": "#/$defs/webArtDirection" },
         "claimant_anchors": {
-          "type": "array", "minItems": 5, "maxItems": 5,
+          "type": "array", "minItems": 5, "maxItems": 8,
           "items": { "$ref": "#/$defs/claimantAnchorPayload" }
         }
       }
@@ -1518,7 +1550,7 @@
       "additionalProperties": false,
       "required": ["claimants", "characters"],
       "properties": {
-        "claimants": { "type": "array", "minItems": 5, "maxItems": 5, "items": { "$ref": "#/$defs/claimant" } },
+        "claimants": { "type": "array", "minItems": 5, "maxItems": 8, "items": { "$ref": "#/$defs/claimant" } },
         "characters": { "type": "array", "maxItems": 12, "items": { "$ref": "#/$defs/characterPayload" } }
       }
     },
@@ -1792,7 +1824,7 @@
       ],
       "properties": {
         "record_type": { "const": "finalization" },
-        "protocol_version": { "const": "5.0" },
+        "protocol_version": { "const": "6.0" },
         "generation_id": { "$ref": "#/$defs/id" },
         "run_status": { "enum": ["READY_TO_PLAY", "FAILED_GENERATION"] },
         "run_manifest_hash": { "$ref": "#/$defs/hash" },

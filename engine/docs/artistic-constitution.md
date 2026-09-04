@@ -53,7 +53,7 @@ The human authors:
 - arc grammar
 - style law
 - acceptance criteria
-- five semantically blank claimant positions
+- five to eight semantically blank initial claimant positions and a twelve-claimant ceiling
 - setting envelope, scope, budgets, threshold geomancy, and build behavior
 
 The autonomous generation run authors:
@@ -73,7 +73,7 @@ not rewrite or regenerate it.
 The instrument supports one complete work at the frozen possible-scene scope with:
 
 - one surface setting
-- five claimants in the generated surface setting 
+- five to twelve claimants in the generated surface setting
 - one generated incident inside an authored threshold-event class
 - one hidden contamination route
 - static build only

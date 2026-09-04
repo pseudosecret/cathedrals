@@ -68,8 +68,12 @@ committed. Failed attempts remain visible in the ledger.
 ### Phase A — Bounded Genesis
 
 Commit three causally linked records: a foundation containing work canon, web art
-direction, and five claimant anchors; one cast record expanding all five claimants
-together plus significant characters; then a minimal source-grounded constraint
+direction, and five to eight claimant anchors; one cast record expanding every initial
+claimant together plus significant characters; then a minimal source-grounded
+constraint record. Before that final record commits, invalid semantic references are
+resolved to committed claimants or characters when possible. A genuinely distinct
+world-logic may instead promote an existing character or add a new claimant, up to a
+twelve-claimant maximum; the extension commits atomically in the same constraints
 record. Each commit is immutable. Completed Genesis is their deterministic assembled
 view, headed by the constraint commit.
 

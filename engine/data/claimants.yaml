@@ -1,23 +1,40 @@
 version: 1.0
 
 purpose: >
-  Define generative law for a five-claimant set without defining any claimant.
-  Every full fictional profile is authored together in the Genesis cast step of the
-  autonomous generation run, after its minimal identity anchor, then frozen as root canon.
+  Define generative law for a variable claimant set without defining any claimant.
+  Five to eight initial full fictional profiles are authored together in the Genesis
+  cast step after their minimal identity anchors. The set may resolve or expand while
+  Genesis constraints remain uncommitted, then freezes as root canon.
 
 claimant_set:
-  count_exact: 5
+  initial_count_min: 5
+  initial_count_max: 8
+  total_count_max: 12
   technical_slots:
     - claimant_slot_01
     - claimant_slot_02
     - claimant_slot_03
     - claimant_slot_04
     - claimant_slot_05
+    - claimant_slot_06
+    - claimant_slot_07
+    - claimant_slot_08
+    - claimant_slot_09
+    - claimant_slot_10
+    - claimant_slot_11
+    - claimant_slot_12
   slot_semantics: none
   generation_mode: simultaneous_set_generation
   locked_fictional_identity_allowed: false
   prewritten_archetype_selection_allowed: false
   deterministic_claimant_generation_allowed: false
+  extension_phase: genesis_constraints_before_commit
+  extension_policy:
+    - resolve_to_an_existing_claimant_or_character_when_plausible
+    - supporting_characters_may_source_facts_without_promotion
+    - expand_only_for_a_genuinely_distinct_world_logic
+    - prefer_promoting_an_existing_character_over_creating_a_new_identity
+    - require_an_incident_role_and_relationship_to_an_existing_claimant
 
 required_generated_dimensions:
   identity:
@@ -46,13 +63,13 @@ required_generated_dimensions:
     - hesitation_and_retraction_pressure
 
 set_level_hard_constraints:
-  - "All five claimants must interact materially and dramatically with the generated setting."
-  - "All five must exert different interpretive pressures on the same generated incident."
+  - "Every claimant must interact materially and dramatically with the generated setting."
+  - "Every claimant must exert a distinct interpretive pressure on the same generated incident."
   - "No two may have closely overlapping epistemic regimes."
   - "No two may rely primarily on the same evidence logic."
   - "No two may be interchangeable in rhetoric, cadence, emotional pressure, or dramatic function."
   - "No two may produce substantially the same artifact behavior or environmental consequence."
-  - "The set must produce five different kinds of consequence without becoming five symmetrical routes."
+  - "The set must produce distinct kinds of consequence without becoming symmetrical routes."
   - "At least one claimant must pressure truth through material or institutional evidence."
   - "At least one claimant must pressure truth through relational or experiential evidence."
   - "At least one claimant must establish a way of knowing the others initially struggle to assimilate."
@@ -62,7 +79,7 @@ set_level_hard_constraints:
 set_level_soft_constraints:
   - "Prefer surprising but legible combinations over familiar mystery archetypes."
   - "Avoid redundant genre feel."
-  - "Avoid five variations of institutional authority, grief, haunting, or diagnosis."
+  - "Avoid variations of one institutional authority, grief, haunting, or diagnosis pattern."
   - "Let claimant influence emerge unevenly across branches, artifacts, reconvergence, and endings."
 
 prose_differentiation_law:
@@ -98,7 +115,7 @@ validation:
     - claimant_is_a_renamed_prewritten_archetype
     - claimant_exists_only_to_fill_a_predetermined_difference
     - evidence_or_voice_could_be_swapped_without_substantial_effect
-    - set_cannot_create_five_distinct_consequences
+    - set_cannot_create_distinct_consequences
   result: pass_or_fail_generation
 
 forbidden_before_generation:

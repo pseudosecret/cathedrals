@@ -2,7 +2,7 @@
 
 This is a documentation view of the `claimants` records in
 `engine/data/generation-protocol.schema.json`. It is not a pre-generation worksheet;
-all five records are authored together in the Genesis cast step.
+all initial records are authored together in the Genesis cast step.
 
 ```json
 {
@@ -30,6 +30,8 @@ all five records are authored together in the Genesis cast step.
 }
 ```
 
-All five records are generated simultaneously and freeze with generated root canon.
+All initial records are generated simultaneously. Any resolve-or-expand extensions are
+added only while Genesis constraints remain uncommitted; the complete set then freezes
+with generated root canon.
 The technical slot carries no theme, role, voice, evidence family, or route identity.
 Reject the entire generation if the set fails `engine/data/claimants.yaml`.

@@ -32,7 +32,7 @@ hidden.
 - work: `hospice-annex-v01`
 - phase: `engine_revision`
 - generated work present: no
-- claimant positions: five semantically blank slots
+- claimant positions: five to eight semantically blank initial slots; resolve-or-expand ceiling twelve
 - generation: one autonomous append-only run; multiple creative steps allowed
 - generation entry point: root `./cathedrals`
 - scale input: user-supplied `possible_scene_count`; profiles are budget guidance
