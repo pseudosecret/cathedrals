@@ -49,7 +49,9 @@ PACKET_LITERARY_WORDS = 4800
 PLAN_BATCH_SIZE = 8
 TERMINAL_STATES = {"READY_TO_PLAY", "FAILED_GENERATION"}
 RETRYABLE_PROVIDER_FAILURES = {"transport_before_response", "provider_before_creative_output"}
-PAUSABLE_FAILURES = RETRYABLE_PROVIDER_FAILURES | {"provider_truncation", "build_failure"}
+PAUSABLE_FAILURES = RETRYABLE_PROVIDER_FAILURES | {
+    "provider_truncation", "provider_schema_incompatibility", "build_failure"
+}
 FORMAT_ALIASES = {
     "web": "web",
     "visualnovel": "visualnovel",
@@ -540,6 +542,14 @@ def http_json(method: str, url: str, payload=None, timeout: float = 30.0):
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", "replace").strip()
+        if error.code == 400 and "failed to parse grammar" in detail.lower():
+            raise CathedralsError(
+                "LM Studio structured output",
+                "LM Studio could not compile the structured-output grammar before sampling. "
+                "Update LM Studio before resuming this unchanged run. "
+                f"Provider detail: {detail}",
+                "provider_schema_incompatibility",
+            ) from error
         raise CathedralsError("LM Studio API", f"HTTP {error.code}: {detail or error.reason}", "provider_before_creative_output") from error
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
         raise CathedralsError("LM Studio preflight", str(error), "transport_before_response") from error
@@ -4213,15 +4223,30 @@ def semantic_delta_schema(run_dir: Path, source_slots) -> dict:
 
 
 def genesis_constraints_schema(run_dir: Path) -> dict:
-    schema = copy.deepcopy(definition_schema("semanticDeltaPayload", load_protocol(run_dir)))
+    protocol = load_protocol(run_dir)
+    schema = copy.deepcopy(definition_schema("semanticDeltaPayload", protocol))
     for field, maximum in {
         "canonical_facts": GENESIS_RAW_FACT_MAX,
         "knowledge_changes": 24,
-        "new_soft_obligations": 0,
-        "obligation_updates": 0,
         "motif_events": 8,
     }.items():
         schema["properties"][field]["maxItems"] = maximum
+    for field in ("new_soft_obligations", "obligation_updates"):
+        schema["properties"][field] = {"type": "array", "maxItems": 0}
+    schema["$defs"]["semanticFact"]["properties"]["value"] = {
+        "type": ["string", "number", "boolean", "null"]
+    }
+    knowledge = schema["$defs"]["semanticKnowledge"]["properties"]
+    knowledge["relation"] = copy.deepcopy(protocol["$defs"]["knowledgeChange"]["properties"]["relation"])
+    knowledge["action"] = copy.deepcopy(protocol["$defs"]["knowledgeChange"]["properties"]["action"])
+    motif = schema["$defs"]["semanticMotif"]["properties"]
+    motif["action"] = copy.deepcopy(protocol["$defs"]["motifEvent"]["properties"]["action"])
+    motif["overuse_risk"] = copy.deepcopy(protocol["$defs"]["motifEvent"]["properties"]["overuse_risk"])
+    needed = {
+        "id", "idList", "nonEmptyString", "relevanceTags", "semanticFact",
+        "semanticKnowledge", "semanticMotif", "semanticSource", "stringList",
+    }
+    schema["$defs"] = {name: definition for name, definition in schema["$defs"].items() if name in needed}
     return schema
 
 

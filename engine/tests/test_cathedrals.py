@@ -479,6 +479,47 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertIn("provider_response", RUNNER.request_record.__code__.co_names)
         self.assertIn("provider_response", RUNNER.request_analysis.__code__.co_names)
 
+    def test_grammar_parse_http_400_pauses_after_one_attempt(self):
+        http_error = RUNNER.urllib.error.HTTPError(
+            "http://offline.invalid", 400, "Bad Request", {}, None
+        )
+        http_error.read = lambda: b'{"error":"Failed to initialize samplers: failed to parse grammar"}'
+        with mock.patch.object(RUNNER.urllib.request, "urlopen", side_effect=http_error), self.assertRaises(
+            RUNNER.CathedralsError
+        ) as raised:
+            RUNNER.http_json("POST", "http://offline.invalid", {})
+        self.assertEqual(raised.exception.failure_class, "provider_schema_incompatibility")
+        self.assertIn(raised.exception.failure_class, RUNNER.PAUSABLE_FAILURES)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "generation_test"
+            for name in ("state", "raw", "committed", "constraints", ".staging"):
+                (run / name).mkdir(parents=True)
+            RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+            RUNNER.write_json(run / "generation-brief.json", {
+                "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid",
+            })
+            RUNNER.write_json(run / "run-manifest.json", {
+                "budgets": {"max_prepared_context_tokens": 49152},
+            })
+            def reject_grammar(*_args, **_kwargs):
+                raise RUNNER.CathedralsError(
+                    "LM Studio structured output", "could not compile grammar",
+                    "provider_schema_incompatibility",
+                )
+
+            transport = mock.Mock(side_effect=reject_grammar)
+            with self.assertRaises(RUNNER.CathedralsError) as request_error:
+                RUNNER.request_record(
+                    run, expected_record_type="genesis_foundation", step_id="grammar_test",
+                    phase="genesis", prompt="prompt", context="context",
+                    branch_relation="foundation", temperature=0.8,
+                    response_definition="claimantAnchorPayload", transport=transport,
+                )
+            self.assertEqual(request_error.exception.failure_class, "provider_schema_incompatibility")
+            self.assertEqual(transport.call_count, 1)
+            self.assertEqual(len(RUNNER.ledger_entries(run)), 1)
+
     def test_numeric_genesis_seed_has_structured_schema_error(self):
         protocol = RUNNER.load_protocol()
         self.assertIsInstance(RUNNER.step_seed("generation-seed", "genesis"), str)
@@ -849,6 +890,16 @@ class CathedralsRunnerTests(unittest.TestCase):
 
     def test_genesis_constraints_schema_bounds_raw_normalization(self):
         schema = RUNNER.genesis_constraints_schema(Path("/offline"))
+        self.assertEqual(set(schema["$defs"]), {
+            "id", "idList", "nonEmptyString", "relevanceTags", "semanticFact",
+            "semanticKnowledge", "semanticMotif", "semanticSource", "stringList",
+        })
+        unsupported = {"allOf", "if", "then", "else", "uniqueItems"}
+        self.assertFalse(any(unsupported & set(node) for node in RUNNER._walk(schema) if isinstance(node, dict)))
+        self.assertEqual(
+            schema["$defs"]["semanticFact"]["properties"]["value"]["type"],
+            ["string", "number", "boolean", "null"],
+        )
         payload = {
             "canonical_facts": [{
                 "source": {"technical_slot_id": "claimant_slot_01"},
@@ -875,6 +926,16 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(schema["properties"]["canonical_facts"]["maxItems"], 24)
         self.assertEqual(schema["properties"]["knowledge_changes"]["maxItems"], 24)
         self.assertEqual(schema["properties"]["new_soft_obligations"]["maxItems"], 0)
+        self.assertNotIn("items", schema["properties"]["new_soft_obligations"])
+        for value in ("open", 3.5, True, None):
+            scalar = copy.deepcopy(payload)
+            scalar["canonical_facts"][0]["value"] = value
+            RUNNER.validate_json_schema(scalar, schema)
+        for value in (["open"], {"state": "open"}):
+            nonscalar = copy.deepcopy(payload)
+            nonscalar["canonical_facts"][0]["value"] = value
+            with self.assertRaises(RUNNER.SchemaError):
+                RUNNER.validate_json_schema(nonscalar, schema)
         invalid = copy.deepcopy(payload)
         invalid["canonical_facts"] *= 25
         with self.assertRaises(RUNNER.SchemaError):

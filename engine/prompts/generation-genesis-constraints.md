@@ -8,7 +8,7 @@ at most 24 raw canonical-fact positions, coalescing to at most 12 distinct facts
 24 knowledge changes; and 8 motif events. Identify each source by a committed claimant
 or character technical-slot join key. Use `fact_01`, `prop_01`, `proposition_01`,
 `p01`, or `p_001` (and so on) when a knowledge change refers to a fact position in
-this payload. Leave
+this payload. Use only a string, number, boolean, or null as each fact value. Leave
 new soft obligations and obligation updates empty; Architecture owns initial future
 pressure. The engine assigns IDs and provenance, coalesces duplicate facts, and may
 resolve an unknown reference or expand the claimant set before commit. Do not add
