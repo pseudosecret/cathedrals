@@ -90,14 +90,15 @@ canonical.
 
 Choose the next dependency-lawful packet from the current prospective plan. A planned
 packet contains three to eight related scenes, normally six, plus associated artifacts,
-formal compositions, and source-grounded constraint deltas. Its scenes share one
-4,800-word allowance and have no individual word ceiling. Context is selected by constraint
-relevance, not chronology. Commit a mechanically valid packet even when its art is
-disappointing. Later packets may read and react to it; they may not replace it.
+formal compositions, and source-grounded constraint deltas. Author and commit that
+logical packet as deterministic one-scene chunks with exact response cardinalities.
+Distribute its shared 4,800-word allowance and artifact/composition totals across the
+chunks. Context is selected by constraint relevance, not chronology. Commit a
+mechanically valid chunk even when its art is disappointing. Later chunks may read and
+react to it; they may not replace it.
 
-If the provider truncates an uncommitted packet, preserve the failed response and
-deterministically bisect its remaining slots. Committed chunks collectively own the
-original plan. A single-content truncation may retry once with a larger allowance only
+Committed chunks collectively own the original plan. If the provider truncates an
+uncommitted single-content chunk, preserve the failed response and retry once with a larger allowance only
 when the frozen model context leaves the safety reserve intact.
 
 After every creative commit: preserve source; apply fact and knowledge events; append
@@ -108,9 +109,9 @@ or backtrack counters.
 
 ### Phase D — Endings and Residue
 
-Generate final ending prose late, only for viable early attractors whose hard
-prerequisites have source-cited satisfaction. Endings may interpret earlier evidence
-and create consequences, but may not retcon it.
+Generate final ending prose late in exact one-ending chunks, only for viable early
+attractors whose hard prerequisites have source-cited satisfaction. Endings may
+interpret earlier evidence and create consequences, but may not retcon it.
 
 ### Phase E — Validation and Static Build
 

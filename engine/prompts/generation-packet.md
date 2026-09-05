@@ -4,10 +4,11 @@ Return exactly one literary payload conforming to the supplied frozen protocol
 definitions. Use only assigned technical-slot join keys. Do not generate alternatives, critiques, replacement
 passages, or unplanned candidates.
 
-Write exactly the supplied one-to-eight-scene chunk and its assigned artifacts/formal
+Write exactly the supplied one-scene chunk and its assigned artifacts/formal
 compositions at the intersection of immutable past constraints and active future
-obligations. The chunk has one shared 4,800-word literary allowance; scenes have no
-individual word ceiling, so spend length where the drama earns it. Make every scene perform at least two dramatic jobs, make evidence
+obligations. Stay within the supplied `literary_word_allowance`, which is this scene's
+share of its logical packet's 4,800-word allowance and includes nested artifact prose.
+Make the scene perform at least two dramatic jobs, make evidence
 change interpretation, preserve meaningful state variation, and keep choices
 concrete and consequential. Use supplied threshold geomancy as symbolic weather
 without recomputing it.
@@ -62,4 +63,4 @@ RELEVANT PROTOCOL DEFINITIONS BEGIN
 
 RELEVANT PROTOCOL DEFINITIONS END
 
-Return the one literary packet now.
+Return the one-scene literary packet chunk now.

@@ -184,7 +184,7 @@ authorship_boundary:
       - endings
 
 surface_container:
-  id: cathedral_setting
+  id: generated_bounded_setting
 
   fixed_law:
     - "The work takes place in one concrete, bounded setting."

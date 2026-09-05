@@ -4172,8 +4172,9 @@ def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
     if occupied_slots & {item["technical_slot_id"] for item in content}:
         raise SchemaError("Packet chunk attempted to refill a committed technical slot")
     packet_words = packet_literary_word_count(record)
-    if packet_words > PACKET_LITERARY_WORDS:
-        raise SchemaError(f"Creative packet exceeds its {PACKET_LITERARY_WORDS:,}-word literary allowance")
+    word_allowance = plan.get("literary_word_allowance", PACKET_LITERARY_WORDS)
+    if packet_words > word_allowance:
+        raise SchemaError(f"Creative packet slice exceeds its {word_allowance:,}-word literary allowance")
     obligation_state = _read_state_map(run_dir, "obligations.json")
     obligations = set(obligation_state)
     arcs = {item["arc_id"] for item in architecture["arcs"]}
@@ -4490,14 +4491,18 @@ def packet_prompt(run_dir: Path, architecture: dict, plan: dict) -> tuple[str, s
         replacements = {
             "PACKET_CONTEXT": context,
             "PACKET_OBLIGATIONS": obligations,
-            "PACKET_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "creativePacketPayload"),
+            "PACKET_PROTOCOL_DEFINITIONS": json.dumps(
+                packet_payload_schema(run_dir, plan), ensure_ascii=False, separators=(",", ":")
+            ),
         }
     else:
         name = "generation-ending-packet.md"
         replacements = {
             "ENDING_PACKET_CONTEXT": context,
             "ENDING_PACKET_OBLIGATIONS": obligations,
-            "ENDING_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "creativePacketPayload"),
+            "ENDING_PROTOCOL_DEFINITIONS": json.dumps(
+                packet_payload_schema(run_dir, plan), ensure_ascii=False, separators=(",", ":")
+            ),
         }
     return render_prompt(run_dir, name, replacements), context
 
@@ -4517,6 +4522,8 @@ def packet_step_id(plan: dict, expanded: bool = False) -> str:
         "artifacts": plan["artifact_count"],
         "compositions": plan["formal_composition_count"],
         "obligations": plan["advance_obligation_ids"],
+        "may_satisfy": plan["may_satisfy_obligation_ids"],
+        "words": plan.get("literary_word_allowance", PACKET_LITERARY_WORDS),
     })
     return f"packet_{plan['packet_slot_id']}_{sha256_bytes(identity)[:12]}{'_expanded' if expanded else ''}"
 
@@ -4560,36 +4567,55 @@ def request_bounded_record(run_dir: Path, **arguments) -> dict:
     return request_record(run_dir, **(arguments | {"step_id": expanded_id, "max_tokens": maximum}))
 
 
-def split_packet_plan(plan: dict) -> tuple[dict, dict]:
+def single_content_packet_plans(plan: dict) -> list[dict]:
     key = "scene_slot_ids" if plan["packet_kind"] == "literary" else "ending_slot_ids"
     slots = plan[key]
-    midpoint = len(slots) // 2
-    artifact_counts = distribute_counts(plan["artifact_count"], 2)
-    composition_counts = distribute_counts(plan["formal_composition_count"], 2)
-    left = plan | {
-        key: slots[:midpoint],
-        "artifact_count": artifact_counts[0],
-        "formal_composition_count": composition_counts[0],
-        "advance_obligation_ids": [],
-        "may_satisfy_obligation_ids": [],
+    if not slots:
+        return []
+    artifact_counts = distribute_counts(plan["artifact_count"], len(slots))
+    composition_counts = distribute_counts(plan["formal_composition_count"], len(slots))
+    word_allowances = distribute_counts(PACKET_LITERARY_WORDS, len(slots))
+    return [
+        plan | {
+            "scene_slot_ids": [slot] if plan["packet_kind"] == "literary" else [],
+            "ending_slot_ids": [slot] if plan["packet_kind"] == "ending" else [],
+            "artifact_count": artifact_counts[index],
+            "formal_composition_count": composition_counts[index],
+            "logical_content_slot_ids": slots,
+            "literary_word_allowance": word_allowances[index],
+        }
+        for index, slot in enumerate(slots)
+    ]
+
+
+def packet_payload_schema(run_dir: Path, plan: dict) -> dict:
+    slots = plan["scene_slot_ids"] or plan["ending_slot_ids"]
+    if len(slots) != 1:
+        raise IntegrityError("Creative packet requests must contain exactly one scene or ending")
+    schema = copy.deepcopy(definition_schema("creativePacketPayload", load_protocol(run_dir)))
+    content_key = "scenes" if plan["packet_kind"] == "literary" else "endings"
+    other_key = "endings" if plan["packet_kind"] == "literary" else "scenes"
+    definition = "scenePayload" if plan["packet_kind"] == "literary" else "endingPayload"
+    schema["properties"][content_key] |= {"minItems": 1, "maxItems": 1}
+    schema["properties"][other_key] |= {"minItems": 0, "maxItems": 0}
+    properties = schema["$defs"][definition]["properties"]
+    properties["technical_slot_id"] = {"const": slots[0]}
+    properties["artifacts"] |= {
+        "minItems": plan["artifact_count"], "maxItems": plan["artifact_count"]
     }
-    right = plan | {
-        key: slots[midpoint:],
-        "artifact_count": artifact_counts[1],
-        "formal_composition_count": composition_counts[1],
+    properties["formal_compositions"] |= {
+        "minItems": plan["formal_composition_count"],
+        "maxItems": plan["formal_composition_count"],
     }
-    return left, right
+    return schema
 
 
 def request_packet_slice(run_dir: Path, architecture: dict, plan: dict, transport=http_json) -> None:
     slots = plan["scene_slot_ids"] or plan["ending_slot_ids"]
+    if len(slots) != 1:
+        raise IntegrityError("Creative packet slices must contain exactly one scene or ending")
     step_id = packet_step_id(plan)
     if step_was_truncated(run_dir, step_id):
-        if len(slots) > 1:
-            left, right = split_packet_plan(plan)
-            request_packet_slice(run_dir, architecture, left, transport)
-            request_packet_slice(run_dir, architecture, right, transport)
-            return
         expanded_id = packet_step_id(plan, expanded=True)
         if step_was_truncated(run_dir, expanded_id):
             raise TruncationError("A single-content packet was truncated after its context-safe expanded retry")
@@ -4609,6 +4635,7 @@ def request_packet_slice(run_dir: Path, architecture: dict, plan: dict, transpor
             max_tokens=maximum,
             transport=transport,
             response_definition="creativePacketPayload",
+            response_schema=packet_payload_schema(run_dir, plan),
             payload_validator=lambda payload: validate_packet_payload_for_run(payload, run_dir, plan),
             payload_preserver=lambda payload, content, response: preserve_artistic_payload(run_dir, expanded_id, payload, content, response),
             record_builder=lambda payload: build_creative_packet(
@@ -4631,6 +4658,7 @@ def request_packet_slice(run_dir: Path, architecture: dict, plan: dict, transpor
             temperature=0.85 if plan["packet_kind"] == "literary" else 0.75,
             transport=transport,
             response_definition="creativePacketPayload",
+            response_schema=packet_payload_schema(run_dir, plan),
             payload_validator=lambda payload: validate_packet_payload_for_run(payload, run_dir, plan),
             payload_preserver=lambda payload, content, response: preserve_artistic_payload(run_dir, step_id, payload, content, response),
             record_builder=lambda payload: build_creative_packet(
@@ -4640,29 +4668,39 @@ def request_packet_slice(run_dir: Path, architecture: dict, plan: dict, transpor
             precommit_validator=lambda record: validate_packet_for_run(record, run_dir, plan),
         )
     except TruncationError:
-        if len(slots) > 1:
-            left, right = split_packet_plan(plan)
-            request_packet_slice(run_dir, architecture, left, transport)
-            request_packet_slice(run_dir, architecture, right, transport)
-            return
         request_packet_slice(run_dir, architecture, plan, transport)
 
 
 def execute_packet_plan(run_dir: Path, architecture: dict, plan: dict, transport=http_json) -> dict:
     content_key = "scenes" if plan["packet_kind"] == "literary" else "endings"
-    slot_key = "scene_slot_ids" if plan["packet_kind"] == "literary" else "ending_slot_ids"
-    chunks = packet_chunks(run_dir, plan["packet_slot_id"])
-    filled = {item["technical_slot_id"] for chunk in chunks for item in chunk[content_key]}
-    obligations_done = {item for chunk in chunks for item in chunk["obligations_advanced"]}
-    remaining = plan | {
-        slot_key: [slot for slot in plan[slot_key] if slot not in filled],
-        "artifact_count": plan["artifact_count"] - sum(len(chunk["artifacts"]) for chunk in chunks),
-        "formal_composition_count": plan["formal_composition_count"] - sum(len(chunk["formal_compositions"]) for chunk in chunks),
-        "advance_obligation_ids": [item for item in plan["advance_obligation_ids"] if item not in obligations_done],
-        "may_satisfy_obligation_ids": [item for item in plan["may_satisfy_obligation_ids"] if item not in obligations_done],
-    }
-    if remaining[slot_key]:
-        request_packet_slice(run_dir, architecture, remaining, transport)
+    slices = single_content_packet_plans(plan)
+    for index, packet_slice in enumerate(slices):
+        chunks = packet_chunks(run_dir, plan["packet_slot_id"])
+        filled = {
+            item["technical_slot_id"] for chunk in chunks for item in chunk[content_key]
+        }
+        slot = (packet_slice["scene_slot_ids"] or packet_slice["ending_slot_ids"])[0]
+        if slot in filled:
+            continue
+        obligations_done = {
+            item for chunk in chunks for item in chunk["obligations_advanced"]
+        }
+        remaining_obligations = [
+            item for item in plan["advance_obligation_ids"] if item not in obligations_done
+        ]
+        later_unfilled = any(
+            (later["scene_slot_ids"] or later["ending_slot_ids"])[0] not in filled
+            for later in slices[index + 1:]
+        )
+        packet_slice = packet_slice | {
+            "advance_obligation_ids": [] if later_unfilled else remaining_obligations,
+            "may_satisfy_obligation_ids": list(dict.fromkeys(
+                item
+                for item in plan["may_satisfy_obligation_ids"] + remaining_obligations
+                if item not in obligations_done
+            )),
+        }
+        request_packet_slice(run_dir, architecture, packet_slice, transport)
     packet = assembled_packet(run_dir, plan["packet_slot_id"])
     if not packet:
         raise IntegrityError(f"Packet {plan['packet_slot_id']} did not complete after its final chunk")

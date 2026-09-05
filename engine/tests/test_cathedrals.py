@@ -387,6 +387,13 @@ class CathedralsRunnerTests(unittest.TestCase):
         geomancy = (ROOT / "engine/data/threshold-geomancy.yaml").read_text(encoding="utf-8")
         self.assertNotIn("hospice-annex-v01", start_here)
         self.assertNotIn("The Waiting Patient", geomancy)
+        model_context = RUNNER.engine_context().lower()
+        for stale_setting in ("snowbound", "hospital", "hospice", "annex"):
+            self.assertNotIn(stale_setting, model_context)
+        self.assertIn("generated_from: generation_brief.genre_flavor", model_context)
+        claimant_template = (ROOT / "engine/planning/claimant-profile-template.md").read_text(encoding="utf-8")
+        self.assertIn("setting_relationship", claimant_template)
+        self.assertNotIn("annex_relationship", claimant_template)
 
     def test_incomplete_runs_ignore_pre_protocol_6_generations(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -2449,7 +2456,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         schema = RUNNER.load_protocol()["$defs"]["scene"]["properties"]["prose_mdx"]
         self.assertNotIn("maxLength", schema)
 
-    def test_truncated_packet_is_bisected_without_committing_partial_output(self):
+    def test_packet_plan_is_divided_into_exact_single_content_allocations(self):
         plan = {
             "packet_slot_id": "literary_packet_0001",
             "packet_kind": "literary",
@@ -2461,26 +2468,159 @@ class CathedralsRunnerTests(unittest.TestCase):
             "may_satisfy_obligation_ids": ["obligation_one"],
             "branch_path_relation": "branch",
         }
-        calls = []
+        slices = RUNNER.single_content_packet_plans(plan)
+        self.assertEqual(len(slices), 6)
+        self.assertEqual(
+            [item["scene_slot_ids"][0] for item in slices], plan["scene_slot_ids"]
+        )
+        self.assertTrue(all(not item["ending_slot_ids"] for item in slices))
+        self.assertEqual(sum(item["artifact_count"] for item in slices), 4)
+        self.assertEqual(sum(item["formal_composition_count"] for item in slices), 2)
+        self.assertEqual(
+            sum(item["literary_word_allowance"] for item in slices),
+            RUNNER.PACKET_LITERARY_WORDS,
+        )
+        self.assertTrue(
+            all(item["logical_content_slot_ids"] == plan["scene_slot_ids"] for item in slices)
+        )
 
-        def request(*_args, **kwargs):
-            calls.append(kwargs)
-            if len(calls) == 1:
-                raise RUNNER.TruncationError("truncated")
+    def test_single_content_schema_freezes_slot_and_nested_counts(self):
+        plan = packet_plan(
+            scene_slot_ids=["scene_slot_0001"],
+            artifact_count=1,
+            formal_composition_count=1,
+        ) | {
+            "advance_obligation_ids": [],
+            "may_satisfy_obligation_ids": [],
+        }
+        schema = RUNNER.packet_payload_schema(Path("/offline"), plan)
+        self.assertEqual(schema["properties"]["scenes"]["minItems"], 1)
+        self.assertEqual(schema["properties"]["scenes"]["maxItems"], 1)
+        self.assertEqual(schema["properties"]["endings"]["maxItems"], 0)
+        properties = schema["$defs"]["scenePayload"]["properties"]
+        self.assertEqual(properties["technical_slot_id"], {"const": "scene_slot_0001"})
+        self.assertEqual(
+            (properties["artifacts"]["minItems"], properties["artifacts"]["maxItems"]),
+            (1, 1),
+        )
+        self.assertEqual(
+            (
+                properties["formal_compositions"]["minItems"],
+                properties["formal_compositions"]["maxItems"],
+            ),
+            (1, 1),
+        )
+        scene = {
+            "technical_slot_id": "scene_slot_0001",
+            "arc_id": "arc_one",
+            "title": "Threshold",
+            "scene_type": "threshold",
+            "beat_jobs": ["complicate evidence", "force a choice"],
+            "branch_depth": 1,
+            "claimant_focus_ids": [],
+            "epistemic_dependencies": [],
+            "state_inputs": [],
+            "state_effects": [],
+            "major_decision": False,
+            "hesitation_consequence": None,
+            "web_composition": {
+                "surface_mode": "prose",
+                "artifact_behavior": "inline",
+                "navigational_discovery": "The evidence opens in place.",
+            },
+            "prose_mdx": "# Threshold\n\nThe evidence changes meaning.",
+            "artifacts": [{
+                "title": "Evidence",
+                "artifact_type": "note",
+                "physical_form": "paper",
+                "provenance_in_story": "Found here.",
+                "claimant_relevance_ids": [],
+                "interpretive_function": "Contradicts the account.",
+                "contradiction": "Its date is impossible.",
+                "presentation_mode": "inline_expandable",
+                "preview_excerpt": "An impossible date.",
+                "body_mdx": "## Note\n\nA dated statement.",
+            }],
+            "choices": [],
+            "formal_compositions": [{
+                "form": "refrain",
+                "dramatic_function": "Makes recurrence accusatory.",
+                "anchor": "The repeated date.",
+            }],
+        }
+        valid = {"scenes": [scene], "endings": []}
+        RUNNER.validate_json_schema(valid, schema)
+        invalid_payloads = [
+            {"scenes": [], "endings": []},
+            {"scenes": [scene, copy.deepcopy(scene)], "endings": []},
+            {"scenes": [scene | {"technical_slot_id": "scene_slot_9999"}], "endings": []},
+            {"scenes": [scene | {"artifacts": []}], "endings": []},
+            {"scenes": [scene | {"formal_compositions": []}], "endings": []},
+            {"scenes": [scene], "endings": [{}]},
+        ]
+        for invalid in invalid_payloads:
+            with self.subTest(invalid=invalid), self.assertRaises(RUNNER.SchemaError):
+                RUNNER.validate_json_schema(invalid, schema)
 
-        with mock.patch.object(
-            RUNNER, "packet_prompt", return_value=("prompt", "context")
-        ), mock.patch.object(
-            RUNNER, "step_was_truncated", return_value=False
-        ), mock.patch.object(
-            RUNNER, "request_record", side_effect=request
-        ):
-            RUNNER.request_packet_slice(
-                Path("/offline"), {}, plan, transport=lambda *_args, **_kwargs: None
-            )
-        self.assertEqual(len(calls), 3)
-        self.assertNotIn("max_tokens", calls[1])
-        self.assertNotIn("max_tokens", calls[2])
+        ending_plan = packet_plan(
+            packet_kind="ending",
+            scene_slot_ids=[],
+            ending_slot_ids=["ending_slot_0001"],
+            artifact_count=0,
+            formal_composition_count=0,
+        ) | {
+            "advance_obligation_ids": [],
+            "may_satisfy_obligation_ids": [],
+        }
+        ending_schema = RUNNER.packet_payload_schema(Path("/offline"), ending_plan)
+        self.assertEqual(ending_schema["properties"]["scenes"]["maxItems"], 0)
+        self.assertEqual(ending_schema["properties"]["endings"]["minItems"], 1)
+        self.assertEqual(
+            ending_schema["$defs"]["endingPayload"]["properties"]["technical_slot_id"],
+            {"const": "ending_slot_0001"},
+        )
+
+    def test_packet_resume_skips_committed_single_content_slices(self):
+        plan = packet_plan(
+            scene_slot_ids=["scene_slot_0001", "scene_slot_0002", "scene_slot_0003"],
+            artifact_count=2,
+            formal_composition_count=1,
+        ) | {
+            "advance_obligation_ids": ["obligation_one"],
+            "may_satisfy_obligation_ids": [],
+        }
+        chunks = [{
+            "scenes": [{"technical_slot_id": "scene_slot_0001"}],
+            "endings": [],
+            "artifacts": [{}],
+            "formal_compositions": [{}],
+            "obligations_advanced": [],
+        }]
+        requested = []
+
+        def request(_run, _architecture, packet_slice, _transport):
+            requested.append(packet_slice)
+            chunks.append({
+                "scenes": [{"technical_slot_id": packet_slice["scene_slot_ids"][0]}],
+                "endings": [],
+                "artifacts": [{}] * packet_slice["artifact_count"],
+                "formal_compositions": [{}] * packet_slice["formal_composition_count"],
+                "obligations_advanced": [],
+            })
+
+        completed = {"packet_slot_id": plan["packet_slot_id"]}
+        with mock.patch.object(RUNNER, "packet_chunks", side_effect=lambda *_args: chunks), mock.patch.object(
+            RUNNER, "request_packet_slice", side_effect=request
+        ), mock.patch.object(RUNNER, "assembled_packet", return_value=completed):
+            result = RUNNER.execute_packet_plan(Path("/offline"), {}, plan, transport=None)
+        self.assertIs(result, completed)
+        self.assertEqual(
+            [item["scene_slot_ids"][0] for item in requested],
+            ["scene_slot_0002", "scene_slot_0003"],
+        )
+        self.assertEqual(requested[0]["advance_obligation_ids"], [])
+        self.assertEqual(requested[0]["may_satisfy_obligation_ids"], ["obligation_one"])
+        self.assertEqual(requested[1]["advance_obligation_ids"], ["obligation_one"])
 
     def test_truncated_provider_response_is_preserved_and_ledgered(self):
         with tempfile.TemporaryDirectory() as temporary:

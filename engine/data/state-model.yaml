@@ -1,6 +1,9 @@
 version: 0.1
 
-surface_container: snowbound_hospice_annex
+surface_container:
+  fixed_value: null
+  generated_from: generation_brief.genre_flavor
+  frozen_at: genesis
 dominant_regime_id: neutral
 
 accused_claimant_id: null

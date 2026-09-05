@@ -3,8 +3,8 @@
 Return exactly one ending payload conforming to the supplied frozen protocol
 definitions. Generate only assigned endings for the
 early ending attractor in this packet plan. Its complete hard prerequisite chain and
-source evidence must already be committed before this packet is requested. Return exactly the supplied one-to-six-ending chunk plus assigned formal compositions or
-artifacts; do not return scenes or candidates.
+source evidence must already be committed before this packet is requested. Return exactly the supplied one-ending chunk plus assigned formal compositions or
+artifacts, and stay within its supplied `literary_word_allowance`; do not return scenes or candidates.
 
 Each ending must turn accumulated interpretation into foreclosure, transformation,
 implication, release, contamination, or a graph-explicit prebuilt new beginning.
@@ -48,4 +48,4 @@ RELEVANT PROTOCOL DEFINITIONS BEGIN
 
 RELEVANT PROTOCOL DEFINITIONS END
 
-Return the one ending packet now.
+Return the one-ending packet chunk now.

@@ -10,7 +10,7 @@ all initial records are authored together in the Genesis cast step.
   "technical_slot_id": "claimant_slot_01",
   "name": "GENERATED",
   "incident_role": "GENERATED",
-  "annex_relationship": "GENERATED",
+  "setting_relationship": "GENERATED",
   "occupation": null,
   "personality": "GENERATED",
   "epistemic_regime": "GENERATED",
