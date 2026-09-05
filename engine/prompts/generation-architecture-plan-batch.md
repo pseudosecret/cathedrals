@@ -3,8 +3,9 @@
 Return exactly one Architecture plan annotation payload conforming to the supplied schema.
 Return JSON only.
 
-Annotate every supplied deterministic packet allocation by its packet join key. Do not
-repeat the packet kind, technical slots, artifact count, or formal-composition count;
+Annotate every supplied deterministic packet allocation by its exact `packet_slot_id`, including
+both literary and ending allocations. Return one annotation per listed allocation; do not infer,
+rename, add, or omit packets. Do not repeat the packet kind, technical slots, artifact count, or formal-composition count;
 the engine merges those fixed allocations. Author priority, lawful dependencies, branch relation, attractor pressure, relevance,
 and soft guidance. Dependencies may reference only prior frozen packet IDs or earlier
 packet IDs in this batch; this keeps the complete dependency graph acyclic.

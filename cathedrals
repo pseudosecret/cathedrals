@@ -1833,6 +1833,7 @@ def request_record(
     payload_preserver=None,
     payload_validator=None,
     payload_repairer=None,
+    schema_failure_limit: int | None = None,
 ) -> dict:
     state = load_state(run_dir)
     brief = read_json(run_dir / "generation-brief.json")
@@ -1927,6 +1928,15 @@ def request_record(
                 output_hash=sha256_bytes(content.encode()) if isinstance(locals().get("content"), str) else None,
                 usage=response.get("usage", {}) if isinstance(response, dict) else {})
             inflight_path.unlink(missing_ok=True)
+            schema_failures = sum(
+                entry["planned_step_id"] == step_id and entry["failure_class"] == "malformed_response"
+                for entry in ledger_entries(run_dir)
+            )
+            if isinstance(error, SchemaError) and schema_failure_limit is not None and schema_failures >= schema_failure_limit:
+                raise PausedError(
+                    "Structured record correction",
+                    f"{step_id} reached its {schema_failure_limit}-response schema fallback threshold. Last problem: {error.reason}",
+                ) from error
             if error.failure_class in RETRYABLE_PROVIDER_FAILURES and correction < 2:
                 feedback += "\n\nThe provider returned no usable response. Return the required JSON payload now."
                 continue
@@ -3044,9 +3054,29 @@ def build_architecture_core(run_dir: Path, payload: dict) -> dict:
     }
 
 
+def validate_architecture_plan_join_keys(payload: dict, specs: list[dict]) -> None:
+    expected = [item["packet_slot_id"] for item in specs]
+    actual = [item.get("packet_slot_id") for item in payload.get("packet_plans", []) if isinstance(item, dict)]
+    missing = sorted(set(expected) - set(actual))
+    unexpected = sorted(set(actual) - set(expected), key=str)
+    duplicated = sorted({item for item in actual if actual.count(item) > 1}, key=str)
+    if missing or unexpected or duplicated or len(actual) != len(payload.get("packet_plans", [])):
+        details = []
+        if missing:
+            details.append("missing: " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected: " + ", ".join(map(str, unexpected)))
+        if duplicated:
+            details.append("duplicated: " + ", ".join(map(str, duplicated)))
+        if len(actual) != len(payload.get("packet_plans", [])):
+            details.append("entries without packet_slot_id")
+        raise SchemaError("Architecture plan batch packet IDs do not match its frozen allocation; " + "; ".join(details))
+
+
 def build_architecture_plan_batch(run_dir: Path, payload: dict, specs: list[dict], sequence: int, count: int) -> dict:
+    validate_architecture_plan_join_keys(payload, specs)
     annotations = {item["packet_slot_id"]: item for item in payload["packet_plans"]}
-    plans = [spec | annotations.get(spec["packet_slot_id"], {}) for spec in specs]
+    plans = [spec | annotations[spec["packet_slot_id"]] for spec in specs]
     return record_envelope(run_dir, "architecture_plan_batch", f"architecture_plan_batch_{sequence:04d}") | {
         "architecture_core_commit_id": committed_record(run_dir, "architecture_core")["commit_id"],
         "story_format": "web", "batch_sequence": sequence, "batch_count": count, "packet_plans": plans,
@@ -3114,6 +3144,125 @@ def request_architecture_analysis(
                 pause_stage, f"{step_id} exhausted 3 focused repair attempts. Last problem: {error.reason}"
             ) from error
     raise PausedError(pause_stage, f"{step_id} exhausted its focused repair attempts")
+
+
+def architecture_plan_schema_failure_count(run_dir: Path, step_id: str) -> int:
+    return sum(
+        entry["planned_step_id"] in {step_id, f"{step_id}_expanded"}
+        and entry["failure_class"] == "malformed_response"
+        for entry in ledger_entries(run_dir)
+    )
+
+
+def architecture_plan_repair_request(
+    run_dir: Path, spec: dict, allowed_dependencies: list[str]
+) -> tuple[str, dict]:
+    core = committed_record(run_dir, "architecture_core")
+    schema = architecture_plan_annotation_schema(run_dir, spec, allowed_dependencies)
+    attractors = [
+        item for item in core["attractors"]
+        if spec["packet_kind"] != "ending" or item["kind"] == "ending"
+    ]
+    prompt = bounded_context(
+        [
+            ("IMMUTABLE GENESIS", committed_record(run_dir, "genesis")),
+            ("IMMUTABLE ARCHITECTURE CORE", core),
+            ("FROZEN PACKET ALLOCATION", spec),
+            ("ALLOWED DEPENDENCY IDS", allowed_dependencies),
+            ("ALLOWED ATTRACTORS", attractors),
+            (
+                "INSTRUCTION",
+                "Return exactly one complete packet-plan annotation for the frozen packet_slot_id. "
+                "Do not repeat deterministic allocation fields or invent identifiers.",
+            ),
+        ],
+        36000,
+    )
+    return prompt, schema
+
+
+def repair_architecture_plan_batch_payload(
+    run_dir: Path, step_id: str, specs: list[dict], transport
+) -> dict:
+    repair_path = run_dir / ".staging" / f"{step_id}.repair.json"
+    state = read_json(repair_path) if repair_path.exists() else {
+        "payload": {"packet_plans": []}, "history": [],
+    }
+    prior_ids = [
+        plan["packet_slot_id"]
+        for batch in committed_records(run_dir, "architecture_plan_batch")
+        for plan in batch["packet_plans"]
+    ]
+    expected_ids = [item["packet_slot_id"] for item in specs]
+    annotations = {}
+
+    def retain_valid(payload: dict) -> None:
+        plans = payload.get("packet_plans", []) if isinstance(payload, dict) else []
+        ids = [item.get("packet_slot_id") for item in plans if isinstance(item, dict)]
+        for index, spec in enumerate(specs):
+            packet_id = spec["packet_slot_id"]
+            matches = [item for item in plans if isinstance(item, dict) and item.get("packet_slot_id") == packet_id]
+            if len(matches) != 1 or ids.count(packet_id) != 1:
+                continue
+            schema = architecture_plan_annotation_schema(
+                run_dir, spec, prior_ids + expected_ids[:index]
+            )
+            try:
+                validate_json_schema({"packet_plans": matches}, schema)
+            except SchemaError:
+                continue
+            annotations[packet_id] = matches[0]
+
+    failed_entries = [
+        entry for entry in ledger_entries(run_dir)
+        if entry["planned_step_id"] in {step_id, f"{step_id}_expanded"}
+        and entry["failure_class"] == "malformed_response"
+    ]
+    for entry in failed_entries:
+        response_path = run_dir / "raw" / f"{entry['planned_step_id']}-attempt{entry['attempt']}.api.json"
+        if not response_path.exists():
+            continue
+        try:
+            retain_valid(parse_structured_content(normalize_provider_response(read_json(response_path))))
+        except CathedralsError:
+            continue
+    retain_valid(state["payload"])
+    state["payload"] = {
+        "packet_plans": [annotations[item] for item in expected_ids if item in annotations]
+    }
+    write_json(repair_path, state)
+
+    for index, spec in enumerate(specs):
+        packet_id = spec["packet_slot_id"]
+        if packet_id in annotations:
+            continue
+        allowed_dependencies = prior_ids + expected_ids[:index]
+        prompt, schema = architecture_plan_repair_request(run_dir, spec, allowed_dependencies)
+        repair_step = f"{step_id}_repair_{packet_id}"
+        result, api_response = request_architecture_analysis(
+            run_dir,
+            repair_step,
+            prompt,
+            schema,
+            transport,
+            phase="architecture",
+            system_prompt="Complete one missing Architecture packet-plan annotation. Return JSON only.",
+            response_name="architecturePlanAnnotation",
+            pause_stage="Architecture plan repair",
+        )
+        annotations[packet_id] = result["packet_plans"][0]
+        state["payload"] = {"packet_plans": [annotations[item] for item in expected_ids if item in annotations]}
+        state["history"].append({
+            "kind": "packet_plan",
+            "packet_slot_id": packet_id,
+            "step_id": repair_step,
+            "result": result,
+            "api_response": api_response,
+        })
+        write_json(repair_path, state)
+
+    validate_architecture_plan_join_keys(state["payload"], specs)
+    return state["payload"]
 
 
 def validate_genesis_constraints_payload(payload: dict) -> None:
@@ -4316,6 +4465,39 @@ def compact_definition(run_dir: Path, definition: str) -> str:
     return json.dumps(definition_schema(definition, load_protocol(run_dir)), ensure_ascii=False, separators=(",", ":"))
 
 
+def architecture_plan_batch_schema(run_dir: Path, specs: list[dict]) -> dict:
+    schema = copy.deepcopy(definition_schema("architecturePlanBatchPayload", load_protocol(run_dir)))
+    packet_ids = [item["packet_slot_id"] for item in specs]
+    schema["properties"]["packet_plans"] |= {
+        "minItems": len(packet_ids), "maxItems": len(packet_ids)
+    }
+    packet_id = schema["$defs"]["packetPlanAnnotation"]["properties"]["packet_slot_id"]
+    packet_id.clear()
+    packet_id.update({"const": packet_ids[0]} if len(packet_ids) == 1 else {"enum": packet_ids})
+    return schema
+
+
+def architecture_plan_annotation_schema(
+    run_dir: Path, spec: dict, allowed_dependencies: list[str]
+) -> dict:
+    schema = architecture_plan_batch_schema(run_dir, [spec])
+    properties = schema["$defs"]["packetPlanAnnotation"]["properties"]
+    properties["depends_on_packet_slot_ids"] = {
+        "type": "array", "uniqueItems": True,
+        **({"items": {"enum": allowed_dependencies}} if allowed_dependencies else {"maxItems": 0}),
+    }
+    core = committed_record(run_dir, "architecture_core")
+    attractors = [
+        item["attractor_id"] for item in core["attractors"]
+        if spec["packet_kind"] != "ending" or item["kind"] == "ending"
+    ]
+    properties["attractor_ids"] = {
+        "type": "array", "uniqueItems": True, "items": {"enum": attractors},
+        **({"minItems": 1, "maxItems": 1} if spec["packet_kind"] == "ending" else {}),
+    }
+    return schema
+
+
 def semantic_delta_schema(run_dir: Path, source_slots) -> dict:
     schema = copy.deepcopy(definition_schema("semanticDeltaPayload", load_protocol(run_dir)))
     schema["$defs"]["semanticSource"]["properties"]["technical_slot_id"] = {
@@ -4466,7 +4648,9 @@ def architecture_plan_prompt(run_dir: Path, specs: list[dict], sequence: int, co
         {
             "ARCHITECTURE_PLAN_CONTEXT": context,
             "ARCHITECTURE_PLAN_ALLOCATIONS": json.dumps(allocation, ensure_ascii=False, indent=2),
-            "ARCHITECTURE_PLAN_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "architecturePlanBatchPayload"),
+            "ARCHITECTURE_PLAN_PROTOCOL_DEFINITIONS": json.dumps(
+                architecture_plan_batch_schema(run_dir, specs), ensure_ascii=False, separators=(",", ":")
+            ),
         },
     ), context
 
@@ -4791,11 +4975,12 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
     for sequence, specs in enumerate(batches, 1):
         if any(item["batch_sequence"] == sequence for item in committed_records(run_dir, "architecture_plan_batch")):
             continue
+        step_id = f"architecture_plan_batch_{sequence:04d}"
         prompt, context = architecture_plan_prompt(run_dir, specs, sequence, len(batches))
-        request_bounded_record(
-            run_dir,
+        schema = architecture_plan_batch_schema(run_dir, specs)
+        arguments = dict(
             expected_record_type="architecture_plan_batch",
-            step_id=f"architecture_plan_batch_{sequence:04d}",
+            step_id=step_id,
             phase="architecture",
             prompt=prompt,
             context=context,
@@ -4803,6 +4988,8 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
             temperature=0.65,
             transport=transport,
             response_definition="architecturePlanBatchPayload",
+            response_schema=schema,
+            schema_failure_limit=2,
             record_builder=lambda payload, frozen_specs=specs, frozen_sequence=sequence: build_architecture_plan_batch(
                 run_dir, payload, frozen_specs, frozen_sequence, len(batches)
             ),
@@ -4810,6 +4997,25 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
                 record, run_dir, frozen_specs, frozen_sequence, len(batches)
             ),
         )
+        if architecture_plan_schema_failure_count(run_dir, step_id) < 2:
+            try:
+                request_bounded_record(run_dir, **arguments)
+            except PausedError as error:
+                if error.stage != "Structured record correction" or architecture_plan_schema_failure_count(run_dir, step_id) < 2:
+                    raise
+        if not any(item["batch_sequence"] == sequence for item in committed_records(run_dir, "architecture_plan_batch")):
+            repaired = repair_architecture_plan_batch_payload(run_dir, step_id, specs, transport)
+            repaired_response = {
+                "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(repaired, ensure_ascii=False)}}],
+                "usage": {},
+            }
+            request_record(
+                run_dir,
+                **(arguments | {
+                    "transport": lambda *_args, **_kwargs: repaired_response,
+                    "schema_failure_limit": None,
+                }),
+            )
     validate_completed_architecture(run_dir)
     output_fn(f"[04] Architecture                  ✓ committed ({len(batches)} bounded plan batches)")
     architecture = committed_record(run_dir, "architecture")

@@ -213,6 +213,20 @@ def packet_plan(identifier="packet_one", **updates):
     return value
 
 
+def packet_plan_annotation(identifier, **updates):
+    value = {
+        "packet_slot_id": identifier,
+        "initial_priority": 1,
+        "depends_on_packet_slot_ids": [],
+        "branch_path_relation": "branch_one",
+        "attractor_ids": [],
+        "relevance": {"keywords": ["archive"]},
+        "soft_guidance": ["Pressure the contradiction."],
+    }
+    value.update(updates)
+    return value
+
+
 def architecture_fixture(plans=None, obligations=None, attractors=None):
     return {
         "record_type": "architecture",
@@ -549,6 +563,47 @@ class CathedralsRunnerTests(unittest.TestCase):
             self.assertEqual(request_error.exception.failure_class, "provider_schema_incompatibility")
             self.assertEqual(transport.call_count, 1)
             self.assertEqual(len(RUNNER.ledger_entries(run)), 1)
+
+    def test_record_request_hands_off_after_two_schema_failures(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "generation_test"
+            for name in ("state", "raw", "committed", "constraints", ".staging"):
+                (run / name).mkdir(parents=True)
+            RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+            RUNNER.write_json(run / "generation-brief.json", {
+                "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid",
+            })
+            RUNNER.write_json(run / "run-manifest.json", {
+                "budgets": {"max_prepared_context_tokens": 49152},
+            })
+            response = {
+                "choices": [{"finish_reason": "stop", "message": {"content": "{}"}}],
+                "usage": {},
+            }
+            transport = mock.Mock(return_value=response)
+            schema = {
+                "type": "object", "additionalProperties": False,
+                "required": ["packet_plans"],
+                "properties": {"packet_plans": {"type": "array", "minItems": 1}},
+            }
+            with self.assertRaises(RUNNER.PausedError) as raised:
+                RUNNER.request_record(
+                    run,
+                    expected_record_type="architecture_plan_batch",
+                    step_id="architecture_plan_batch_0001",
+                    phase="architecture",
+                    prompt="prompt",
+                    context="context",
+                    branch_relation="macroarchitecture_plan_batch",
+                    temperature=0.65,
+                    transport=transport,
+                    response_definition="architecturePlanBatchPayload",
+                    response_schema=schema,
+                    schema_failure_limit=2,
+                )
+        self.assertEqual(raised.exception.stage, "Structured record correction")
+        self.assertIn("2-response schema fallback threshold", raised.exception.reason)
+        self.assertEqual(transport.call_count, 2)
 
     def test_numeric_genesis_seed_has_structured_schema_error(self):
         protocol = RUNNER.load_protocol()
@@ -1194,6 +1249,134 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(prompt, context)
         self.assertIn("===== ALLOWED GENESIS CLAIMANTS =====\nclaimant_01\n\nclaimant_02", context)
         self.assertIn("===== ALLOWED COMMITTED SOURCES =====\nsource_one\n\nsource_two", context)
+
+    def test_architecture_plan_schema_and_builder_require_exact_frozen_ids(self):
+        specs = [
+            {
+                "packet_slot_id": packet_id,
+                "packet_kind": "ending" if packet_id.startswith("ending") else "literary",
+                "scene_slot_ids": [] if packet_id.startswith("ending") else [f"scene_slot_{index:04d}"],
+                "ending_slot_ids": [f"ending_slot_{index:04d}"] if packet_id.startswith("ending") else [],
+                "artifact_count": 0,
+                "formal_composition_count": 0,
+            }
+            for index, packet_id in enumerate((
+                "literary_packet_0001", "literary_packet_0002",
+                "ending_packet_0001", "ending_packet_0002",
+            ), 1)
+        ]
+        schema = RUNNER.architecture_plan_batch_schema(Path("/offline"), specs)
+        self.assertEqual(
+            (schema["properties"]["packet_plans"]["minItems"], schema["properties"]["packet_plans"]["maxItems"]),
+            (4, 4),
+        )
+        self.assertEqual(
+            schema["$defs"]["packetPlanAnnotation"]["properties"]["packet_slot_id"]["enum"],
+            [item["packet_slot_id"] for item in specs],
+        )
+        observed = {"packet_plans": [
+            packet_plan_annotation("literary_packet_0001"),
+            packet_plan_annotation("literary_packet_0002"),
+            packet_plan_annotation("literary_packet_0003"),
+        ]}
+        with self.assertRaises(RUNNER.SchemaError) as schema_error:
+            RUNNER.validate_json_schema(observed, schema)
+        self.assertIn("at least 4 items", schema_error.exception.reason)
+        self.assertIn("literary_packet_0003", schema_error.exception.reason)
+        with self.assertRaises(RUNNER.SchemaError) as join_error:
+            RUNNER.build_architecture_plan_batch(Path("/offline"), observed, specs, 1, 1)
+        for value in ("ending_packet_0001", "ending_packet_0002", "literary_packet_0003"):
+            self.assertIn(value, join_error.exception.reason)
+        with mock.patch.object(
+            RUNNER, "committed_record", return_value={"attractors": [attractor("attractor_one")]}
+        ):
+            repair_schema = RUNNER.architecture_plan_annotation_schema(
+                Path("/offline"), specs[2], ["literary_packet_0001", "literary_packet_0002"]
+            )
+        invalid_repair = {"packet_plans": [packet_plan_annotation(
+            "ending_packet_0001",
+            depends_on_packet_slot_ids=["ending_packet_0002"],
+            attractor_ids=["attractor_missing"],
+        )]}
+        with self.assertRaises(RUNNER.SchemaError) as repair_error:
+            RUNNER.validate_json_schema(invalid_repair, repair_schema)
+        self.assertIn("ending_packet_0002", repair_error.exception.reason)
+        self.assertIn("attractor_missing", repair_error.exception.reason)
+
+    def test_architecture_plan_fallback_preserves_valid_annotations_and_repairs_missing_ids(self):
+        specs = [
+            {
+                "packet_slot_id": packet_id,
+                "packet_kind": "ending" if packet_id.startswith("ending") else "literary",
+                "scene_slot_ids": [] if packet_id.startswith("ending") else [f"scene_slot_{index:04d}"],
+                "ending_slot_ids": [f"ending_slot_{index:04d}"] if packet_id.startswith("ending") else [],
+                "artifact_count": 0,
+                "formal_composition_count": 0,
+            }
+            for index, packet_id in enumerate((
+                "literary_packet_0001", "literary_packet_0002",
+                "ending_packet_0001", "ending_packet_0002",
+            ), 1)
+        ]
+        first = {"packet_plans": [packet_plan_annotation(
+            "literary_packet_0001", soft_guidance=["older annotation"]
+        )]}
+        second = {"packet_plans": [
+            packet_plan_annotation("literary_packet_0001", soft_guidance=["latest annotation"]),
+            packet_plan_annotation(
+                "literary_packet_0002", depends_on_packet_slot_ids=["literary_packet_0001"]
+            ),
+            packet_plan_annotation("literary_packet_0003"),
+        ]}
+        responses = [
+            {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(payload)}}], "usage": {}}
+            for payload in (first, second)
+        ]
+        core = {"attractors": [attractor("attractor_one")]}
+        records = {
+            "architecture_core": core,
+            "genesis": {"work_canon": {"premise": "A record vanished."}},
+        }
+        calls = []
+
+        def repair(_run, step, _prompt, schema, _transport, **_kwargs):
+            packet_id = schema["$defs"]["packetPlanAnnotation"]["properties"]["packet_slot_id"]["const"]
+            calls.append(packet_id)
+            return {
+                "packet_plans": [packet_plan_annotation(packet_id, attractor_ids=["attractor_one"])]
+            }, {"usage": {"prompt_tokens": 5, "completion_tokens": 1}}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            for name in ("raw", ".staging"):
+                (run / name).mkdir()
+            for attempt, response in enumerate(responses, 1):
+                RUNNER.write_json(run / f"raw/architecture_plan_batch_0001-attempt{attempt}.api.json", response)
+            entries = [
+                {
+                    "planned_step_id": "architecture_plan_batch_0001",
+                    "attempt": attempt,
+                    "failure_class": "malformed_response",
+                }
+                for attempt in (1, 2)
+            ]
+            with mock.patch.object(RUNNER, "ledger_entries", return_value=entries), mock.patch.object(
+                RUNNER, "committed_records", return_value=[]
+            ), mock.patch.object(
+                RUNNER, "committed_record", side_effect=lambda _run, kind: records[kind]
+            ), mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=repair):
+                repaired = RUNNER.repair_architecture_plan_batch_payload(
+                    run, "architecture_plan_batch_0001", specs, None
+                )
+            repair_state = RUNNER.read_json(run / ".staging/architecture_plan_batch_0001.repair.json")
+
+        self.assertEqual(
+            [item["packet_slot_id"] for item in repaired["packet_plans"]],
+            [item["packet_slot_id"] for item in specs],
+        )
+        self.assertEqual(repaired["packet_plans"][0]["soft_guidance"], ["latest annotation"])
+        self.assertEqual(calls, ["ending_packet_0001", "ending_packet_0002"])
+        self.assertEqual(len(repair_state["history"]), 2)
 
     def test_architecture_normalizes_unambiguous_genesis_and_topology_references(self):
         payload = architecture_core_payload()
