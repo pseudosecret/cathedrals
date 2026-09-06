@@ -1406,6 +1406,34 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(normalized["topology"]["opening_branch_node_id"], "node_intro")
         self.assertEqual(normalized["topology"]["reconvergence_node_ids"], ["node_branch_3"])
 
+    def test_architecture_request_defers_empty_long_range_targets_to_focused_repair(self):
+        captured = {}
+
+        def committed(_run, kind):
+            return None if kind == "architecture_core" else {"commit_id": f"commit_{kind}"}
+
+        def capture(_run, **kwargs):
+            captured.update(kwargs)
+            raise RuntimeError("captured")
+
+        with mock.patch.object(RUNNER, "verify_engine_snapshot"), mock.patch.object(
+            RUNNER, "ensure_frozen_geomancy"
+        ), mock.patch.object(RUNNER, "committed_record", side_effect=committed), mock.patch.object(
+            RUNNER, "architecture_core_prompt", return_value=("prompt", "context")
+        ), mock.patch.object(RUNNER, "request_bounded_record", side_effect=capture), self.assertRaisesRegex(
+            RuntimeError, "captured"
+        ):
+            RUNNER.execute_creative_phases(Path("/offline"), output_fn=lambda _value: None)
+
+        obligation_schema = captured["response_schema"]["$defs"]["obligation"]
+        RUNNER.validate_json_schema(
+            obligation(termination_targets=[]), obligation_schema, captured["response_schema"]
+        )
+        with self.assertRaises(RUNNER.SchemaError):
+            protocol = RUNNER.load_protocol()
+            RUNNER.validate_json_schema(obligation(termination_targets=[]), protocol["$defs"]["obligation"], protocol)
+        self.assertIsNotNone(captured["payload_repairer"])
+
     def test_architecture_reference_repair_splits_failed_batch_and_preserves_successes(self):
         payload = architecture_core_payload()
         payload["arcs"][0]["claimant_pressures"] = ["claimant_missing"]

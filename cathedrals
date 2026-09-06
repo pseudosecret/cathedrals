@@ -4953,6 +4953,8 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
     output_fn("[04] Architecture                  …")
     if not committed_record(run_dir, "architecture_core"):
         prompt, context = architecture_core_prompt(run_dir)
+        draft_schema = copy.deepcopy(definition_schema("architectureCorePayload", load_protocol(run_dir)))
+        draft_schema["$defs"]["obligation"].pop("allOf", None)
         request_bounded_record(
             run_dir,
             expected_record_type="architecture_core",
@@ -4964,6 +4966,7 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
             temperature=0.7,
             transport=transport,
             response_definition="architectureCorePayload",
+            response_schema=draft_schema,
             payload_repairer=lambda effective_step, payload, content, response: repair_architecture_core_payload(
                 run_dir, effective_step, payload, content, response, transport
             ),
