@@ -40,6 +40,7 @@ NODE_MINIMUM = (22, 12, 0)
 PROTOCOL_VERSION = "6.0"
 BASE_OUTPUT_TOKENS = 10900
 EXPANDED_OUTPUT_TOKENS = 21800
+ANALYSIS_OUTPUT_TOKENS = 15000
 GENESIS_CONSTRAINT_TOKENS = 8192
 INITIAL_CLAIMANT_MIN = 5
 INITIAL_CLAIMANT_MAX = 8
@@ -506,13 +507,13 @@ def derive_scope(possible_scene_count: int) -> dict:
             "max_prepared_context_tokens": 49152,
             "max_creative_packet_output_tokens": BASE_OUTPUT_TOKENS,
             "max_expanded_output_tokens": EXPANDED_OUTPUT_TOKENS,
-            "max_analysis_output_tokens": 4096,
+            "max_analysis_output_tokens": ANALYSIS_OUTPUT_TOKENS,
             "context_safety_reserve_tokens": 4096,
             "max_creative_step_count": max_creative_steps,
             "max_analysis_step_count": max_analysis_steps,
             "max_total_literary_words": count * 600 + artifact_max * 350 + ending_max * 500,
             "max_cumulative_input_tokens": (2 * max_creative_steps + max_analysis_steps) * 49152,
-            "max_cumulative_output_tokens": max_creative_steps * (BASE_OUTPUT_TOKENS + EXPANDED_OUTPUT_TOKENS) + max_analysis_steps * 4096,
+            "max_cumulative_output_tokens": max_creative_steps * (BASE_OUTPUT_TOKENS + EXPANDED_OUTPUT_TOKENS) + max_analysis_steps * ANALYSIS_OUTPUT_TOKENS,
             "max_constraint_events": max(1000, count * 45),
             "max_retrieved_source_tokens": 12288,
         },
@@ -3098,7 +3099,8 @@ def request_architecture_analysis(
 ):
     brief = read_json(run_dir / "generation-brief.json")
     seed = step_seed(brief["generation_seed"], step_id)
-    parameters = {"temperature": 0.0, "max_tokens": 4096, "seed": seed, "stream": False}
+    maximum = read_json(run_dir / "run-manifest.json")["budgets"]["max_analysis_output_tokens"]
+    parameters = {"temperature": 0.0, "max_tokens": maximum, "seed": seed, "stream": False}
     feedback = ""
     for correction in range(3):
         current_prompt = prompt + feedback
@@ -3131,6 +3133,8 @@ def request_architecture_analysis(
                 validator(authored)
             return authored, response
         except CathedralsError as error:
+            if isinstance(error, TruncationError):
+                response = error.response
             append_failed_attempt(
                 run_dir, step_id=step_id, attempt=attempt, phase=phase, prompt=current_prompt,
                 context=prompt, parameters=parameters, started_at=started, failure_class=error.failure_class,

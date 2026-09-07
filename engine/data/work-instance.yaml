@@ -441,7 +441,7 @@ format_selection:
   renpy_bootstrap_active: false
 
 generation_budget:
-  calculation_version: 4
+  calculation_version: 5
   primary_scale_input: possible_scene_count
   words_per_token_assumption: 0.75
   max_prepared_context_tokens: 49152
@@ -454,8 +454,8 @@ generation_budget:
   max_expanded_single_content_output_tokens: 21800
   context_safety_reserve_tokens: 4096
   minimum_model_context_window_tokens: 64148
-  minimum_model_output_tokens: 10900
-  max_analysis_output_tokens: 4096
+  minimum_model_output_tokens: 15000
+  max_analysis_output_tokens: 15000
   max_creative_step_count: derived_per_run
   max_analysis_step_count: derived_per_run
   max_cumulative_input_tokens: derived_per_run

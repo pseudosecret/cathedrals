@@ -605,6 +605,44 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertIn("2-response schema fallback threshold", raised.exception.reason)
         self.assertEqual(transport.call_count, 2)
 
+    def test_architecture_analysis_uses_frozen_limit_and_ledgers_truncation_usage(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "generation_test"
+            for name in ("state", "raw"):
+                (run / name).mkdir(parents=True)
+            RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+            RUNNER.write_json(run / "generation-brief.json", {
+                "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid",
+            })
+            RUNNER.write_json(run / "run-manifest.json", {
+                "budgets": {"max_analysis_output_tokens": RUNNER.ANALYSIS_OUTPUT_TOKENS},
+            })
+            response = {
+                "choices": [{"finish_reason": "length", "message": {"content": "partial"}}],
+                "usage": {"prompt_tokens": 123, "completion_tokens": 456},
+            }
+            transport = mock.Mock(return_value=response)
+            with self.assertRaises(RUNNER.PausedError):
+                RUNNER.request_architecture_analysis(
+                    run, "topology_repair", "prompt", {"type": "object"}, transport
+                )
+            entries = RUNNER.ledger_entries(run)
+
+        self.assertEqual(transport.call_count, 3)
+        self.assertTrue(all(call.args[2]["max_tokens"] == 15000 for call in transport.call_args_list))
+        self.assertEqual(
+            [entry["token_accounting"] for entry in entries],
+            [{"input_tokens": 123, "output_tokens": 456, "cost": None, "currency": None}] * 3,
+        )
+
+        budgets = RUNNER.derive_scope(12)["budgets"]
+        self.assertEqual(budgets["max_analysis_output_tokens"], 15000)
+        self.assertEqual(
+            budgets["max_cumulative_output_tokens"],
+            budgets["max_creative_step_count"] * (RUNNER.BASE_OUTPUT_TOKENS + RUNNER.EXPANDED_OUTPUT_TOKENS)
+            + budgets["max_analysis_step_count"] * 15000,
+        )
+
     def test_numeric_genesis_seed_has_structured_schema_error(self):
         protocol = RUNNER.load_protocol()
         self.assertIsInstance(RUNNER.step_seed("generation-seed", "genesis"), str)
