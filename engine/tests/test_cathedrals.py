@@ -756,6 +756,26 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertIn("unexpected:", reason)
         self.assertIn("duplicated:", reason)
 
+    def test_genesis_response_schemas_constrain_claimant_join_keys(self):
+        foundation_schema = RUNNER.genesis_foundation_schema(Path("/offline"))
+        canon = foundation_schema["$defs"]["workCanon"]["properties"]
+        subject_schema = canon["central_incident"]["properties"]["subjects"]
+        RUNNER.validate_json_schema(["claimant_01"], subject_schema, foundation_schema)
+        with self.assertRaises(RUNNER.SchemaError):
+            RUNNER.validate_json_schema(["elena"], subject_schema, foundation_schema)
+        relationship_id = canon["claimant_relationships"]["items"]["properties"]["claimant_ids"]["items"]
+        self.assertNotIn("elena", relationship_id["enum"])
+
+        foundation = genesis_foundation_fixture()
+        with mock.patch.object(RUNNER, "committed_record", return_value=foundation):
+            cast_schema = RUNNER.genesis_cast_schema(Path("/offline"))
+        claimants = cast_schema["properties"]["claimants"]
+        self.assertEqual((claimants["minItems"], claimants["maxItems"]), (5, 5))
+        self.assertEqual(
+            cast_schema["$defs"]["claimant"]["properties"]["claimant_id"]["enum"],
+            [f"claimant_{number:02d}" for number in range(1, 6)],
+        )
+
     def test_genesis_initial_claimant_range_and_character_slots(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
@@ -767,6 +787,10 @@ class CathedralsRunnerTests(unittest.TestCase):
                 foundation = genesis_foundation_fixture(count) | {"story_format": "web"}
                 with self.assertRaisesRegex(RUNNER.SchemaError, "five to eight"):
                     RUNNER.validate_genesis_foundation(foundation, run)
+            foundation = genesis_foundation_fixture() | {"story_format": "web"}
+            foundation["work_canon"]["central_incident"]["subjects"] = ["elena"]
+            with self.assertRaisesRegex(RUNNER.SchemaError, "unknown claimant IDs: elena"):
+                RUNNER.validate_genesis_foundation(foundation, run)
 
         foundation = genesis_foundation_fixture()
         payload = genesis_cast_fixture()
@@ -2946,6 +2970,8 @@ class CathedralsRunnerTests(unittest.TestCase):
                 )
             self.assertEqual(len(calls), 3)
             self.assertEqual(calls[2]["messages"][1]["content"].count("CORRECTION REQUIRED"), 2)
+            self.assertIn("PREVIOUS UNCOMMITTED PAYLOAD\n{}", calls[1]["messages"][1]["content"])
+            self.assertIn("Preserve every valid creative choice", calls[1]["messages"][1]["content"])
             self.assertEqual(len(RUNNER.ledger_entries(run)), 3)
             self.assertFalse((run / "finalization.json").exists())
 

@@ -1847,6 +1847,7 @@ def request_record(
     parameters = {"temperature": temperature, "max_tokens": max_tokens, "seed": seed, "stream": False}
     feedback = ""
     for correction in range(3):
+        content = None
         current_prompt = prompt + feedback
         payload = {
             "model": load_state(run_dir)["model"],
@@ -1942,7 +1943,14 @@ def request_record(
                 feedback += "\n\nThe provider returned no usable response. Return the required JSON payload now."
                 continue
             if isinstance(error, SchemaError) and correction < 2:
-                feedback += f"\n\nCORRECTION REQUIRED\nThe previous uncommitted payload failed validation:\n{error.reason}\nReturn a complete corrected payload."
+                previous = f"\n\nPREVIOUS UNCOMMITTED PAYLOAD\n{content}" if isinstance(content, str) else ""
+                feedback += (
+                    "\n\nCORRECTION REQUIRED\n"
+                    f"The previous uncommitted payload failed validation:\n{error.reason}"
+                    f"{previous}\n"
+                    "Preserve every valid creative choice from that payload and the generation brief. "
+                    "Change only what is required to pass validation, then return the complete corrected payload."
+                )
                 continue
             if isinstance(error, SchemaError):
                 raise PausedError("Structured record correction", f"{step_id} exhausted 3 schema-correction attempts in this session. Resume to grant 3 more attempts. Last problem: {error.reason}") from error
@@ -4111,7 +4119,13 @@ def validate_genesis_foundation(record: dict, run_dir: Path) -> None:
         raise SchemaError("Genesis foundation claimant IDs must be unique")
     canon = record["work_canon"]
     claimant_ids = {item["claimant_id"] for item in anchors}
-    
+    unknown_subject_ids = sorted(set(canon["central_incident"]["subjects"]) - claimant_ids)
+    if unknown_subject_ids:
+        raise SchemaError(
+            "Genesis foundation central-incident subjects reference unknown claimant IDs: "
+            + ", ".join(unknown_subject_ids)
+        )
+
     unknown_claimant_ids = sorted({
         claimant_id
         for relationship in canon["claimant_relationships"]
@@ -4154,10 +4168,6 @@ def validate_genesis_cast(record: dict, run_dir: Path) -> None:
     expected_character_slots = [f"character_slot_{number:03d}" for number in range(1, len(character_slots) + 1)]
     if character_slots != expected_character_slots:
         raise SchemaError("Genesis cast characters must use sequential technical slots")
-    claimants = set(claimant_ids)
-    character_ids = {item["character_id"] for item in record["characters"]}
-    if not set(foundation["work_canon"]["central_incident"]["subjects"]).issubset(claimants | character_ids):
-        raise SchemaError("Genesis cast did not define every central-incident subject anchored by the foundation")
 
 
 def validate_genesis_constraints(record: dict, run_dir: Path) -> None:
@@ -4538,6 +4548,32 @@ def genesis_constraints_schema(run_dir: Path) -> dict:
     return schema
 
 
+def genesis_foundation_schema(run_dir: Path) -> dict:
+    schema = copy.deepcopy(definition_schema("genesisFoundationPayload", load_protocol(run_dir)))
+    claimant_ids = [f"claimant_{number:02d}" for number in range(1, INITIAL_CLAIMANT_MAX + 1)]
+    canon = schema["$defs"]["workCanon"]["properties"]
+    canon["central_incident"]["properties"]["subjects"] |= {
+        "minItems": 1, "uniqueItems": True, "items": {"enum": claimant_ids}
+    }
+    canon["claimant_relationships"]["items"]["properties"]["claimant_ids"]["items"] = {
+        "enum": claimant_ids
+    }
+    return schema
+
+
+def genesis_cast_schema(run_dir: Path) -> dict:
+    foundation = committed_record(run_dir, "genesis_foundation")
+    if not foundation:
+        raise IntegrityError("Genesis cast schema requires a committed foundation")
+    claimant_ids = [item["claimant_id"] for item in foundation["claimant_anchors"]]
+    schema = copy.deepcopy(definition_schema("genesisCastPayload", load_protocol(run_dir)))
+    schema["properties"]["claimants"] |= {
+        "minItems": len(claimant_ids), "maxItems": len(claimant_ids)
+    }
+    schema["$defs"]["claimant"]["properties"]["claimant_id"] = {"enum": claimant_ids}
+    return schema
+
+
 def genesis_foundation_prompt(run_dir: Path) -> tuple[str, str]:
     manifest = read_json(run_dir / "run-manifest.json")
     context = bounded_context(
@@ -4550,7 +4586,7 @@ def genesis_foundation_prompt(run_dir: Path) -> tuple[str, str]:
     return render_prompt(
         run_dir,
         "generation-genesis.md",
-        {"FROZEN_GENESIS_CONTEXT": context + "\n\nAuthor 5 to 8 claimant anchors. Use sequential claimant join keys from claimant_01 through claimant_N wherever canon needs them. The engine adds envelopes, commit IDs, claimant IDs, and technical slots.", "GENESIS_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "genesisFoundationPayload")},
+        {"FROZEN_GENESIS_CONTEXT": context + "\n\nAuthor 5 to 8 claimant anchors. Use sequential claimant join keys from claimant_01 through claimant_N wherever canon needs them. The engine adds envelopes, commit IDs, claimant IDs, and technical slots.", "GENESIS_PROTOCOL_DEFINITIONS": json.dumps(genesis_foundation_schema(run_dir), ensure_ascii=False, separators=(",", ":"))},
     ), context
 
 
@@ -4566,7 +4602,7 @@ def genesis_cast_prompt(run_dir: Path) -> tuple[str, str]:
     return render_prompt(
         run_dir,
         "generation-genesis-cast.md",
-        {"GENESIS_CAST_CONTEXT": context + "\n\nReturn expansions keyed only by every committed claimant ID. The engine adds character IDs, character technical slots, and record metadata.", "GENESIS_CAST_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "genesisCastPayload")},
+        {"GENESIS_CAST_CONTEXT": context + "\n\nReturn expansions keyed only by every committed claimant ID. The engine adds character IDs, character technical slots, and record metadata.", "GENESIS_CAST_PROTOCOL_DEFINITIONS": json.dumps(genesis_cast_schema(run_dir), ensure_ascii=False, separators=(",", ":"))},
     ), context
 
 
@@ -4917,6 +4953,7 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
             temperature=0.8,
             transport=transport,
             response_definition="genesisFoundationPayload",
+            response_schema=genesis_foundation_schema(run_dir),
             record_builder=lambda payload: build_genesis_foundation(run_dir, payload),
             precommit_validator=lambda record: validate_genesis_foundation(record, run_dir),
         )
@@ -4933,6 +4970,7 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
             temperature=0.8,
             transport=transport,
             response_definition="genesisCastPayload",
+            response_schema=genesis_cast_schema(run_dir),
             record_builder=lambda payload: build_genesis_cast(run_dir, payload),
             precommit_validator=lambda record: validate_genesis_cast(record, run_dir),
         )

@@ -8,8 +8,7 @@ set. Use each committed claimant ID exactly once as the join key. Author only th
 expansion fields in the supplied schema; do not repeat technical_slot_id, name, or
 incident_role because those immutable values come from the foundation anchor.
 Generate only significant non-claimant characters, at most 12; the engine assigns their IDs and `character_slot_NNN` technical slots. Keep every descriptive
-field concise and distinct. Every central-incident subject ID not owned by a claimant
-anchor must be defined as one of these characters. Do not change foundation canon, create constraints,
+field concise and distinct. Do not change foundation canon, create constraints,
 architecture, scenes, or alternatives. This valid record commits without revision.
 
 IMMUTABLE FOUNDATION AND ENGINE CONTEXT BEGINS
