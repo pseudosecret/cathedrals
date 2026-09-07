@@ -4788,6 +4788,11 @@ def packet_payload_schema(run_dir: Path, plan: dict) -> dict:
     schema["properties"][other_key] |= {"minItems": 0, "maxItems": 0}
     properties = schema["$defs"][definition]["properties"]
     properties["technical_slot_id"] = {"const": slots[0]}
+    if definition == "scenePayload":
+        architecture = committed_record(run_dir, "architecture")
+        if not architecture:
+            raise IntegrityError("Creative packet schema requires committed Architecture")
+        properties["arc_id"] = {"enum": [item["arc_id"] for item in architecture["arcs"]]}
     properties["artifacts"] |= {
         "minItems": plan["artifact_count"], "maxItems": plan["artifact_count"]
     }

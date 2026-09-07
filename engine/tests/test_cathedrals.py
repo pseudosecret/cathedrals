@@ -2742,12 +2742,15 @@ class CathedralsRunnerTests(unittest.TestCase):
             "advance_obligation_ids": [],
             "may_satisfy_obligation_ids": [],
         }
-        schema = RUNNER.packet_payload_schema(Path("/offline"), plan)
+        architecture = {"arcs": [{"arc_id": "arc_one"}, {"arc_id": "arc_two"}]}
+        with mock.patch.object(RUNNER, "committed_record", return_value=architecture):
+            schema = RUNNER.packet_payload_schema(Path("/offline"), plan)
         self.assertEqual(schema["properties"]["scenes"]["minItems"], 1)
         self.assertEqual(schema["properties"]["scenes"]["maxItems"], 1)
         self.assertEqual(schema["properties"]["endings"]["maxItems"], 0)
         properties = schema["$defs"]["scenePayload"]["properties"]
         self.assertEqual(properties["technical_slot_id"], {"const": "scene_slot_0001"})
+        self.assertEqual(properties["arc_id"], {"enum": ["arc_one", "arc_two"]})
         self.assertEqual(
             (properties["artifacts"]["minItems"], properties["artifacts"]["maxItems"]),
             (1, 1),
@@ -2805,6 +2808,9 @@ class CathedralsRunnerTests(unittest.TestCase):
             {"scenes": [scene | {"technical_slot_id": "scene_slot_9999"}], "endings": []},
             {"scenes": [scene | {"artifacts": []}], "endings": []},
             {"scenes": [scene | {"formal_compositions": []}], "endings": []},
+            {"scenes": [scene | {"arc_id": "architecture_node_005"}], "endings": []},
+            {"scenes": [scene | {"arc_id": "architecture_node_002"}], "endings": []},
+            {"scenes": [scene | {"arc_id": "introduction"}], "endings": []},
             {"scenes": [scene], "endings": [{}]},
         ]
         for invalid in invalid_payloads:
@@ -3008,6 +3014,8 @@ class CathedralsRunnerTests(unittest.TestCase):
         }
         with mock.patch.object(
             RUNNER, "packet_prompt", return_value=("prompt", "context")
+        ), mock.patch.object(
+            RUNNER, "committed_record", return_value={"arcs": [{"arc_id": "arc_one"}]}
         ), mock.patch.object(
             RUNNER,
             "step_was_truncated",
