@@ -73,8 +73,17 @@ regenerations, and backtracks. `creative_step_count` may exceed one.
 
 Retry transport/provider failures under the provider law. Invalid uncommitted output
 receives three schema-aware correction attempts per invocation; exhaustion enters
-`PAUSED_GENERATION`, and resume grants three more. Schema-valid packet prose is staged
-before semantic normalization and reused after a pause.
+`PAUSED_GENERATION`, and resume grants three more. Packet prose must pass schema,
+allocation, Markdown, reference, and length validation before it is staged for semantic
+normalization and reused after a pause. Length corrections occur before staging;
+metadata normalization cannot shorten preserved prose.
+
+Each scene or ending chunk has a 1,200-word ceiling including nested artifact prose.
+The logical packet's 4,800-word target is guidance only. The whole-work ceiling is
+1,200 times the maximum scene-plus-ending count: a 20-scene request with five maximum
+endings permits 30,000 literary words. Creative-step and token safeguards are unchanged.
+New runs freeze this policy in their engine snapshot; existing runs continue using
+their original snapshot and budgets.
 
 ## Stop Conditions
 

@@ -227,6 +227,47 @@ def packet_plan_annotation(identifier, **updates):
     return value
 
 
+def packet_payload(scene_words=400, artifact_words=67):
+    return {"scenes": [{
+        "technical_slot_id": "scene_slot_0001",
+        "arc_id": "arc_one",
+        "title": "Threshold",
+        "scene_type": "threshold",
+        "beat_jobs": ["complicate evidence", "force a choice"],
+        "branch_depth": 1,
+        "claimant_focus_ids": [],
+        "epistemic_dependencies": [],
+        "state_inputs": [],
+        "state_effects": [],
+        "major_decision": False,
+        "hesitation_consequence": None,
+        "web_composition": {
+            "surface_mode": "prose",
+            "artifact_behavior": "inline",
+            "navigational_discovery": "The evidence opens in place.",
+        },
+        "prose_mdx": " ".join(["word"] * scene_words),
+        "artifacts": [{
+            "title": "Evidence",
+            "artifact_type": "note",
+            "physical_form": "paper",
+            "provenance_in_story": "Found here.",
+            "claimant_relevance_ids": [],
+            "interpretive_function": "Contradicts the account.",
+            "contradiction": "Its date is impossible.",
+            "presentation_mode": "inline_expandable",
+            "preview_excerpt": "An impossible date.",
+            "body_mdx": " ".join(["artifact"] * artifact_words),
+        }],
+        "choices": [],
+        "formal_compositions": [{
+            "form": "refrain",
+            "dramatic_function": "Makes recurrence accusatory.",
+            "anchor": "The repeated date.",
+        }],
+    }], "endings": []}
+
+
 def architecture_fixture(plans=None, obligations=None, attractors=None):
     return {
         "record_type": "architecture",
@@ -2949,15 +2990,156 @@ class CathedralsRunnerTests(unittest.TestCase):
             RUNNER.derive_scope(2000)["budgets"]["max_creative_step_count"], 2000 + 285
         )
 
-    def test_scene_length_is_flexible_inside_packet_budget(self):
+    def test_scene_length_is_flexible_up_to_chunk_ceiling(self):
         long_scene = " ".join(["word"] * 1200)
         packet = {"scenes": [{"prose_mdx": long_scene}], "artifacts": [], "endings": []}
         self.assertEqual(RUNNER.packet_literary_word_count(packet), 1200)
         self.assertLess(
-            RUNNER.packet_literary_word_count(packet), RUNNER.PACKET_LITERARY_WORDS
+            RUNNER.packet_literary_word_count(packet), RUNNER.PACKET_LITERARY_WORD_TARGET
         )
         schema = RUNNER.load_protocol()["$defs"]["scene"]["properties"]["prose_mdx"]
         self.assertNotIn("maxLength", schema)
+
+    def test_run_word_ceiling_covers_scene_and_ending_chunks_without_extra_artifact_budget(self):
+        derived = RUNNER.derive_scope(20)
+        self.assertEqual(derived["scope"]["ending_hard_max"], 5)
+        self.assertEqual(derived["budgets"]["max_total_literary_words"], 30000)
+        self.assertEqual(derived["budgets"]["max_creative_step_count"], 30)
+        self.assertEqual(derived["budgets"]["max_cumulative_output_tokens"], 1161000)
+
+    def test_chunk_word_boundaries_include_artifacts_for_scenes_and_endings(self):
+        for kind in ("literary", "ending"):
+            for scene_words, artifact_words, total in ((559, 248, 807), (952, 248, 1200), (953, 248, 1201)):
+                with self.subTest(kind=kind, words=total):
+                    payload = packet_payload(scene_words, artifact_words)
+                    key = "scenes" if kind == "literary" else "endings"
+                    slot = "scene_slot_0001" if kind == "literary" else "ending_slot_0001"
+                    if kind == "ending":
+                        payload["endings"] = payload.pop("scenes")
+                        payload["scenes"] = []
+                    payload[key][0]["technical_slot_id"] = slot
+                    plan = RUNNER.single_content_packet_plans(packet_plan(
+                        packet_kind=kind,
+                        scene_slot_ids=[slot] if kind == "literary" else [],
+                        ending_slot_ids=[slot] if kind == "ending" else [],
+                        artifact_count=1, formal_composition_count=1,
+                    ))[0]
+                    flattened = copy.deepcopy(payload)
+                    flattened["artifacts"] = flattened[key][0].pop("artifacts")
+                    self.assertEqual(RUNNER.packet_literary_word_count(payload), total)
+                    self.assertEqual(RUNNER.packet_literary_word_count(flattened), total)
+                    if total <= 1200:
+                        RUNNER.validate_packet_payload(payload, plan)
+                        RUNNER.validate_packet_word_allowance(flattened, plan)
+                    else:
+                        for validate, value in (
+                            (RUNNER.validate_packet_payload, payload),
+                            (RUNNER.validate_packet_word_allowance, flattened),
+                        ):
+                            with self.assertRaisesRegex(RUNNER.SchemaError, "1,201.*1,200-word.*including artifact"):
+                                validate(value, plan)
+
+    def test_logical_packet_can_exceed_word_target_with_valid_chunks(self):
+        plan = packet_plan(
+            scene_slot_ids=[f"scene_slot_{number:04d}" for number in range(1, 7)],
+            artifact_count=2, formal_composition_count=2,
+            advance_obligation_ids=[], may_satisfy_obligation_ids=[],
+        )
+        chunks = []
+
+        def request(_run, _architecture, packet_slice, _transport):
+            artifact_words = 250 if packet_slice["artifact_count"] else 0
+            payload = packet_payload(900 - artifact_words, artifact_words)
+            scene = payload["scenes"][0]
+            scene["technical_slot_id"] = packet_slice["scene_slot_ids"][0]
+            if not packet_slice["artifact_count"]:
+                scene["artifacts"] = []
+            if not packet_slice["formal_composition_count"]:
+                scene["formal_compositions"] = []
+            RUNNER.validate_packet_payload(payload, packet_slice)
+            chunks.append(payload | {
+                "record_type": "creative_packet", "packet_slot_id": plan["packet_slot_id"],
+                "commit_id": f"commit_{len(chunks) + 1}", "packet_sequence": len(chunks) + 1,
+                "artifacts": scene["artifacts"], "formal_compositions": scene["formal_compositions"],
+                "decision_edges": [], "obligations_advanced": [], "constraint_delta": empty_delta(),
+            })
+
+        with mock.patch.object(RUNNER, "packet_chunks", return_value=chunks), mock.patch.object(
+            RUNNER, "committed_record", return_value={"packet_plans": [plan]}
+        ), mock.patch.object(RUNNER, "request_packet_slice", side_effect=request):
+            packet = RUNNER.execute_packet_plan(Path("/offline"), {}, plan, transport=None)
+        self.assertEqual(len(packet["scenes"]), 6)
+        self.assertEqual(RUNNER.packet_literary_word_count(packet), 5400)
+        self.assertGreater(RUNNER.packet_literary_word_count(packet), RUNNER.PACKET_LITERARY_WORD_TARGET)
+
+    def test_packet_length_correction_precedes_preservation_and_normalization(self):
+        invalid = packet_payload(953, 248)
+        valid = packet_payload(952, 248)
+        plan = RUNNER.single_content_packet_plans(packet_plan(
+            scene_slot_ids=["scene_slot_0001"], artifact_count=1, formal_composition_count=1,
+            advance_obligation_ids=[], may_satisfy_obligation_ids=[],
+        ))[0]
+        architecture = {"arcs": [{"arc_id": "arc_one"}], "packet_plans": [plan]}
+
+        for expanded, correct in ((False, True), (True, True), (False, False)):
+            with self.subTest(expanded=expanded, correct=correct), tempfile.TemporaryDirectory() as temporary:
+                run = Path(temporary) / "generation_test"
+                for name in ("state", "raw", "committed", ".staging"):
+                    (run / name).mkdir(parents=True)
+                RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+                RUNNER.write_json(run / "generation-brief.json", {
+                    "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid",
+                })
+                RUNNER.write_json(run / "run-manifest.json", {"budgets": {"max_prepared_context_tokens": 49152}})
+                step_id = RUNNER.packet_step_id(plan, expanded=expanded)
+                staged = run / ".staging" / f"{step_id}.artistic.json"
+                artistic_requests = []
+                semantic_requests = []
+
+                def transport(_method, _url, request, **_kwargs):
+                    definition = request["response_format"]["json_schema"]["name"]
+                    if definition == "creativePacketPayload":
+                        self.assertFalse(staged.exists())
+                        self.assertFalse(semantic_requests)
+                        artistic_requests.append(request)
+                        result = valid if correct and len(artistic_requests) > 1 else invalid
+                    else:
+                        self.assertEqual(definition, "semanticDeltaPayload")
+                        self.assertEqual(RUNNER.read_json(staged), valid)
+                        semantic_requests.append(request)
+                        result = genesis_semantic_payload("scene_slot_0001")
+                    return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(result)}}]}
+
+                with mock.patch.object(RUNNER, "packet_prompt", return_value=("prompt", "context")), mock.patch.object(
+                    RUNNER, "committed_record",
+                    side_effect=lambda _run, kind: architecture if kind == "architecture" else {"claimants": []},
+                ), mock.patch.object(RUNNER, "committed_records", return_value=[]), mock.patch.object(
+                    RUNNER, "step_was_truncated", side_effect=lambda _run, step: expanded and not step.endswith("_expanded"),
+                ), mock.patch.object(RUNNER, "expanded_output_limit", return_value=RUNNER.EXPANDED_OUTPUT_TOKENS), mock.patch.object(
+                    RUNNER, "build_creative_packet", side_effect=RUNNER.PausedError("Test interruption", "Metadata accepted"),
+                ):
+                    reason = "Metadata accepted" if correct else "exhausted 3.*1,201.*1,200-word"
+                    with self.assertRaisesRegex(RUNNER.PausedError, reason):
+                        RUNNER.request_packet_slice(run, architecture, plan, transport)
+                    self.assertEqual(len(artistic_requests), 2 if correct else 3)
+                    correction = artistic_requests[1]["messages"][1]["content"]
+                    self.assertIn("1,201 literary words", correction)
+                    self.assertIn("1,200-word allowance", correction)
+                    self.assertIn(json.dumps(invalid), correction)
+                    self.assertEqual(len(semantic_requests), 1 if correct else 0)
+                    self.assertFalse((run / "state" / f"{step_id}.semantic-feedback.txt").exists())
+                    self.assertEqual(list((run / "committed").iterdir()), [])
+                    if correct:
+                        preserved = {path: path.read_bytes() for path in (run / ".staging").iterdir()}
+                        with self.assertRaisesRegex(RUNNER.PausedError, "Metadata accepted"):
+                            RUNNER.request_packet_slice(run, architecture, plan, mock.Mock(side_effect=AssertionError("Regenerated prose")))
+                        for path, original in preserved.items():
+                            self.assertEqual(path.read_bytes(), original)
+                    else:
+                        self.assertFalse(staged.exists())
+                        self.assertEqual(len(RUNNER.ledger_entries(run)), 3)
+                    self.assertEqual(RUNNER.read_json(run / "raw" / f"{step_id}-attempt1.api.json")
+                        ["choices"][0]["message"]["content"], json.dumps(invalid))
 
     def test_packet_plan_is_divided_into_exact_single_content_allocations(self):
         plan = {
@@ -2979,10 +3161,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertTrue(all(not item["ending_slot_ids"] for item in slices))
         self.assertEqual(sum(item["artifact_count"] for item in slices), 4)
         self.assertEqual(sum(item["formal_composition_count"] for item in slices), 2)
-        self.assertEqual(
-            sum(item["literary_word_allowance"] for item in slices),
-            RUNNER.PACKET_LITERARY_WORDS,
-        )
+        self.assertTrue(all(item["literary_word_allowance"] == 1200 for item in slices))
         self.assertTrue(
             all(item["logical_content_slot_ids"] == plan["scene_slot_ids"] for item in slices)
         )
@@ -3016,44 +3195,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             ),
             (1, 1),
         )
-        scene = {
-            "technical_slot_id": "scene_slot_0001",
-            "arc_id": "arc_one",
-            "title": "Threshold",
-            "scene_type": "threshold",
-            "beat_jobs": ["complicate evidence", "force a choice"],
-            "branch_depth": 1,
-            "claimant_focus_ids": [],
-            "epistemic_dependencies": [],
-            "state_inputs": [],
-            "state_effects": [],
-            "major_decision": False,
-            "hesitation_consequence": None,
-            "web_composition": {
-                "surface_mode": "prose",
-                "artifact_behavior": "inline",
-                "navigational_discovery": "The evidence opens in place.",
-            },
-            "prose_mdx": "# Threshold\n\nThe evidence changes meaning.",
-            "artifacts": [{
-                "title": "Evidence",
-                "artifact_type": "note",
-                "physical_form": "paper",
-                "provenance_in_story": "Found here.",
-                "claimant_relevance_ids": [],
-                "interpretive_function": "Contradicts the account.",
-                "contradiction": "Its date is impossible.",
-                "presentation_mode": "inline_expandable",
-                "preview_excerpt": "An impossible date.",
-                "body_mdx": "## Note\n\nA dated statement.",
-            }],
-            "choices": [],
-            "formal_compositions": [{
-                "form": "refrain",
-                "dramatic_function": "Makes recurrence accusatory.",
-                "anchor": "The repeated date.",
-            }],
-        }
+        scene = packet_payload()["scenes"][0]
         valid = {"scenes": [scene], "endings": []}
         RUNNER.validate_json_schema(valid, schema)
         invalid_payloads = [

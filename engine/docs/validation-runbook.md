@@ -32,6 +32,10 @@ creative_step_count >= 1
 Transport failures retry under the provider retry law. Invalid uncommitted structured
 output receives three schema-aware corrections per invocation; exhaustion pauses the
 run, and explicit resume grants three more. No correction may alter committed history.
+Validate the 1,200-word scene/ending chunk ceiling, including nested artifacts, before
+preserving artistic prose or requesting semantic normalization. A length overrun is
+an uncommitted payload correction, never a metadata correction. The 4,800-word logical
+packet target is guidance only; whole-work literary limits remain hard safeguards.
 
 ## 3. Mechanical and Continuity Validation
 

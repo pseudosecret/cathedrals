@@ -413,11 +413,8 @@ scope:
       constraint_records_hard_max: 12000
   prose_word_limits:
     scene_target: 450
-    scene_hard_max: null
     artifact_target: 250
-    artifact_hard_max: 350
     ending_target: 350
-    ending_hard_max: 500
   packet_shape:
     literary_scenes_min: 3
     literary_scenes_max: 8
@@ -428,6 +425,7 @@ scope:
     - "Unequal branch depth is required; counts do not imply claimant-route symmetry."
     - "Reused locations and stateful variants count only when the state difference matters."
     - "The large target is 42,300 literary words: 72x450 scene, 20x250 artifact, and 14x350 ending words."
+    - "Prose targets guide pacing; the hard literary ceiling is 1,200 combined scene/ending and nested artifact words per chunk."
     - "The executable must not clamp an explicit scene scope to a profile hard maximum."
 
 format_selection:
@@ -441,12 +439,13 @@ format_selection:
   renpy_bootstrap_active: false
 
 generation_budget:
-  calculation_version: 5
+  calculation_version: 6
   primary_scale_input: possible_scene_count
   words_per_token_assumption: 0.75
   max_prepared_context_tokens: 49152
   max_retrieved_source_tokens: 12288
-  max_creative_packet_literary_words: 4800
+  literary_packet_word_target: 4800
+  max_creative_chunk_literary_words: 1200
   creative_packet_literary_tokens: 6400
   structured_metadata_token_allowance_per_packet: 3500
   json_serialization_token_allowance_per_packet: 1000
@@ -463,9 +462,11 @@ generation_budget:
   max_constraint_events: derived_per_run
   formulae:
     creative_packet_output: >
-      ceil(max_creative_packet_literary_words / words_per_token_assumption) +
+      ceil(literary_packet_word_target / words_per_token_assumption) +
       structured_metadata_token_allowance_per_packet +
       json_serialization_token_allowance_per_packet
+    total_literary_words: >
+      max_creative_chunk_literary_words * (possible_scene_count + ending_hard_max)
     context_window: >
       max_prepared_context_tokens + max_creative_packet_output_tokens +
       context_safety_reserve_tokens <= selected_model_context_window_tokens
@@ -474,6 +475,8 @@ generation_budget:
       plan batches + worst-case one committed chunk per scene or ending
     constraint_events: "max(1000, possible_scene_count * 45)"
   preflight_rules:
+    - "The 4,800-word logical packet target is guidance, not a shared hard ceiling or equal per-chunk allocation."
+    - "Keep existing output-token allowances as conservative headroom for structured output and reasoning."
     - "Record documented context-window and maximum-output limits for each selected model."
     - "Fail before generation if any planned step exceeds its model's context or output limit."
     - "Fail before generation if the derived scope cannot fit cumulative token, constraint-event, or configured cost limits."

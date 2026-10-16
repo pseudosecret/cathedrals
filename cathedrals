@@ -46,7 +46,8 @@ INITIAL_CLAIMANT_MIN = 5
 INITIAL_CLAIMANT_MAX = 8
 MAX_CLAIMANTS = 12
 GENESIS_RAW_FACT_MAX = 24
-PACKET_LITERARY_WORDS = 4800
+PACKET_LITERARY_WORD_TARGET = 4800
+CHUNK_LITERARY_WORDS = 1200
 PLAN_BATCH_SIZE = 8
 TERMINAL_STATES = {"READY_TO_PLAY", "FAILED_GENERATION"}
 RETRYABLE_PROVIDER_FAILURES = {"transport_before_response", "provider_before_creative_output"}
@@ -511,7 +512,7 @@ def derive_scope(possible_scene_count: int) -> dict:
             "context_safety_reserve_tokens": 4096,
             "max_creative_step_count": max_creative_steps,
             "max_analysis_step_count": max_analysis_steps,
-            "max_total_literary_words": count * 600 + artifact_max * 350 + ending_max * 500,
+            "max_total_literary_words": CHUNK_LITERARY_WORDS * (count + ending_max),
             "max_cumulative_input_tokens": (2 * max_creative_steps + max_analysis_steps) * 49152,
             "max_cumulative_output_tokens": max_creative_steps * (BASE_OUTPUT_TOKENS + EXPANDED_OUTPUT_TOKENS) + max_analysis_steps * ANALYSIS_OUTPUT_TOKENS,
             "max_constraint_events": max(1000, count * 45),
@@ -3901,6 +3902,7 @@ def validate_packet_payload(payload: dict, plan: dict) -> None:
             problems.append(error.reason)
     if problems:
         raise SchemaError("Packet payload does not match its frozen allocation: " + "; ".join(problems))
+    validate_packet_word_allowance(payload, plan)
 
 
 def validate_packet_payload_for_run(payload: dict, run_dir: Path, plan: dict) -> None:
@@ -4349,10 +4351,7 @@ def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
     }
     if occupied_slots & {item["technical_slot_id"] for item in content}:
         raise SchemaError("Packet chunk attempted to refill a committed technical slot")
-    packet_words = packet_literary_word_count(record)
-    word_allowance = plan.get("literary_word_allowance", PACKET_LITERARY_WORDS)
-    if packet_words > word_allowance:
-        raise SchemaError(f"Creative packet slice exceeds its {word_allowance:,}-word literary allowance")
+    validate_packet_word_allowance(record, plan)
     obligation_state = _read_state_map(run_dir, "obligations.json")
     obligations = set(obligation_state)
     arcs = {item["arc_id"] for item in architecture["arcs"]}
@@ -4721,6 +4720,7 @@ def packet_prompt(run_dir: Path, architecture: dict, plan: dict) -> tuple[str, s
             "packet_sequence": packet_sequence,
             "architecture_core_commit_id": architecture["architecture_core_commit_id"],
             "packet_plan_commit_id": batch["commit_id"],
+            "logical_packet_literary_word_target": PACKET_LITERARY_WORD_TARGET,
         },
         ensure_ascii=False,
         indent=2,
@@ -4762,7 +4762,7 @@ def packet_step_id(plan: dict, expanded: bool = False) -> str:
         "compositions": plan["formal_composition_count"],
         "obligations": plan["advance_obligation_ids"],
         "may_satisfy": plan["may_satisfy_obligation_ids"],
-        "words": plan.get("literary_word_allowance", PACKET_LITERARY_WORDS),
+        "words": plan.get("literary_word_allowance", CHUNK_LITERARY_WORDS),
     })
     return f"packet_{plan['packet_slot_id']}_{sha256_bytes(identity)[:12]}{'_expanded' if expanded else ''}"
 
@@ -4813,7 +4813,6 @@ def single_content_packet_plans(plan: dict) -> list[dict]:
         return []
     artifact_counts = distribute_counts(plan["artifact_count"], len(slots))
     composition_counts = distribute_counts(plan["formal_composition_count"], len(slots))
-    word_allowances = distribute_counts(PACKET_LITERARY_WORDS, len(slots))
     return [
         plan | {
             "scene_slot_ids": [slot] if plan["packet_kind"] == "literary" else [],
@@ -4821,7 +4820,7 @@ def single_content_packet_plans(plan: dict) -> list[dict]:
             "artifact_count": artifact_counts[index],
             "formal_composition_count": composition_counts[index],
             "logical_content_slot_ids": slots,
-            "literary_word_allowance": word_allowances[index],
+            "literary_word_allowance": CHUNK_LITERARY_WORDS,
         }
         for index, slot in enumerate(slots)
     ]
@@ -5122,9 +5121,23 @@ def literary_word_count(value: str) -> int:
 
 
 def packet_literary_word_count(record: dict) -> int:
-    return sum(literary_word_count(item["prose_mdx"]) for item in record["scenes"] + record["endings"]) + sum(
-        literary_word_count(item["body_mdx"]) for item in record["artifacts"]
+    content = record["scenes"] + record["endings"]
+    artifacts = record.get("artifacts")
+    if artifacts is None:
+        artifacts = [artifact for item in content for artifact in item["artifacts"]]
+    return sum(literary_word_count(item["prose_mdx"]) for item in content) + sum(
+        literary_word_count(item["body_mdx"]) for item in artifacts
     )
+
+
+def validate_packet_word_allowance(record: dict, plan: dict) -> None:
+    words = packet_literary_word_count(record)
+    allowance = plan.get("literary_word_allowance", CHUNK_LITERARY_WORDS)
+    if words > allowance:
+        raise SchemaError(
+            f"Creative packet chunk has {words:,} literary words, exceeding its "
+            f"{allowance:,}-word allowance (including artifact prose)"
+        )
 
 
 HTML_TAG = re.compile(
@@ -5463,9 +5476,7 @@ def validate_complete_work(run_dir: Path) -> dict:
         reasons.append("Constraint-event capacity was exceeded.")
     if prospective and prospective["based_on_canonical_state_hash"] != state["canonical_state_hash"]:
         reasons.append("The mutable prospective plan is not based on current immutable canon.")
-    total_words = sum(literary_word_count(scene["prose_mdx"]) for scene in scenes)
-    total_words += sum(literary_word_count(item["body_mdx"]) for item in artifacts)
-    total_words += sum(literary_word_count(item["prose_mdx"]) for item in endings)
+    total_words = sum(packet_literary_word_count(packet) for packet in packets)
     if total_words > manifest["budgets"]["max_total_literary_words"]:
         reasons.append("Total literary-word budget was exceeded.")
     project = run_dir / "projection/web"

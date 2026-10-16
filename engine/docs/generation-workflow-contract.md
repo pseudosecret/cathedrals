@@ -92,9 +92,19 @@ Choose the next dependency-lawful packet from the current prospective plan. A pl
 packet contains three to eight related scenes, normally six, plus associated artifacts,
 formal compositions, and source-grounded constraint deltas. Author and commit that
 logical packet as deterministic one-scene chunks with exact response cardinalities.
-Distribute its shared 4,800-word allowance and artifact/composition totals across the
-chunks. Context is selected by constraint relevance, not chronology. Commit a
-mechanically valid chunk even when its art is disappointing. Later chunks may read and
+Distribute artifact/composition totals across the chunks. Each scene or ending chunk
+may contain up to 1,200 combined literary words, including its nested artifacts. The
+logical packet's 4,800-word target is pacing guidance; it is not a shared hard ceiling
+or an equal per-scene allocation. The whole-work literary ceiling is 1,200 times the
+sum of the requested possible scene count and derived maximum ending count. Artifact
+words are already included in chunks and are not budgeted twice.
+
+Validate schema, allocation, Markdown, literary length, and technical references
+before staging immutable artistic prose or requesting semantic normalization. Invalid
+uncommitted prose receives bounded corrections; normalization only repairs metadata
+and never changes literary bytes. Context is selected by constraint relevance, not
+chronology. Commit a mechanically valid chunk even when its art is disappointing.
+Later chunks may read and
 react to it; they may not replace it.
 
 Committed chunks collectively own the original plan. If the provider truncates an
