@@ -1496,6 +1496,98 @@ class CathedralsRunnerTests(unittest.TestCase):
             RUNNER.validate_json_schema(obligation(termination_targets=[]), protocol["$defs"]["obligation"], protocol)
         self.assertIsNotNone(captured["payload_repairer"])
 
+    def test_architecture_shared_aliases_resolve_through_constraint_commit(self):
+        payload = architecture_core_payload()
+        # The local Qwen run used the same alias for an attractor and an ending-family node.
+        shared_ending = "ending_maren_truth"
+        payload["attractors"][0]["attractor_id"] = shared_ending
+        payload["attractors"][0]["relevance"] = {"arc_ids": ["obligation_one"]}
+        payload["arcs"] = [payload["arcs"][0] | {"arc_id": identifier} for identifier in (
+            "obligation_one", "arc_one", "arc_two", "arc_three",
+        )]
+        topology = payload["topology"]
+        for node, edge, identifier in zip(topology["nodes"][1:4], topology["edges"], (
+            shared_ending, "obligation_one", "claimant_01",
+        )):
+            node["node_id"] = identifier
+            edge["to_node_id"] = identifier
+            node["hard_obligation_ids"] = ["obligation_one"]
+            edge["hard_obligation_ids"] = ["obligation_one"]
+        topology["edges"][0]["edge_id"] = "arc_one"
+        source_ids = [
+            "commit_foundation", "claimant_01", "obligation_two", shared_ending,
+            "arc_one", "edge_1", "node_intro",
+        ]
+        payload["obligation_graph"][0] |= {
+            "created_by_ids": [shared_ending, "claimant_01"],
+            "termination_targets": [shared_ending],
+            "sources": [source_ref(identifier) | {"artifact_type": "genesis"} for identifier in source_ids],
+            "relevance": {"arc_ids": ["arc_one"], "branch_ids": [shared_ending]},
+        }
+        payload["obligation_graph"].append(obligation(
+            "obligation_two", created_by_ids=["arc_one"], requires=["obligation_one"],
+            termination_targets=["obligation_one", shared_ending],
+            sources=[source_ref("commit_foundation")],
+        ))
+        original = copy.deepcopy(payload)
+        records = architecture_genesis_records()
+        committed_sources = {
+            identifier: {"commit_id": "commit_foundation", "hash": "a" * 64}
+            for identifier in ("commit_foundation", "claimant_01")
+        }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "generation_test"
+            for name in ("state", "committed", "constraints", "raw", ".staging"):
+                (run / name).mkdir(parents=True)
+            RUNNER.write_json(run / "run-manifest.json", RUNNER.derive_scope(15))
+            RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "b" * 64, "c" * 64, "offline"))
+            with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: records[kind]), mock.patch.object(
+                RUNNER, "_source_index", return_value=committed_sources
+            ):
+                record = RUNNER.build_architecture_core(run, payload)
+                protocol = RUNNER.load_protocol()
+                RUNNER.validate_json_schema(record, protocol["$defs"]["architectureCore"], protocol)
+                RUNNER.validate_declared_id_uniqueness(record)
+                RUNNER.validate_architecture_core_for_run(record, run)
+                first, second = record["obligation_graph"]
+                self.assertEqual(first["termination_targets"], ["attractor_001"])
+                self.assertEqual(second["termination_targets"], ["obligation_001", "attractor_001"])
+                self.assertEqual(second["requires"], ["obligation_001"])
+                self.assertEqual(record["attractors"][0]["prerequisite_obligation_ids"], ["obligation_001"])
+                self.assertEqual(record["attractors"][0]["relevance"]["arc_ids"], ["arc_001"])
+                self.assertEqual(first["relevance"], {
+                    "arc_ids": ["arc_002"], "branch_ids": ["architecture_node_002"],
+                })
+                self.assertEqual(first["created_by_ids"], ["architecture_node_002", "claimant_01"])
+                self.assertEqual(second["created_by_ids"], ["architecture_edge_001"])
+                self.assertEqual([source["artifact_id"] for source in first["sources"]], [
+                    "commit_foundation", "claimant_01", "obligation_002", "architecture_node_002",
+                    "architecture_edge_001", "architecture_edge_002", "architecture_node_001",
+                ])
+                self.assertEqual(first["sources"][:2], original["obligation_graph"][0]["sources"][:2])
+                self.assertTrue(all(source["artifact_type"] == "architecture" for source in first["sources"][2:]))
+                self.assertEqual(
+                    [source["source_locator"] for source in first["sources"]],
+                    [source["source_locator"] for source in original["obligation_graph"][0]["sources"]],
+                )
+                raw = RUNNER.canonical_json(payload).decode()
+                with mock.patch.object(RUNNER, "reconcile_run"):
+                    directory = RUNNER.commit_record(
+                        run, record, raw, {}, planned_step_id="architecture_core", attempt=1,
+                        step_phase="architecture", prompt="prompt", context="context",
+                        parameters={"seed": "seed"}, branch_relation="macroarchitecture",
+                    )
+            meta = RUNNER.read_json(directory / "commit-meta.json")
+            self.assertEqual(len(meta["constraint_events"]), 2)
+            local_sources = meta["constraint_events"][0]["sources"][2:]
+            self.assertTrue(all(source["source_commit_id"] == record["commit_id"] for source in local_sources))
+            self.assertTrue(all(source["source_hash"] == meta["record_hash"] for source in local_sources))
+            self.assertEqual(RUNNER.read_json(directory / "record.json"), record)
+            self.assertEqual((directory / "raw-response.txt").read_text(), raw)
+            self.assertEqual(RUNNER.ledger_entries(run)[0]["commit_status"], "COMMITTED")
+        self.assertEqual(payload, original)
+
     def test_architecture_reference_repair_splits_failed_batch_and_preserves_successes(self):
         payload = architecture_core_payload()
         payload["arcs"][0]["claimant_pressures"] = ["claimant_missing"]

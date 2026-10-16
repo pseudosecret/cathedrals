@@ -3030,31 +3030,40 @@ def build_architecture_core(run_dir: Path, payload: dict) -> dict:
     node_ids = {item["node_id"]: f"architecture_node_{index:03d}" for index, item in enumerate(artistic["topology"]["nodes"], 1)}
     edge_ids = {item["edge_id"]: f"architecture_edge_{index:03d}" for index, item in enumerate(artistic["topology"]["edges"], 1)}
     topology = artistic["topology"]
-    remap = obligation_ids | attractor_ids | arc_ids | node_ids | edge_ids
+    termination_ids = obligation_ids | attractor_ids
+    committed_ids = {identifier: identifier for identifier in _source_index(run_dir)}
+    origin_ids = attractor_ids | arc_ids | node_ids | edge_ids | committed_ids
+    source_ids = obligation_ids | origin_ids
 
-    def ids(values):
-        return [remap.get(value, value) for value in values]
+    def ids(values, mapping):
+        return [mapping.get(value, value) for value in values]
 
     def relevance(value):
-        return value | {"arc_ids": ids(value.get("arc_ids", [])), "branch_ids": ids(value.get("branch_ids", []))}
+        return value | {
+            "arc_ids": ids(value.get("arc_ids", []), arc_ids),
+            "branch_ids": ids(value.get("branch_ids", []), source_ids),
+        }
 
     artistic["obligation_graph"] = [item | {
-        "obligation_id": obligation_ids[item["obligation_id"]], "created_by_ids": ids(item["created_by_ids"]),
-        "requires": ids(item["requires"]), "termination_targets": ids(item["termination_targets"]),
+        "obligation_id": obligation_ids[item["obligation_id"]], "created_by_ids": ids(item["created_by_ids"], origin_ids),
+        "requires": ids(item["requires"], obligation_ids), "termination_targets": ids(item["termination_targets"], termination_ids),
+        "sources": [source if source["artifact_id"] in committed_ids else source | {
+            "artifact_id": source_ids[source["artifact_id"]], "artifact_type": "architecture",
+        } for source in item["sources"]],
         "relevance": relevance(item["relevance"]),
     } for item in artistic["obligation_graph"]]
     artistic["attractors"] = [item | {
         "attractor_id": attractor_ids[item["attractor_id"]],
-        "prerequisite_obligation_ids": ids(item["prerequisite_obligation_ids"]),
+        "prerequisite_obligation_ids": ids(item["prerequisite_obligation_ids"], obligation_ids),
         "relevance": relevance(item["relevance"]),
     } for item in artistic["attractors"]]
-    artistic["arcs"] = [item | {"arc_id": arc_ids[item["arc_id"]], "hard_obligation_ids": ids(item["hard_obligation_ids"])} for item in artistic["arcs"]]
+    artistic["arcs"] = [item | {"arc_id": arc_ids[item["arc_id"]], "hard_obligation_ids": ids(item["hard_obligation_ids"], obligation_ids)} for item in artistic["arcs"]]
     artistic["topology"] = topology | {
         "entry_segment_id": node_ids[topology["entry_segment_id"]],
         "opening_branch_node_id": node_ids[topology["opening_branch_node_id"]],
         "reconvergence_node_ids": [node_ids[value] for value in topology["reconvergence_node_ids"]],
-        "nodes": [item | {"node_id": node_ids[item["node_id"]], "hard_obligation_ids": ids(item["hard_obligation_ids"])} for item in topology["nodes"]],
-        "edges": [item | {"edge_id": edge_ids[item["edge_id"]], "from_node_id": node_ids[item["from_node_id"]], "to_node_id": node_ids[item["to_node_id"]], "hard_obligation_ids": ids(item["hard_obligation_ids"])} for item in topology["edges"]],
+        "nodes": [item | {"node_id": node_ids[item["node_id"]], "hard_obligation_ids": ids(item["hard_obligation_ids"], obligation_ids)} for item in topology["nodes"]],
+        "edges": [item | {"edge_id": edge_ids[item["edge_id"]], "from_node_id": node_ids[item["from_node_id"]], "to_node_id": node_ids[item["to_node_id"]], "hard_obligation_ids": ids(item["hard_obligation_ids"], obligation_ids)} for item in topology["edges"]],
     }
     artistic["constraint_delta"] = {"canonical_facts": [], "knowledge_changes": [], "new_obligations": [], "obligation_updates": [], "motif_events": [], "potential_foreclosures": []}
     return record_envelope(run_dir, "architecture_core", "architecture_core") | {

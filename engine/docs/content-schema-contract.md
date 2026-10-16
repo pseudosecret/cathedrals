@@ -72,6 +72,12 @@ The protocol schema validates these independent record types:
 Each JSON record must parse and validate before commit. Raw responses are preserved.
 Truncated, ambiguous, or creatively malformed output is not completed by inference.
 
+Architecture payload aliases are resolved within each reference field's allowed entity
+kinds before canonical IDs are assigned. An attractor and a topology node may share a
+payload alias without changing an obligation's ending target into a node reference.
+Local obligation sources receive canonical Architecture IDs and source types;
+committed Genesis source IDs and all source locators are preserved.
+
 ## Atomic Commit and Immutability
 
 A creative commit succeeds only when the raw response is preserved, its protocol
