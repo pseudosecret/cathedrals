@@ -4020,6 +4020,12 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
     feedback = f" Previous normalization failed canonical validation: {feedback_path.read_text(encoding='utf-8')}" if feedback_path.exists() else ""
     for correction in range(3):
         attempts = [entry["attempt"] for entry in ledger_entries(run_dir) if entry["planned_step_id"] == f"{step_id}_semantic"]
+        # Successful normalizations can leave raw responses without semantic ledger entries.
+        attempts.extend(
+            int(match.group(1))
+            for path in (run_dir / "raw").glob(f"{step_id}-semantic-attempt*.api.json")
+            if (match := re.fullmatch(rf"{re.escape(step_id)}-semantic-attempt([0-9]+)\.api\.json", path.name))
+        )
         attempt = max(attempts, default=0) + 1
         prompt = bounded_context([
             ("IMMUTABLE ARTISTIC PAYLOAD", artistic_payload),
