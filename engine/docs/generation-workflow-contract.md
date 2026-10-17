@@ -107,6 +107,37 @@ chronology. Commit a mechanically valid chunk even when its art is disappointing
 Later chunks may read and
 react to it; they may not replace it.
 
+Before commit, every phase resolves eligible invalid reference fields against typed
+catalogs of declared, in-scope targets. Deterministic aliases run first. Remaining
+unknown references receive the focused `resolve-reference.md` prompt: one invalid
+value, its field and usage context, and bounded candidates with descriptions. The
+response must be one exact listed identifier or `UNRESOLVED`; explanations and new
+identifiers fail validation. Only the identified field changes. Declaration IDs,
+free-form fictional labels, and literary strings are not reference-repair targets.
+Missing content, duplicates, graph cycles, and unsatisfied prerequisites retain their
+structural checks. Committed records and final integrity failures are never repaired.
+
+The shared pass covers Genesis identities, relationships, sources, and knowledge;
+Architecture node/edge, obligation, arc, claimant, and attractor references; packet-plan
+join keys and dependencies; scene/ending/artifact references, destinations, variants,
+epistemic dependencies and state keys; and semantic proposition, source, obligation,
+termination, and typed relevance references. Slot repairs must preserve the frozen
+one-to-one allocation. A source-grounded mapping is required; `UNRESOLVED` returns to
+bounded correction, with the existing explicit Genesis expansion path preserved.
+
+Semantic normalization builds and fully validates the candidate packet before staging
+metadata. Metadata errors consume metadata attempts, never another accepted artistic
+request. A pending normalization response survives an interrupted focused lookup.
+Each focused lookup permits three attempts within the frozen analysis, context, and
+cumulative token budgets. Raw responses are immutable; successful and failed lookup
+attempts are ledgered once, and field-level repair history is included in the parent
+commit. Cached resolutions require the same invalid value, type, candidates, path,
+and usage context.
+New-run budget derivation adds a pooled allowance of three successful reference
+repairs per possible scene/ending chunk to the existing analysis allowance. The
+corresponding cumulative token ceilings freeze with the run; this capacity never
+causes calls when references are already valid.
+
 Committed chunks collectively own the original plan. If the provider truncates an
 uncommitted single-content chunk, preserve the failed response and retry once with a larger allowance only
 when the frozen model context leaves the safety reserve intact.
@@ -173,10 +204,10 @@ constraints, hard future obligations, direct source evidence, relevant knowledge
 attractor prerequisites, original evidence, motif/branch residue, local recent prose,
 soft pressure. A lower-priority section is omitted before a hard record is sliced.
 
-Creative packets emit their own structured deltas. There is no routine secondary
-index call. A future noncreative analysis call may classify constraints or feasibility
-only if deterministic/packet-emitted data proves insufficient; it can never return
-replacement prose.
+Each artistic packet is followed by a temperature-zero, source-grounded metadata
+normalization call. Focused reference calls run only when invalid references remain.
+Noncreative analysis can classify constraints or feasibility and resolve declared
+references; it can never return replacement prose.
 
 ## 5. Prospective Foreclosure
 

@@ -78,10 +78,29 @@ allocation, Markdown, reference, and length validation before it is staged for s
 normalization and reused after a pause. Length corrections occur before staging;
 metadata normalization cannot shorten preserved prose.
 
+Invalid references receive automatic focused resolution throughout Genesis,
+Architecture, packet plans, scenes, endings, and semantic metadata. After deterministic
+aliases, the model receives the invalid field, source context, and typed valid targets;
+it returns only an exact identifier or `UNRESOLVED`. Repairs change reference fields
+before commit and preserve literary bytes. Missing targets or unsupported mappings
+remain subject to bounded correction rather than invented replacements.
+
+Metadata must pass complete packet validation before staging. A paused lookup retains
+the original artistic and pending metadata responses, so resume continues resolution
+without repeating either accepted request. Each lookup has three attempts within the
+frozen analysis and token budgets. Its raw responses and ledger entries retain token
+accounting; the containing commit includes `named-reference-repair.json`. Successful
+lookup costs are already ledgered and are not charged again at artistic commit.
+New runs reserve three successful reference repairs per possible scene/ending chunk
+in addition to the existing analysis allowance; unused capacity makes no calls. This
+allowance is pooled across the run. Cumulative token ceilings use the resulting
+analysis-step count and remain frozen at run creation.
+
 Each scene or ending chunk has a 1,200-word ceiling including nested artifact prose.
 The logical packet's 4,800-word target is guidance only. The whole-work ceiling is
 1,200 times the maximum scene-plus-ending count: a 20-scene request with five maximum
-endings permits 30,000 literary words. Creative-step and token safeguards are unchanged.
+endings permits 30,000 literary words. Creative-step and per-request token safeguards
+are unchanged; cumulative limits include the reserved reference-repair capacity.
 New runs freeze this policy in their engine snapshot; existing runs continue using
 their original snapshot and budgets.
 

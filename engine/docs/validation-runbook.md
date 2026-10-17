@@ -37,6 +37,20 @@ preserving artistic prose or requesting semantic normalization. A length overrun
 an uncommitted payload correction, never a metadata correction. The 4,800-word logical
 packet target is guidance only; whole-work literary limits remain hard safeguards.
 
+Reference failures are resolved before commit using typed declared-target catalogs
+and the focused `engine/prompts/resolve-reference.md` instruction. Only an exact
+listed identifier or `UNRESOLVED` is accepted. Check reference-repair history against
+immutable raw responses and confirm that literary strings did not change. Complete
+packet validation must precede metadata staging; a metadata error must not spend an
+artistic correction attempt. Missing content and committed-history corruption retain
+their existing failure handling.
+
+Offline verification: run `python3 -B -m unittest discover -s engine/tests`, then
+`python3 -B engine/tests/validate-generation-protocol.py`. The reference-resolution
+suite includes a synthetic 20-scene run through `READY_TO_PLAY`, exercising real
+validation, commits, projection, baseline build, accounting, and automatic repairs
+with only provider responses replaced. It creates no fiction in the installation.
+
 ## 3. Mechanical and Continuity Validation
 
 Run every mechanical check in `engine/canon/acceptance-tests.md`, including protocol,

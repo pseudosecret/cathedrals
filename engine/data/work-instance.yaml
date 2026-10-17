@@ -439,7 +439,7 @@ format_selection:
   renpy_bootstrap_active: false
 
 generation_budget:
-  calculation_version: 6
+  calculation_version: 7
   primary_scale_input: possible_scene_count
   words_per_token_assumption: 0.75
   max_prepared_context_tokens: 49152
@@ -455,6 +455,7 @@ generation_budget:
   minimum_model_context_window_tokens: 64148
   minimum_model_output_tokens: 15000
   max_analysis_output_tokens: 15000
+  reference_repair_allowance_per_chunk: 3
   max_creative_step_count: derived_per_run
   max_analysis_step_count: derived_per_run
   max_cumulative_input_tokens: derived_per_run
@@ -473,6 +474,9 @@ generation_budget:
     creative_steps: >
       three Genesis records + one Architecture core + ceil(packet_plan_count / 8)
       plan batches + worst-case one committed chunk per scene or ending
+    analysis_steps: >
+      max(4, ceil(possible_scene_count / 3) + ceil(ending_hard_max / 2) + 2)
+      + reference_repair_allowance_per_chunk * (possible_scene_count + ending_hard_max)
     constraint_events: "max(1000, possible_scene_count * 45)"
   preflight_rules:
     - "The 4,800-word logical packet target is guidance, not a shared hard ceiling or equal per-chunk allocation."

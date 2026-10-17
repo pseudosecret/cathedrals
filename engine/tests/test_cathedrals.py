@@ -1255,7 +1255,7 @@ class CathedralsRunnerTests(unittest.TestCase):
     def test_packet_semantic_request_constrains_sources_to_authored_slots(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary) / "generation_test"
-            for name in ("state", "raw", ".staging"):
+            for name in ("state", "raw", ".staging", "committed"):
                 (run / name).mkdir(parents=True)
             RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
             RUNNER.write_json(run / "generation-brief.json", {
@@ -1287,11 +1287,16 @@ class CathedralsRunnerTests(unittest.TestCase):
         }
         corrected = genesis_semantic_payload("scene_slot_0001")
         invalid = copy.deepcopy(corrected)
+        invalid["canonical_facts"] = []
         invalid["knowledge_changes"] = [{
             "source": {"technical_slot_id": "scene_slot_0001"},
             "subject_id": "claimant_01", "relation": "knows",
             "proposition_id": "fact_missing", "action": "establish", "relevance": {},
         }]
+        records = mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind:
+            {"claimants": genesis_foundation_fixture()["claimant_anchors"]} if kind == "genesis" else None)
+        records.start()
+        self.addCleanup(records.stop)
 
         def response(payload):
             return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(payload)}}]}
@@ -1338,7 +1343,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 RUNNER.request_record(run, **arguments)
             self.assertEqual(transport.call_count, 3)
             correction_prompt = transport.call_args.args[2]["messages"][1]["content"]
-            self.assertIn("unknown proposition fact_missing", correction_prompt)
+            self.assertIn("Cannot resolve proposition reference fact_missing", correction_prompt)
             self.assertIn("Immutable prose.", correction_prompt)
             self.assertEqual(RUNNER.read_json(run / ".staging/packet_one.semantic.json"), corrected)
             self.assertTrue((run / "raw/packet_one-semantic-attempt2.api.json").exists())
@@ -1357,7 +1362,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         for raw_attempts, ledger_attempt, expected in (((1, 10), 0, 11), ((1, 10), 2, 11), ((1, 2), 10, 11)):
             with self.subTest(raw_attempts=raw_attempts, ledger_attempt=ledger_attempt), tempfile.TemporaryDirectory() as temporary:
                 run = Path(temporary) / "generation_test"
-                for name in ("state", "raw", ".staging"):
+                for name in ("state", "raw", ".staging", "committed"):
                     (run / name).mkdir(parents=True)
                 RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
                 RUNNER.write_json(run / "generation-brief.json", {
@@ -1392,7 +1397,7 @@ class CathedralsRunnerTests(unittest.TestCase):
     def test_semantic_resume_grants_three_more_corrections_without_overwrites(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary) / "generation_test"
-            for name in ("state", "raw", ".staging"):
+            for name in ("state", "raw", ".staging", "committed"):
                 (run / name).mkdir(parents=True)
             RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
             RUNNER.write_json(run / "generation-brief.json", {
@@ -3005,7 +3010,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(derived["scope"]["ending_hard_max"], 5)
         self.assertEqual(derived["budgets"]["max_total_literary_words"], 30000)
         self.assertEqual(derived["budgets"]["max_creative_step_count"], 30)
-        self.assertEqual(derived["budgets"]["max_cumulative_output_tokens"], 1161000)
+        self.assertEqual(derived["budgets"]["max_cumulative_output_tokens"], 2286000)
 
     def test_chunk_word_boundaries_include_artifacts_for_scenes_and_endings(self):
         for kind in ("literary", "ending"):
