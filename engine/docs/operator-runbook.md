@@ -75,8 +75,8 @@ Generation and analysis requests stream through the OpenAI-compatible Chat Compl
 endpoint, requesting usage totals. The launcher prints request-start status and, as
 chunks arrive, elapsed time and received-character counts at most every 15 seconds.
 It does not print generated content or reasoning. `CATHEDRALS_HTTP_TIMEOUT` defaults
-to 3,600 seconds of socket inactivity, including the wait for initial output; an
-active stream may run longer than one hour. Ordinary JSON responses remain supported.
+to 5,400 seconds of socket inactivity, including the wait for initial output; an
+active stream may run longer than ninety minutes. Ordinary JSON responses remain supported.
 The HTTP reader has no overall generation deadline.
 
 Timeouts and interrupted streams use `provider_incomplete_response` and immediately
@@ -84,7 +84,7 @@ pause, without another automatic generation request. Check the named diagnostic
 before resuming: the server may still be finishing the abandoned request. Raw
 `*.api.sse` archives and incomplete `*.api.json` envelopes are retained per attempt;
 partial streams cannot commit. A complete saved stream can be replayed without a
-provider call. Explicit token-limit truncation retains its bounded expanded retry.
+provider call. Scene and ending token-limit truncation retains its bounded expanded retry.
 Other failures before a response retain bounded retries with identical requests.
 
 Retry transport/provider failures under the provider law. Invalid uncommitted output
@@ -101,14 +101,31 @@ it returns only an exact identifier or `UNRESOLVED`. Repairs change reference fi
 before commit and preserve literary bytes. Missing targets or unsupported mappings
 remain subject to bounded correction rather than automatic invented replacements.
 
-Architecture stages its structurally valid draft before reference resolution. Its
-focused lookup returns typed existing targets or `UNRESOLVED`. For an unresolved
-reference, the model may correct that field, remove an erroneous list entry when
-validation permits, or author one missing local obligation or attractor. Claimants,
-committed sources, and unrelated draft content cannot change. Schema bounds, typed
-references, dependency checks, and frozen analysis/context/token budgets still apply.
-Each accepted repair is persisted once; pause/resume reuses both the draft and accepted
-repairs. Repair exhaustion pauses without requesting the whole Architecture again.
+Planning makes one broad draft request for the core and each plan batch. Malformed,
+truncated, or invalid drafts then use one field value per request; the engine builds
+the JSON containers and IDs. Complete parsed top-level members survive malformed JSON;
+missing delimiters and missing content are never inferred. Interrupted streams pause
+first, saving those members for focused completion on explicit resume. Every field
+request includes the whole assembled draft, Genesis, staged plans, and pending hints.
+If that full context exceeds the frozen budget, pause or fail without silently clipping it.
+Each value gets three attempts per invocation; accepted values, including false, zero,
+and empty arrays, survive pause/resume without another broad request.
+
+Planning catalogs include allocated scene and ending slots before Architecture exists.
+Motif-event aliases use their exact recorded motif IDs. For an unresolved reference,
+the model selects an existing typed target or authors a missing local obligation or
+attractor one value at a time. Unknown relevance hints can instead become explicit
+earlier setup instructions; they are retained with their original field and text,
+not invented runtime state variables. `UNRESOLVED` is never cached as a successful
+mapping. Claimants, committed sources, and accepted unrelated content remain fixed.
+
+The core and every plan batch stay in `.staging/*.planning.json` until backward setup
+placement is complete. Ending seed conditions, prerequisite obligations, and preserved
+hints receive an earlier scene slot and an authored setup instruction, attached to
+packet guidance with lawful dependencies. Only after the complete plan passes schema,
+reference, dependency, and setup checks does the engine commit it and request prose.
+Commits include `planning-draft.json` and field-response evidence. Scene and ending
+prose still uses coherent bounded requests, without field-by-field literary generation.
 
 Metadata must pass complete packet validation before staging. A paused lookup retains
 the original artistic and pending metadata responses, so resume continues resolution
@@ -119,13 +136,15 @@ lookup costs are already ledgered and are not charged again at artistic commit.
 New runs reserve three successful reference repairs per possible scene/ending chunk
 in addition to the existing analysis allowance; unused capacity makes no calls. This
 allowance is pooled across the run. Cumulative token ceilings use the resulting
-analysis-step count and remain frozen at run creation.
+analysis-step count and remain frozen at run creation. Calculation version 8 also
+reserves three attempts per schema-bounded planning field and per backward setup
+value. This conservative recovery ceiling is capacity, not a forecast of calls or cost.
 
 Each scene or ending chunk has a 1,200-word ceiling including nested artifact prose.
 The logical packet's 4,800-word target is guidance only. The whole-work ceiling is
 1,200 times the maximum scene-plus-ending count: a 20-scene request with five maximum
 endings permits 30,000 literary words. Creative-step and per-request token safeguards
-are unchanged; cumulative limits include the reserved reference-repair capacity.
+are unchanged; cumulative limits include reference and planning recovery capacity.
 New runs freeze this policy in their engine snapshot; existing runs continue using
 their original snapshot and budgets.
 

@@ -1,0 +1,203 @@
+{
+  "generation_id": "cathedrals_20261022_171453_a2ac2e",
+  "scope_commitment": {
+    "planned_artifact_count": 5,
+    "planned_ending_count": 5,
+    "planned_formal_composition_count": 2,
+    "planned_scene_count": 20,
+    "possible_scene_count": 20
+  },
+  "annotations": [
+    {
+      "packet_slot_id": "literary_packet_0001",
+      "relevance": {
+        "arc_ids": [
+          "arc_001",
+          "arc_002"
+        ],
+        "branch_ids": [],
+        "character_ids": [
+          "character_001",
+          "character_002"
+        ],
+        "claimant_ids": [
+          "claimant_01",
+          "claimant_02",
+          "claimant_03"
+        ],
+        "location_ids": [],
+        "motif_ids": [
+          "lipstick_mark_on_glass",
+          "lamp_cross_legged_at_317"
+        ],
+        "object_ids": [],
+        "state_keys": [
+          "intro_phase",
+          "first_contact_established"
+        ],
+        "technical_slot_ids": [
+          "claimant_slot_01",
+          "claimant_slot_02",
+          "claimant_slot_03",
+          "character_slot_001",
+          "character_slot_002",
+          "scene_slot_0001",
+          "scene_slot_0002",
+          "scene_slot_0003",
+          "scene_slot_0004",
+          "scene_slot_0005",
+          "scene_slot_0006"
+        ]
+      }
+    },
+    {
+      "packet_slot_id": "literary_packet_0002",
+      "relevance": {
+        "arc_ids": [
+          "arc_004",
+          "arc_005",
+          "arc_003"
+        ],
+        "branch_ids": [],
+        "character_ids": [
+          "character_003",
+          "character_004"
+        ],
+        "claimant_ids": [
+          "claimant_04",
+          "claimant_05",
+          "claimant_06"
+        ],
+        "location_ids": [],
+        "motif_ids": [
+          "single_object_near_table",
+          "temperature_fluctuation_no_cause",
+          "dust_settling_unevenly"
+        ],
+        "object_ids": [],
+        "state_keys": [
+          "branch_depth_reached",
+          "sketchbook_accumulation_started",
+          "ledger_fourth_cycle"
+        ],
+        "technical_slot_ids": [
+          "claimant_slot_04",
+          "claimant_slot_05",
+          "claimant_slot_06",
+          "character_slot_003",
+          "character_slot_004",
+          "scene_slot_0007",
+          "scene_slot_0008",
+          "scene_slot_0009",
+          "scene_slot_0010",
+          "scene_slot_0011",
+          "scene_slot_0012"
+        ]
+      }
+    },
+    {
+      "packet_slot_id": "literary_packet_0003",
+      "relevance": {
+        "arc_ids": [
+          "arc_006",
+          "arc_007"
+        ],
+        "branch_ids": [],
+        "character_ids": [
+          "character_001",
+          "character_002",
+          "character_003",
+          "character_004"
+        ],
+        "claimant_ids": [
+          "claimant_01",
+          "claimant_02",
+          "claimant_03",
+          "claimant_04",
+          "claimant_05",
+          "claimant_06"
+        ],
+        "location_ids": [],
+        "motif_ids": [
+          "lipstick_mark_on_glass",
+          "unpacked_boxes_sealed",
+          "temperature_fluctuation_no_cause",
+          "dust_settling_unevenly"
+        ],
+        "object_ids": [],
+        "state_keys": [
+          "reconvergence_node_reached",
+          "final_accusation_pending",
+          "contamination_threshold_met"
+        ],
+        "technical_slot_ids": [
+          "claimant_slot_01",
+          "claimant_slot_02",
+          "claimant_slot_03",
+          "claimant_slot_04",
+          "claimant_slot_05",
+          "claimant_slot_06",
+          "character_slot_001",
+          "character_slot_002",
+          "character_slot_003",
+          "character_slot_004",
+          "scene_slot_0013",
+          "scene_slot_0014",
+          "scene_slot_0015",
+          "scene_slot_0016",
+          "scene_slot_0017",
+          "scene_slot_0018",
+          "scene_slot_0019",
+          "scene_slot_0020"
+        ]
+      }
+    },
+    {
+      "packet_slot_id": "ending_packet_0001",
+      "relevance": {
+        "arc_ids": [
+          "arc_001"
+        ],
+        "branch_ids": [],
+        "claimant_ids": [
+          "claimant_02"
+        ],
+        "keywords": [
+          "vindication",
+          "acceptance",
+          "genie_understood"
+        ]
+      }
+    },
+    {
+      "packet_slot_id": "ending_packet_0002",
+      "relevance": {
+        "arc_ids": [
+          "arc_001"
+        ],
+        "branch_ids": [],
+        "claimant_ids": [
+          "claimant_01",
+          "claimant_02"
+        ],
+        "keywords": [
+          "vindication",
+          "acceptance",
+          "genie_understood"
+        ]
+      }
+    }
+  ],
+  "original_motif_references": [
+    "motif_event_a3a2c0675c0f2c0d",
+    "motif_event_52bcb9839d622837"
+  ],
+  "motif_aliases": {
+    "motif_event_a3a2c0675c0f2c0d": "lipstick_mark_on_glass",
+    "motif_event_52bcb9839d622837": "lamp_cross_legged_at_317",
+    "motif_event_9b5dc6fbfa4a131e": "unpacked_boxes_sealed",
+    "motif_event_9a2370a4f2180ae7": "single_object_near_table",
+    "motif_event_92068323778309a6": "temperature_fluctuation_no_cause",
+    "motif_event_bcd83a6f02043c74": "dust_settling_unevenly"
+  }
+}

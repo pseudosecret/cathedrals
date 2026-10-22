@@ -485,6 +485,27 @@ def grouped_counts(total: int, target: int, minimum: int, maximum: int) -> list[
     return groups
 
 
+def planning_recovery_allowance(plan_batch_count: int) -> int:
+    protocol = load_protocol()
+
+    def fields(node):
+        if "$ref" in node:
+            return fields(_resolve_pointer(protocol, node["$ref"]))
+        if node.get("type") == "object":
+            return sum(fields(item) for item in node.get("properties", {}).values())
+        if node.get("type") == "array":
+            item = planning_schema_node(node.get("items", {}), protocol)
+            if item.get("type") == "object":
+                return 1 + node.get("maxItems", 256) * fields(item)
+        return 1
+
+    core = protocol["$defs"]["architectureCorePayload"]
+    batch = protocol["$defs"]["architecturePlanBatchPayload"]
+    seeds = core["properties"]["attractors"]["maxItems"] * (protocol["$defs"]["stringList"]["maxItems"] + core["properties"]["obligation_graph"]["maxItems"])
+    hints = plan_batch_count * PLAN_BATCH_SIZE * protocol["$defs"]["stringList"]["maxItems"]
+    return 3 * (fields(core) + plan_batch_count * fields(batch) + 2 * (seeds + hints))
+
+
 def derive_scope(possible_scene_count: int) -> dict:
     count = possible_scene_count
     profile = "pilot" if count <= 18 else "standard" if count <= 50 else "large" if count <= 100 else "cathedral"
@@ -501,6 +522,7 @@ def derive_scope(possible_scene_count: int) -> dict:
     max_analysis_steps = (
         max(4, math.ceil(count / 3) + math.ceil(ending_max / 2) + 2)
         + REFERENCE_REPAIRS_PER_CHUNK * (count + ending_max)
+        + planning_recovery_allowance(plan_batch_count)
     )
     return {
         "scope": {
@@ -1375,6 +1397,7 @@ def commit_record(
     context: str,
     parameters: dict,
     branch_relation: str,
+    usage_already_ledgered: bool = False,
 ) -> Path:
     reconcile_run(run_dir)
     state = load_state(run_dir)
@@ -1400,7 +1423,7 @@ def commit_record(
     constraint_events = make_constraint_events(run_dir, record, commit_id, record_hash, planned_step_id)
     constraint_hash = sha256_bytes(b"".join(canonical_json(item) for item in constraint_events))
     state_after = sha256_bytes(f"{state['canonical_state_hash']}:{record_hash}:{constraint_hash}".encode())
-    usage = dict(api_response.get("usage", {})) if isinstance(api_response, dict) else {}
+    usage = dict(api_response.get("usage", {}) or {}) if isinstance(api_response, dict) and not usage_already_ledgered else {}
     semantic_api_path = run_dir / ".staging" / f"{planned_step_id}.semantic.api.json"
     if semantic_api_path.exists():
         semantic_usage = read_json(semantic_api_path).get("usage", {})
@@ -1409,7 +1432,7 @@ def commit_record(
     repair_path = run_dir / ".staging" / f"{planned_step_id}.repair.json"
     if repair_path.exists():
         for repair in read_json(repair_path)["history"]:
-            repair_usage = repair["api_response"].get("usage", {})
+            repair_usage = (repair["api_response"].get("usage") or {})
             for key in ("prompt_tokens", "completion_tokens"):
                 usage[key] = (usage.get(key) or 0) + (repair_usage.get(key) or 0)
     entry = new_ledger_entry(
@@ -1447,6 +1470,7 @@ def commit_record(
     write_atomic(staging / "api-response.json", api_bytes)
     supplemental = []
     for suffix, target in (
+        (".planning.json", "planning-draft.json"),
         (".artistic.json", "artistic-payload.json"),
         (".artistic.txt", "artistic-response.txt"),
         (".artistic.api.json", "artistic-api-response.json"),
@@ -1601,6 +1625,21 @@ def assembled_architecture(run_dir: Path) -> dict | None:
     if not batches or len(batches) != batches[0]["batch_count"]:
         return None
     return architecture_from_parts(core, batches)
+
+
+def planning_core(run_dir: Path) -> dict | None:
+    record = committed_record(run_dir, "architecture_core")
+    path = run_dir / ".staging/architecture_core.planning.json"
+    return record or (read_json(path).get("record") if path.exists() else None)
+
+
+def planning_batches_view(run_dir: Path) -> list[dict]:
+    records = {item["batch_sequence"]: item for item in committed_records(run_dir, "architecture_plan_batch")}
+    for path in sorted((run_dir / ".staging").glob("architecture_plan_batch_*.planning.json")):
+        record = read_json(path).get("record")
+        if record:
+            records.setdefault(record["batch_sequence"], record)
+    return [records[key] for key in sorted(records)]
 
 
 def architecture_from_parts(core: dict, batches: list[dict]) -> dict:
@@ -2026,7 +2065,7 @@ def request_record(
                     transport,
                     api_url(brief["lm_studio_base_url"], "/v1/chat/completions"),
                     payload,
-                    float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "3600")),
+                    float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")),
                     started_at=inflight["started_at"],
                     preserve=lambda value: write_json(response_path, value, mode=0o444, exclusive=True),
                     stream_path=response_path.with_suffix(".sse"),
@@ -2144,13 +2183,16 @@ def named_reference_issues(run_dir: Path, payload: dict, definition: str, *, pla
     genesis = committed_record(run_dir, "genesis") or {}
     foundation = committed_record(run_dir, "genesis_foundation") or {}
     cast = committed_record(run_dir, "genesis_cast") or {}
-    architecture = committed_record(run_dir, "architecture") or committed_record(run_dir, "architecture_core") or {}
+    architecture = committed_record(run_dir, "architecture") or planning_core(run_dir) or {}
     claimants = {item["claimant_id"]: item for item in genesis.get("claimants", foundation.get("claimant_anchors", []))}
     characters = {item["character_id"]: item for item in cast.get("characters", [])}
     arcs = {item["arc_id"]: item for item in architecture.get("arcs", [])}
     attractors = {item["attractor_id"]: item for item in architecture.get("attractors", [])}
     obligations = {key: event["data"] for key, event in _read_state_map(run_dir, "obligations.json").items()}
     plans = {item["packet_slot_id"]: item for item in architecture.get("packet_plans", [])}
+    if architecture.get("scope_commitment"):
+        plans = {item["packet_slot_id"]: item for item in planned_packet_specs(architecture)} | plans
+    plans |= {item["packet_slot_id"]: item for item in specs or []}
     slots = {item["technical_slot_id"]: item for item in list(claimants.values()) + list(characters.values())}
     literary_slots = {slot: item for item in plans.values() for slot in item["scene_slot_ids"] + item["ending_slot_ids"]}
     slots |= literary_slots
@@ -2215,7 +2257,11 @@ def named_reference_issues(run_dir: Path, payload: dict, definition: str, *, pla
         expected = {item["packet_slot_id"]: item for item in specs}
         present = {item["packet_slot_id"] for item in payload["packet_plans"]}
         missing = {key: item for key, item in expected.items() if key not in present}
-        previous = {item["packet_slot_id"]: item for batch in committed_records(run_dir, "architecture_plan_batch") for item in batch["packet_plans"]}
+        previous = {item["packet_slot_id"]: item for batch in planning_batches_view(run_dir) for item in batch["packet_plans"]
+                    if item["packet_slot_id"] not in expected}
+        allocation_order = list(plans)
+        first_index = min((allocation_order.index(key) for key in expected if key in allocation_order), default=len(allocation_order))
+        previous = {key: item for key, item in previous.items() if key in allocation_order[:first_index]}
         order = list(expected)
         for index, item in enumerate(payload["packet_plans"]):
             path = ("packet_plans", index)
@@ -2287,16 +2333,18 @@ def named_reference_issues(run_dir: Path, payload: dict, definition: str, *, pla
 
 
 def record_reference_answer(run_dir: Path, answer: dict) -> None:
-    if step_is_committed(run_dir, answer["step_id"]):
+    if any(item["planned_step_id"] == answer["step_id"] and item["attempt"] == answer["attempt"]
+           for item in ledger_entries(run_dir)):
         return
+    resolved = answer["result"] != "UNRESOLVED"
     state = load_state(run_dir)
     entry = new_ledger_entry(run_dir, planned_step_id=answer["step_id"], attempt=answer["attempt"],
         step_type="analysis", step_phase="validation", parent_state_hash=state["canonical_state_hash"],
         prompt_hash=answer["prompt_hash"], context_hash=answer["context_hash"], provider="LM Studio", model=state["model"],
         parameters=answer["parameters"], seed=answer["parameters"]["seed"], started_at=answer["api_response"].get("_cathedrals_started_at", utc_now()),
         output_hash=sha256_bytes(answer["result"].encode()), generated_ids=[], past_constraint_ids=[], future_obligation_ids=[],
-        motif_ids=[], branch_relation=None, commit_status="COMMITTED", state_hash_after=state["canonical_state_hash"],
-        failure_class="none", usage=answer["api_response"].get("usage", {}))
+        motif_ids=[], branch_relation=None, commit_status="COMMITTED" if resolved else "FAILED_BEFORE_COMMIT", state_hash_after=state["canonical_state_hash"],
+        failure_class="none" if resolved else "mechanical_validation", usage=answer["api_response"].get("usage", {}))
     append_ledger_entry(run_dir, entry)
     entries = ledger_entries(run_dir)
     state["ledger_sequence"] = len(entries)
@@ -2331,7 +2379,7 @@ def resolve_named_reference(run_dir: Path, step_id: str, issue: dict, transport=
     audit_path = run_dir / ".staging" / f"{step_id}.references.json"
     audit = read_json(audit_path) if audit_path.exists() else {"history": []}
     for entry in audit["history"]:
-        if entry["step_id"] == repair_step:
+        if entry["step_id"] == repair_step and entry["result"] != "UNRESOLVED":
             record_reference_answer(run_dir, entry)
             return entry["result"]
     prompt = render_prompt(run_dir, "resolve-reference.md", {
@@ -2360,7 +2408,7 @@ def resolve_named_reference(run_dir: Path, step_id: str, issue: dict, transport=
                 completed = sum(entry["step_type"] == "analysis" and entry["commit_status"] == "COMMITTED" for entry in ledger_entries(run_dir))
                 if completed + successful_structural_repair_count(run_dir) >= budgets.get("max_analysis_step_count", float("inf")):
                     raise CathedralsError("Reference resolution", "Reference request exceeds max_analysis_step_count", "budget_exhaustion")
-                usage = [read_json(path).get("usage", {}) for path in (run_dir / "raw").glob("*.api.json")]
+                usage = [(read_json(path).get("usage") or {}) for path in (run_dir / "raw").glob("*.api.json")]
                 for key, ceiling, reserve in (
                     ("prompt_tokens", "max_cumulative_input_tokens", math.ceil(len((prompt + feedback).encode()) / 3)),
                     ("completion_tokens", "max_cumulative_output_tokens", maximum),
@@ -2371,7 +2419,7 @@ def resolve_named_reference(run_dir: Path, step_id: str, issue: dict, transport=
                     {"role": "system", "content": "Resolve one reference in uncommitted structured data. Return only an identifier or UNRESOLVED."},
                     {"role": "user", "content": prompt + feedback}], **parameters}
                 response, answer = provider_response(transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
-                    float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "3600")), started_at=started,
+                    float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")), started_at=started,
                     preserve=lambda value: write_json(response_path, value, mode=0o444, exclusive=True),
                     stream_path=response_path.with_suffix(".sse"), plain_answers=allowed | {"UNRESOLVED"})
             else:
@@ -2404,6 +2452,14 @@ def repair_named_references(run_dir: Path, step_id: str, payload: dict, definiti
     if any(error[1] not in {"enum", "const", "pattern"} for error in errors):
         validate_json_schema(payload, schema)
     value = copy.deepcopy(payload)
+    motif_aliases = {item["motif_event_id"]: item["motif_id"]
+                     for record in all_committed_records(run_dir)
+                     for item in record.get("constraint_delta", {}).get("motif_events", [])}
+    for item in _walk(value):
+        if isinstance(item, dict) and isinstance(item.get("relevance"), dict):
+            tags = item["relevance"]
+            if "motif_ids" in tags:
+                tags["motif_ids"] = [motif_aliases.get(identifier, identifier) for identifier in tags["motif_ids"]]
     if definition == "architectureCorePayload":
         value = normalize_architecture_core_payload(value, run_dir)
     elif definition == "semanticDeltaPayload":
@@ -3587,7 +3643,7 @@ def build_architecture_plan_batch(run_dir: Path, payload: dict, specs: list[dict
     annotations = {item["packet_slot_id"]: item for item in payload["packet_plans"]}
     plans = [spec | annotations[spec["packet_slot_id"]] for spec in specs]
     return record_envelope(run_dir, "architecture_plan_batch", f"architecture_plan_batch_{sequence:04d}") | {
-        "architecture_core_commit_id": committed_record(run_dir, "architecture_core")["commit_id"],
+        "architecture_core_commit_id": planning_core(run_dir)["commit_id"],
         "story_format": "web", "batch_sequence": sequence, "batch_count": count, "packet_plans": plans,
     }
 
@@ -3604,11 +3660,12 @@ def request_architecture_analysis(
     run_dir: Path, step_id: str, prompt: str, schema: dict, transport, validator=None,
     *, phase="architecture", system_prompt="Repair only the identified uncommitted Architecture fields. Return JSON only.",
     response_name="architectureRepair", pause_stage="Architecture repair",
+    value_mode=False, initial_draft=False, temperature=0.0, max_tokens=None,
 ):
     brief = read_json(run_dir / "generation-brief.json")
     seed = step_seed(brief["generation_seed"], step_id)
-    maximum = read_json(run_dir / "run-manifest.json")["budgets"]["max_analysis_output_tokens"]
-    parameters = {"temperature": 0.0, "max_tokens": maximum, "seed": seed, "stream": True, "stream_options": {"include_usage": True}}
+    maximum = max_tokens or read_json(run_dir / "run-manifest.json")["budgets"]["max_analysis_output_tokens"]
+    parameters = {"temperature": temperature, "max_tokens": maximum, "seed": seed, "stream": True, "stream_options": {"include_usage": True}}
     feedback = ""
     for correction in range(3):
         current_prompt = prompt + feedback
@@ -3617,6 +3674,8 @@ def request_architecture_analysis(
         response_path = run_dir / "raw" / f"{step_id}-attempt{attempt}.api.json"
         started = utc_now()
         response = read_json(response_path) if response_path.exists() else None
+        request_meta = {"step_id": step_id, "attempt": attempt, "parameters": parameters,
+                        "prompt_hash": sha256_bytes(current_prompt.encode()), "context_hash": sha256_bytes(prompt.encode())}
         try:
             if response is None:
                 budgets = read_json(run_dir / "run-manifest.json")["budgets"]
@@ -3627,7 +3686,7 @@ def request_architecture_analysis(
                     raise CathedralsError(pause_stage, "Repair exceeds the frozen context budget", "budget_exhaustion")
                 if load_state(run_dir).get("analysis_step_count", 0) + successful_structural_repair_count(run_dir) >= budgets.get("max_analysis_step_count", float("inf")):
                     raise CathedralsError(pause_stage, "Repair exceeds max_analysis_step_count", "budget_exhaustion")
-                usage = [read_json(path).get("usage", {}) for path in (run_dir / "raw").glob("*.api.json")]
+                usage = [(read_json(path).get("usage") or {}) for path in (run_dir / "raw").glob("*.api.json")]
                 for key, ceiling, reserve in (("prompt_tokens", "max_cumulative_input_tokens", prompt_tokens),
                                                ("completion_tokens", "max_cumulative_output_tokens", maximum)):
                     if sum(item.get(key) or 0 for item in usage) + reserve > budgets.get(ceiling, float("inf")):
@@ -3641,19 +3700,32 @@ def request_architecture_analysis(
                     **parameters,
                     "response_format": {"type": "json_schema", "json_schema": {"name": response_name, "strict": True, "schema": schema}},
                 }
+                if value_mode and schema.get("type") == "string":
+                    request.pop("response_format")
                 response, content = provider_response(
                     transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
-                    float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "3600")), started_at=started,
-                    preserve=lambda value: write_json(response_path, value, mode=0o444, exclusive=True),
+                    float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")), started_at=started,
+                    preserve=lambda value: write_json(response_path, value | {"_cathedrals_request": request_meta}, mode=0o444, exclusive=True),
                     stream_path=response_path.with_suffix(".sse"),
+                    plain_answers=set(schema["enum"]) if value_mode and schema.get("type") == "string" and "enum" in schema else None,
                 )
             else:
                 content = normalize_provider_response(response)
-            authored = parse_structured_content(content)
+            if value_mode and schema.get("type") == "string":
+                authored = content
+                if content.strip().startswith('"'):
+                    try:
+                        decoded = json.loads(content)
+                        if isinstance(decoded, str):
+                            authored = decoded
+                    except json.JSONDecodeError:
+                        pass
+            else:
+                authored = parse_structured_content(content)
             validate_json_schema(authored, schema)
             if validator:
                 validator(authored)
-            return authored, response
+            return authored, response | {"_cathedrals_request": response.get("_cathedrals_request", request_meta)}
         except CathedralsError as error:
             if isinstance(error, (TruncationError, IncompleteResponseError)):
                 response = error.response
@@ -3665,6 +3737,8 @@ def request_architecture_analysis(
             )
             if isinstance(error, IncompleteResponseError):
                 raise PausedError(pause_stage, error.reason, error.failure_class) from error
+            if initial_draft and isinstance(error, (SchemaError, TruncationError)):
+                raise PausedError("Planning draft", error.reason) from error
             if error.failure_class not in RETRYABLE_PROVIDER_FAILURES and not isinstance(error, (SchemaError, TruncationError)):
                 raise
             if correction < 2:
@@ -3688,7 +3762,7 @@ def architecture_plan_schema_failure_count(run_dir: Path, step_id: str) -> int:
 def architecture_plan_repair_request(
     run_dir: Path, spec: dict, allowed_dependencies: list[str]
 ) -> tuple[str, dict]:
-    core = committed_record(run_dir, "architecture_core")
+    core = planning_core(run_dir)
     schema = architecture_plan_annotation_schema(run_dir, spec, allowed_dependencies)
     attractors = [
         item for item in core["attractors"]
@@ -4670,7 +4744,7 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
                 normalized, response = pending["payload"], read_json(response_path)
             else:
                 response, content = provider_response(transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
-                    float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "3600")), started_at=started,
+                    float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")), started_at=started,
                     preserve=lambda value: write_json(response_path, value, mode=0o444, exclusive=True),
                     stream_path=response_path.with_suffix(".sse"))
                 normalized = parse_structured_content(content)
@@ -4911,7 +4985,7 @@ def validate_architecture_core_for_run(record: dict, run_dir: Path) -> None:
 
 
 def validate_architecture_plan_batch(record: dict, run_dir: Path, expected_specs: list[dict], sequence: int, count: int) -> None:
-    core = committed_record(run_dir, "architecture_core")
+    core = planning_core(run_dir)
     if not core or record["architecture_core_commit_id"] != core["commit_id"]:
         raise SchemaError("Architecture plan batch does not descend from the committed core")
     if record["batch_sequence"] != sequence or record["batch_count"] != count:
@@ -4923,7 +4997,8 @@ def validate_architecture_plan_batch(record: dict, run_dir: Path, expected_specs
     fixed = ("packet_kind", "scene_slot_ids", "ending_slot_ids", "artifact_count", "formal_composition_count")
     allowed_dependencies = {
         plan["packet_slot_id"]
-        for batch in committed_records(run_dir, "architecture_plan_batch")
+        for batch in planning_batches_view(run_dir)
+        if batch["batch_sequence"] < sequence
         for plan in batch["packet_plans"]
     }
     for packet_id, spec in expected.items():
@@ -4933,7 +5008,7 @@ def validate_architecture_plan_batch(record: dict, run_dir: Path, expected_specs
             raise SchemaError(f"Architecture plan {packet_id} depends on an unfrozen future batch")
         allowed_dependencies.add(packet_id)
     if sequence == count:
-        batches = sorted(committed_records(run_dir, "architecture_plan_batch") + [record], key=lambda item: item["batch_sequence"])
+        batches = [item for item in planning_batches_view(run_dir) if item["batch_sequence"] < sequence] + [record]
         validate_architecture(architecture_from_parts(core, batches), read_json(run_dir / "run-manifest.json"), set(_source_index(run_dir)))
 
 
@@ -5157,7 +5232,7 @@ def architecture_plan_annotation_schema(
         "type": "array", "uniqueItems": True,
         **({"items": {"enum": allowed_dependencies}} if allowed_dependencies else {"maxItems": 0}),
     }
-    core = committed_record(run_dir, "architecture_core")
+    core = planning_core(run_dir)
     attractors = [
         item["attractor_id"] for item in core["attractors"]
         if spec["packet_kind"] != "ending" or item["kind"] == "ending"
@@ -5323,10 +5398,11 @@ def architecture_core_prompt(run_dir: Path) -> tuple[str, str]:
 
 def architecture_plan_prompt(run_dir: Path, specs: list[dict], sequence: int, count: int) -> tuple[str, str]:
     manifest = read_json(run_dir / "run-manifest.json")
-    core = committed_record(run_dir, "architecture_core")
+    core = planning_core(run_dir)
     prior_ids = [
         plan["packet_slot_id"]
-        for batch in committed_records(run_dir, "architecture_plan_batch")
+        for batch in planning_batches_view(run_dir)
+        if batch["batch_sequence"] < sequence
         for plan in batch["packet_plans"]
     ]
     scene_slots = {slot for spec in specs for slot in spec["scene_slot_ids"]}
@@ -5334,8 +5410,8 @@ def architecture_plan_prompt(run_dir: Path, specs: list[dict], sequence: int, co
     context = bounded_context(
         [
             ("IMMUTABLE GENESIS", committed_record(run_dir, "genesis")),
-            ("IMMUTABLE ARCHITECTURE CORE", core),
-            ("PRIOR FROZEN PACKET IDS", prior_ids),
+            ("VALIDATED STAGED ARCHITECTURE CORE", core),
+            ("PRIOR STAGED PACKET IDS", prior_ids),
             ("THIS BATCH THRESHOLD GEOMANCY", geomancy),
         ],
         manifest["budgets"]["max_prepared_context_tokens"] - 12000,
@@ -5606,6 +5682,532 @@ def execute_packet_plan(run_dir: Path, architecture: dict, plan: dict, transport
     return packet
 
 
+def save_planning_draft(run_dir: Path, step_id: str, state: dict) -> None:
+    write_json(run_dir / ".staging" / f"{step_id}.planning.json", state)
+
+
+def planning_value(run_dir: Path, step_id: str, state: dict, path: list, schema: dict,
+                   reason: str, transport, *, validator=None):
+    if "type" not in schema and schema.get("enum") and all(isinstance(item, str) for item in schema["enum"]):
+        schema = schema | {"type": "string"}
+    context = {
+        "assembled_draft": state["payload"], "pending_hints": state.get("hints", []),
+        "original_response": state.get("unassigned", []),
+        "genesis": committed_record(run_dir, "genesis"),
+    }
+    core = planning_core(run_dir)
+    if core:
+        context["assembled_core"] = core
+        context["allocations"] = planned_packet_specs(core)
+        context["assembled_plan_batches"] = planning_batches_view(run_dir)
+    task = {"path": path, "schema": schema, "reason": reason, "context": context}
+    signature = sha256_bytes(canonical_json(task))[:16]
+    if signature in state["values"]:
+        value = state["values"][signature]
+        validate_json_schema(value, schema)
+        if validator:
+            validator(value)
+        return value
+    prompt = (
+        "Repair or complete ONE planning value. The engine assembles the surrounding JSON.\n"
+        "Preserve accepted creative decisions. Reason backward from the desired payoff to its earlier setup.\n"
+        f"FIELD PATH\n{reference_path(path)}\n"
+        f"PURPOSE\n{reason}\n"
+        f"VALUE SCHEMA\n{json.dumps(schema, ensure_ascii=False)}\n"
+        "FULL ASSEMBLED PLANNING CONTEXT\n" + json.dumps(context, ensure_ascii=False, indent=2) +
+        "\nReturn only this value. For a string, return its text; for other types, return the JSON value. "
+        "Do not return a containing record, alternatives, or explanations."
+    )
+    repair_step = f"{step_id}_value_{signature}"
+    value, response = request_architecture_analysis(
+        run_dir, repair_step, prompt, schema, transport, validator,
+        system_prompt="Supply one authored planning value in its complete story context.",
+        response_name="planningValue", pause_stage=f"Planning value {reference_path(path)}", value_mode=True,
+    )
+    state["values"][signature] = value
+    repair_path = run_dir / ".staging" / f"{step_id}.repair.json"
+    audit = read_json(repair_path) if repair_path.exists() else {"history": []}
+    if not any(item["step_id"] == repair_step for item in audit["history"]):
+        audit["history"].append({"kind": "planning_value", "step_id": repair_step,
+                                 "path": path, "result": value, "api_response": response})
+        write_json(repair_path, audit)
+    save_planning_draft(run_dir, step_id, state)
+    return value
+
+
+def parsed_planning_prefix(content: str) -> dict:
+    """Retain complete top-level members; never infer missing JSON delimiters."""
+    decoder = json.JSONDecoder()
+    remaining = content.lstrip()
+    result = {}
+    if not remaining.startswith("{"):
+        return result
+    remaining = remaining[1:].lstrip()
+    while remaining and not remaining.startswith("}"):
+        try:
+            key, end = decoder.raw_decode(remaining)
+            if not isinstance(key, str) or key in result:
+                break
+            remaining = remaining[end:].lstrip()
+            if not remaining.startswith(":"):
+                break
+            value, end = decoder.raw_decode(remaining[1:].lstrip())
+            result[key] = value
+            remaining = remaining[1:].lstrip()[end:].lstrip()
+            if not remaining.startswith(","):
+                break
+            remaining = remaining[1:].lstrip()
+        except json.JSONDecodeError:
+            break
+    return result
+
+
+def staged_planning_request(run_dir: Path, step_id: str, prompt: str, context: str,
+                            schema: dict, transport) -> dict:
+    path = run_dir / ".staging" / f"{step_id}.planning.json"
+    if path.exists():
+        return read_json(path)
+    failed = False
+    interruption = None
+    try:
+        payload, response = request_architecture_analysis(
+            run_dir, step_id, prompt, schema, transport, initial_draft=True,
+            response_name="architectureCorePayload" if step_id == "architecture_core" else "architecturePlanBatchPayload",
+            pause_stage="Planning draft", temperature=0.7, max_tokens=BASE_OUTPUT_TOKENS,
+            system_prompt="Author the supplied complete planning draft. Return JSON only.",
+        )
+    except PausedError as error:
+        if not isinstance(error.__cause__, (SchemaError, TruncationError, IncompleteResponseError)):
+            raise
+        if isinstance(error.__cause__, IncompleteResponseError):
+            interruption = error
+        failed = True
+        paths = list((run_dir / "raw").glob(f"{step_id}-attempt*.api.json"))
+        latest = max(paths, key=lambda p: int(p.name.split("-attempt")[-1].split(".")[0]))
+        response = read_json(latest)
+        choice = (response.get("choices") or [{}])[0]
+        content = (choice.get("message") or {}).get("content") or ""
+        try:
+            payload = parse_structured_content(content)
+        except SchemaError:
+            payload = parsed_planning_prefix(content)
+    state = {"payload": payload if isinstance(payload, dict) else {}, "values": {}, "hints": [],
+             "bulk_response": response, "bulk_failed": failed, "prompt": prompt, "context": context,
+             "ready": False, "unassigned": []}
+    save_planning_draft(run_dir, step_id, state)
+    if interruption:
+        raise interruption
+    return state
+
+
+def planning_schema_node(schema: dict, root: dict) -> dict:
+    if "$ref" in schema:
+        return planning_schema_node(_resolve_pointer(root, schema["$ref"]), root) | {
+            key: value for key, value in schema.items() if key != "$ref"}
+    return schema
+
+
+def fill_planning_shape(run_dir: Path, step_id: str, state: dict, schema: dict, transport) -> None:
+    root = schema
+
+    def attach(path, value):
+        if not path:
+            state["payload"] = value
+            return
+        cursor = state["payload"]
+        for part in path[:-1]:
+            cursor = cursor[part]
+        cursor[path[-1]] = value
+
+    def fill(value, node, path):
+        node = planning_schema_node(node, root)
+        if node.get("type") == "object":
+            value = value if isinstance(value, dict) else {}
+            attach(path, value)
+            properties = node.get("properties", {})
+            if node.get("additionalProperties") is False:
+                for key in list(value):
+                    if key not in properties:
+                        hint = {"source_path": path + [key], "text": json.dumps(value.pop(key), ensure_ascii=False)}
+                        if hint not in state["hints"]:
+                            state["hints"].append(hint)
+            for key in dict.fromkeys(node.get("required", []) + list(value)):
+                if key in properties:
+                    value[key] = fill(value.get(key), properties[key], path + [key])
+                    save_planning_draft(run_dir, step_id, state)
+            return value
+        if node.get("type") == "array" and planning_schema_node(node.get("items", {}), root).get("type") == "object":
+            if not isinstance(value, list) or not node.get("minItems", 0) <= len(value) <= node.get("maxItems", 256):
+                count = planning_value(run_dir, step_id, state, path + ["$count"],
+                    {"type": "integer", "minimum": node.get("minItems", 0), "maximum": node.get("maxItems", 256)},
+                    "Choose the number of records needed by this narrative collection.", transport)
+                value = (value if isinstance(value, list) else [])[:count]
+                value.extend({} for _ in range(count - len(value)))
+            attach(path, value)
+            for index, item in enumerate(value):
+                value[index] = fill(item, node["items"], path + [index])
+                save_planning_draft(run_dir, step_id, state)
+            return value
+        if not _collect_schema_errors(value, node, root, reference_path(path)):
+            return value
+        response_schema = copy.deepcopy(node) | {"$defs": root.get("$defs", {})}
+        return planning_value(run_dir, step_id, state, path, response_schema,
+                              "Supply this missing or invalid planning field, preserving the surrounding story.", transport)
+
+    if step_id == "architecture_core":
+        payload = state["payload"]
+        for key in list(payload):
+            if key not in root["properties"]:
+                state["hints"].append({"source_path": [key], "text": json.dumps(payload.pop(key), ensure_ascii=False)})
+        payload.setdefault("topology", {})
+        if not isinstance(payload["topology"], dict):
+            payload["topology"] = {}
+        collections = [("attractors",), ("obligation_graph",), ("arcs",), ("topology", "nodes"), ("topology", "edges")]
+        for parts in collections:
+            cursor, node = payload, root
+            for part in parts[:-1]:
+                cursor = cursor[part]
+                node = planning_schema_node(node, root)["properties"][part]
+            node = planning_schema_node(node, root)["properties"][parts[-1]]
+            node = planning_schema_node(node, root)
+            items = cursor.get(parts[-1])
+            if not isinstance(items, list) or not node.get("minItems", 0) <= len(items) <= node.get("maxItems", 256):
+                count = planning_value(run_dir, step_id, state, list(parts) + ["$count"],
+                    {"type": "integer", "minimum": node.get("minItems", 0), "maximum": node.get("maxItems", 256)},
+                    "Choose collection capacity before individual values; the engine assigns its IDs.", transport)
+                items = (items if isinstance(items, list) else [])[:count]
+                items.extend({} for _ in range(count - len(items)))
+            cursor[parts[-1]] = items
+            identity = next(key for key in planning_schema_node(node["items"], root)["properties"] if key.endswith("_id"))
+            declared = [item.get(identity) for item in items if isinstance(item, dict)]
+            for index, item in enumerate(items):
+                if not isinstance(item, dict):
+                    item = items[index] = {}
+                if not isinstance(item.get(identity), str) or not re.fullmatch(r"[a-z][a-z0-9_]*", item[identity]) or declared.count(item[identity]) != 1:
+                    item[identity] = f"draft_{identity[:-3]}_{index + 1:03d}"
+            save_planning_draft(run_dir, step_id, state)
+        order = ["attractors", "obligation_graph", "arcs", "topology", "saturation_rationale"]
+        for key in order:
+            payload[key] = fill(payload.get(key), root["properties"][key], [key])
+            save_planning_draft(run_dir, step_id, state)
+    else:
+        state["payload"] = fill(state["payload"], root, [])
+    save_planning_draft(run_dir, step_id, state)
+
+
+def canonical_planning_aliases(run_dir: Path, payload: dict, audit=None) -> dict:
+    result = copy.deepcopy(payload)
+    aliases = {item["motif_event_id"]: item["motif_id"] for record in all_committed_records(run_dir)
+               for item in record.get("constraint_delta", {}).get("motif_events", [])}
+    for item in _walk(result):
+        if isinstance(item, dict) and isinstance(item.get("relevance"), dict):
+            tags = item["relevance"]
+            if isinstance(tags.get("motif_ids"), list):
+                if audit is not None:
+                    for identifier in tags["motif_ids"]:
+                        entry = {"field": "relevance.motif_ids", "from": identifier, "to": aliases.get(identifier)}
+                        if identifier in aliases and entry not in audit:
+                            audit.append(entry)
+                tags["motif_ids"] = [aliases.get(value, value) for value in tags["motif_ids"]]
+    return result
+
+
+def repair_planning_references(run_dir: Path, step_id: str, state: dict, schema: dict, transport, *, specs=None) -> None:
+    while True:
+        state["payload"] = canonical_planning_aliases(run_dir, state["payload"], state.setdefault("aliases", []))
+        if step_id == "architecture_core":
+            state["payload"] = normalize_architecture_core_payload(state["payload"], run_dir)
+            issues = architecture_reference_issues(state["payload"], run_dir)
+            topology = state["payload"]["topology"]
+            nodes = [item["node_id"] for item in topology["nodes"]]
+            for field in ("entry_segment_id", "opening_branch_node_id"):
+                if topology[field] not in nodes:
+                    issues.append({"path": ["topology", field], "invalid": topology[field], "candidates": nodes, "mode": "replace"})
+            for index, identifier in enumerate(topology["reconvergence_node_ids"]):
+                if identifier not in nodes:
+                    issues.append({"path": ["topology", "reconvergence_node_ids", index], "invalid": identifier, "candidates": nodes, "mode": "replace"})
+            for index, edge in enumerate(topology["edges"]):
+                for field in ("from_node_id", "to_node_id"):
+                    if edge[field] not in nodes:
+                        issues.append({"path": ["topology", "edges", index, field], "invalid": edge[field], "candidates": nodes, "mode": "replace"})
+        else:
+            issues = named_reference_issues(run_dir, state["payload"], "architecturePlanBatchPayload", specs=specs)
+        if not issues:
+            save_planning_draft(run_dir, step_id, state)
+            return
+        issue = issues[0]
+        path = list(issue["path"])
+        field = path[-2] if isinstance(path[-1], int) else path[-1]
+        choices = list(issue["candidates"])
+        additions = {}
+        if step_id == "architecture_core" and field in {"termination_targets", "requires", "hard_obligation_ids", "prerequisite_obligation_ids"}:
+            if len(state["payload"]["obligation_graph"]) < schema["properties"]["obligation_graph"]["maxItems"]:
+                additions["__NEW_OBLIGATION__"] = ("obligation_graph", "obligation_id")
+            if field == "termination_targets" and len(state["payload"]["attractors"]) < schema["properties"]["attractors"]["maxItems"]:
+                additions["__NEW_ATTRACTOR__"] = ("attractors", "attractor_id")
+        if "relevance" in path:
+            choices.append("__NARRATIVE_HINT__")
+        choices.extend(additions)
+        if not choices:
+            raise PausedError("Planning value", f"No lawful targets for {reference_path(path)}; draft retained")
+        replacement = planning_value(run_dir, step_id, state, path, {"type": "string", "enum": choices},
+            f"Resolve {issue['invalid']!r} using its meaning in the full draft. Choose __NARRATIVE_HINT__ when this is authored setup intent rather than a real typed ID; its meaning will be preserved and placed earlier. Choose a NEW option only for a genuinely missing local definition.", transport)
+        cursor = state["payload"]
+        for part in path[:-1]:
+            cursor = cursor[part]
+        if replacement == "__NARRATIVE_HINT__":
+            state["hints"].append({"source_path": path, "text": str(issue["invalid"])})
+            del cursor[path[-1]]
+        else:
+            if replacement in additions:
+                group, identity = additions[replacement]
+                replacement = issue["invalid"]
+                if not isinstance(replacement, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", replacement):
+                    replacement = f"draft_{identity[:-3]}_{len(state['payload'][group]) + 1:03d}"
+                state["payload"][group].append({identity: replacement})
+                fill_planning_shape(run_dir, step_id, state, schema, transport)
+            cursor[path[-1]] = [replacement] if issue.get("mode") == "set_list" else replacement
+        save_planning_draft(run_dir, step_id, state)
+
+
+def prepare_core_draft(run_dir: Path, transport) -> dict:
+    if committed_record(run_dir, "architecture_core"):
+        return committed_record(run_dir, "architecture_core")
+    prompt, context = architecture_core_prompt(run_dir)
+    schema = copy.deepcopy(definition_schema("architectureCorePayload", load_protocol(run_dir)))
+    schema["$defs"]["obligation"].pop("allOf", None)
+    state = staged_planning_request(run_dir, "architecture_core", prompt, context, schema, transport)
+    if state.get("ready"):
+        return state["record"]
+    fill_planning_shape(run_dir, "architecture_core", state, schema, transport)
+    repair_planning_references(run_dir, "architecture_core", state, schema, transport)
+    payload = state["payload"]
+    if not any(item["kind"] == "ending" for item in payload["attractors"]):
+        ending = planning_value(run_dir, "architecture_core", state, ["$ending_attractor"],
+            {"type": "string", "enum": [item["attractor_id"] for item in payload["attractors"]]},
+            "Select the attractor whose transformation will become an ending; at least one ending is required.", transport)
+        next(item for item in payload["attractors"] if item["attractor_id"] == ending)["kind"] = "ending"
+        save_planning_draft(run_dir, "architecture_core", state)
+    cycle = architecture_obligation_cycle(payload)
+    while cycle:
+        index = next(i for i, item in enumerate(payload["obligation_graph"]) if item["obligation_id"] == cycle[0])
+        owner = payload["obligation_graph"][index]
+        forbidden = {owner["obligation_id"]}
+        while True:
+            ancestors = forbidden | {item["obligation_id"] for item in payload["obligation_graph"]
+                                     if forbidden.intersection(item["requires"])}
+            if ancestors == forbidden:
+                break
+            forbidden = ancestors
+        allowed = [item["obligation_id"] for item in payload["obligation_graph"] if item["obligation_id"] not in forbidden]
+        owner["requires"] = planning_value(run_dir, "architecture_core", state, ["obligation_graph", index, "requires"],
+            {"type": "array", "items": {"enum": allowed}, "uniqueItems": True},
+            f"Remove the dependency cycle {cycle}; preserve meaningful prerequisites without a cycle.", transport) if allowed else []
+        save_planning_draft(run_dir, "architecture_core", state)
+        cycle = architecture_obligation_cycle(payload)
+    topology = payload["topology"]
+    opening = topology["opening_branch_node_id"]
+    branches = [item for item in topology["edges"] if item["from_node_id"] == opening and item["relation"] == "branch"]
+    if len(branches) != 3:
+        allowed = [item["node_id"] for item in topology["nodes"] if item["node_id"] != opening]
+        if len(allowed) < 3:
+            while len(allowed) < 3:
+                identifier = deterministic_id("draft_node", opening, str(len(topology["nodes"])))
+                topology["nodes"].append({"node_id": identifier})
+                allowed.append(identifier)
+            fill_planning_shape(run_dir, "architecture_core", state, schema, transport)
+            repair_planning_references(run_dir, "architecture_core", state, schema, transport)
+            return prepare_core_draft(run_dir, transport)
+        maximum_edges = planning_schema_node(schema["properties"]["topology"], schema)["properties"]["edges"]["maxItems"]
+        if len(topology["edges"]) - len(branches) + 3 > maximum_edges:
+            raise PausedError("Planning topology", "No edge capacity for the three opening paths; draft retained")
+        targets = planning_value(run_dir, "architecture_core", state, ["topology", "$opening_targets"],
+            {"type": "array", "items": {"enum": allowed}, "minItems": 3, "maxItems": 3, "uniqueItems": True},
+            "Select the three materially different opening paths; the engine constructs their branch edges.", transport)
+        topology["edges"] = [item for item in topology["edges"] if item not in branches]
+        for target in targets:
+            topology["edges"].append({"edge_id": deterministic_id("draft_edge", opening, target),
+                "from_node_id": opening, "to_node_id": target, "relation": "branch", "hard_obligation_ids": []})
+    reached = {topology["entry_segment_id"]}
+    while True:
+        expanded = reached | {item["to_node_id"] for item in topology["edges"] if item["from_node_id"] in reached}
+        if expanded != reached:
+            reached = expanded
+            continue
+        missing = [item["node_id"] for item in topology["nodes"] if item["node_id"] not in reached]
+        if not missing:
+            break
+        target = missing[0]
+        maximum_edges = planning_schema_node(schema["properties"]["topology"], schema)["properties"]["edges"]["maxItems"]
+        if len(topology["edges"]) >= maximum_edges:
+            raise PausedError("Planning topology", f"No edge capacity to connect {target}; draft retained")
+        parent = planning_value(run_dir, "architecture_core", state, ["topology", "$connect", target],
+            {"type": "string", "enum": sorted(reached)},
+            f"Choose a reachable predecessor for the disconnected node {target}, preserving the intended narrative route. The engine will add a progression edge.", transport)
+        topology["edges"].append({"edge_id": deterministic_id("draft_edge", parent, target), "from_node_id": parent,
+            "to_node_id": target, "relation": "progression", "hard_obligation_ids": []})
+        save_planning_draft(run_dir, "architecture_core", state)
+    validate_json_schema(payload, schema)
+    state["record"] = build_architecture_core(run_dir, payload)
+    validate_architecture_core_for_run(state["record"], run_dir)
+    state["ready"] = True
+    save_planning_draft(run_dir, "architecture_core", state)
+    return state["record"]
+
+
+def prepare_plan_draft(run_dir: Path, specs: list[dict], sequence: int, count: int, transport) -> dict:
+    step = f"architecture_plan_batch_{sequence:04d}"
+    committed = next((item for item in committed_records(run_dir, "architecture_plan_batch") if item["batch_sequence"] == sequence), None)
+    if committed:
+        return committed
+    prompt, context = architecture_plan_prompt(run_dir, specs, sequence, count)
+    schema = architecture_plan_batch_schema(run_dir, specs)
+    state = staged_planning_request(run_dir, step, prompt, context, schema, transport)
+    if state.get("ready"):
+        return state["record"]
+    supplied = state["payload"].get("packet_plans", [])
+    supplied = supplied if isinstance(supplied, list) else []
+    annotations = []
+    for spec in specs:
+        matches = [item for item in supplied if isinstance(item, dict) and item.get("packet_slot_id") == spec["packet_slot_id"]]
+        annotations.append(matches[0] if len(matches) == 1 else {"packet_slot_id": spec["packet_slot_id"]})
+    for item in supplied:
+        if item not in annotations and item not in state["unassigned"]:
+            state["unassigned"].append(item)
+    for key in list(state["payload"]):
+        if key != "packet_plans":
+            state["hints"].append({"source_path": [key], "text": json.dumps(state["payload"][key], ensure_ascii=False)})
+    state["payload"] = {"packet_plans": annotations}
+    fill_planning_shape(run_dir, step, state, schema, transport)
+    repair_planning_references(run_dir, step, state, schema, transport, specs=specs)
+    annotations = state["payload"]["packet_plans"]
+    prior = [item["packet_slot_id"] for item in planned_packet_specs(planning_core(run_dir))]
+    for index, (spec, annotation) in enumerate(zip(specs, annotations)):
+        allowed = prior[:prior.index(spec["packet_slot_id"])]
+        annotation_schema = architecture_plan_annotation_schema(run_dir, spec, allowed)
+        node = annotation_schema["$defs"]["packetPlanAnnotation"]["properties"]["attractor_ids"]
+        if _collect_schema_errors(annotation["attractor_ids"], node, annotation_schema, "$"):
+            annotation["attractor_ids"] = planning_value(run_dir, step, state, ["packet_plans", index, "attractor_ids"],
+                node, "Select the lawful attractor pressure; an ending packet selects exactly one ending attractor.", transport)
+    state["record"] = build_architecture_plan_batch(run_dir, state["payload"], specs, sequence, count)
+    state["ready"] = True
+    save_planning_draft(run_dir, step, state)
+    return state["record"]
+
+
+def place_planning_setups(run_dir: Path, core: dict, records: list[dict], transport) -> None:
+    core_path = run_dir / ".staging/architecture_core.planning.json"
+    if not core_path.exists():
+        return
+    state = read_json(core_path)
+    if state.get("setups_complete"):
+        return
+    all_specs = planned_packet_specs(core)
+    all_slots = [slot for spec in all_specs for slot in spec["scene_slot_ids"] + spec["ending_slot_ids"]]
+    owners = {slot: spec["packet_slot_id"] for spec in all_specs for slot in spec["scene_slot_ids"]}
+    guidance_limit = load_protocol(run_dir)["$defs"]["stringList"]["maxItems"]
+    origins = [("architecture_core", state)]
+    for index in range(1, len(records) + 1):
+        step = f"architecture_plan_batch_{index:04d}"
+        origins.append((step, read_json(run_dir / ".staging" / f"{step}.planning.json")))
+    tasks = state.setdefault("setups", [])
+    if not state.get("setups_collected"):
+        for record in records:
+            for plan in record["packet_plans"]:
+                if plan["packet_kind"] != "ending":
+                    continue
+                for identifier in plan["attractor_ids"]:
+                    attractor = next(item for item in core["attractors"] if item["attractor_id"] == identifier)
+                    requirements = [("seed", text) for text in attractor["soft_seed_conditions"]]
+                    requirements += [("prerequisite", next(item["description"] for item in core["obligation_graph"] if item["obligation_id"] == obligation))
+                                     for obligation in attractor["prerequisite_obligation_ids"]]
+                    for kind, text in requirements:
+                        tasks.append({"text": text, "payoff_packet": plan["packet_slot_id"], "kind": kind, "attractor_id": identifier})
+        for step, origin in origins:
+            for hint in origin["hints"]:
+                task = dict(hint) | {"kind": "authored_hint", "origin_step": step}
+                path = hint["source_path"]
+                if step != "architecture_core" and len(path) > 1 and isinstance(path[1], int):
+                    task["payoff_packet"] = origin["payload"]["packet_plans"][path[1]]["packet_slot_id"]
+                tasks.append(task)
+        state["setups_collected"] = True
+        save_planning_draft(run_dir, "architecture_core", state)
+    for index, task in enumerate(tasks):
+        if task.get("attached"):
+            continue
+        payoff = next((item for item in all_specs if item["packet_slot_id"] == task.get("payoff_packet")), all_specs[-1])
+        payoff_slots = payoff["scene_slot_ids"] or payoff["ending_slot_ids"]
+        boundary = all_slots.index(payoff_slots[-1] if payoff["scene_slot_ids"] else payoff_slots[0])
+        allowed = [slot for slot in owners if all_slots.index(slot) < boundary]
+        guidance_counts = {item["packet_slot_id"]: len(item["soft_guidance"])
+                           for draft in planning_batches_view(run_dir) for item in draft["packet_plans"]}
+        allowed = [slot for slot in allowed if guidance_counts.get(owners[slot], 0) < guidance_limit]
+        if not allowed:
+            raise PausedError("Backward planning", f"No earlier setup capacity for {task['text']!r}")
+        slot = task.get("setup_slot_id")
+        if slot is None:
+            slot = task["setup_slot_id"] = planning_value(run_dir, "architecture_core", state, ["$setups", index, "setup_slot_id"],
+                {"type": "string", "enum": allowed}, f"Place this requirement BEFORE its payoff: {json.dumps(task, ensure_ascii=False)}", transport)
+            save_planning_draft(run_dir, "architecture_core", state)
+        if "instruction" not in task:
+            prefix = f"Setup in {slot} for {task.get('attractor_id', 'authored hint')}: "
+            task["instruction"] = planning_value(run_dir, "architecture_core", state, ["$setups", index, "instruction"],
+                {"type": "string", "minLength": 1, "maxLength": 12000 - len(prefix)},
+                f"Write one coherent earlier setup instruction for {slot} that earns this later requirement without revealing its payoff: {json.dumps(task, ensure_ascii=False)}", transport)
+            save_planning_draft(run_dir, "architecture_core", state)
+        marker = f"Setup in {slot} for {task.get('attractor_id', 'authored hint')}: {task['instruction']}"
+        owner = owners[slot]
+        for step, draft in origins[1:]:
+            draft = read_json(run_dir / ".staging" / f"{step}.planning.json")
+            for annotation in draft["payload"]["packet_plans"]:
+                if annotation["packet_slot_id"] == owner and marker not in annotation["soft_guidance"]:
+                    if len(annotation["soft_guidance"]) >= guidance_limit:
+                        raise PausedError("Backward planning", f"No guidance capacity in {owner}; setup retained")
+                    annotation["soft_guidance"].append(marker)
+                if annotation["packet_slot_id"] == payoff["packet_slot_id"] and owner != payoff["packet_slot_id"]:
+                    annotation["depends_on_packet_slot_ids"] = list(dict.fromkeys(annotation["depends_on_packet_slot_ids"] + [owner]))
+            draft["record"]["packet_plans"] = [spec | annotation for annotation in draft["payload"]["packet_plans"]
+                for spec in all_specs if spec["packet_slot_id"] == annotation["packet_slot_id"]]
+            save_planning_draft(run_dir, step, draft)
+        task["attached"] = True
+        save_planning_draft(run_dir, "architecture_core", state)
+    state["setups_complete"] = True
+    save_planning_draft(run_dir, "architecture_core", state)
+
+
+def execute_planning_phases(run_dir: Path, transport=http_json) -> list[dict]:
+    core = prepare_core_draft(run_dir, transport)
+    batches = plan_batches(core)
+    records = [prepare_plan_draft(run_dir, specs, index, len(batches), transport) for index, specs in enumerate(batches, 1)]
+    place_planning_setups(run_dir, core, records, transport)
+    records = [read_json(run_dir / ".staging" / f"architecture_plan_batch_{index:04d}.planning.json")["record"]
+               if not next((item for item in committed_records(run_dir, "architecture_plan_batch") if item["batch_sequence"] == index), None)
+               else next(item for item in committed_records(run_dir, "architecture_plan_batch") if item["batch_sequence"] == index)
+               for index in range(1, len(batches) + 1)]
+    protocol = load_protocol(run_dir)
+    for record in [core] + records:
+        validate_json_schema(record, protocol["$defs"][RECORD_DEFS[record["record_type"]]], protocol)
+        validate_declared_id_uniqueness(record)
+    for index, (record, specs) in enumerate(zip(records, batches), 1):
+        validate_architecture_plan_batch(record, run_dir, specs, index, len(batches))
+    validate_architecture(architecture_from_parts(core, records), read_json(run_dir / "run-manifest.json"), set(_source_index(run_dir)))
+    for step, record in [("architecture_core", core)] + [(f"architecture_plan_batch_{index:04d}", record) for index, record in enumerate(records, 1)]:
+        if committed_record(run_dir, record["record_type"]) and (step == "architecture_core" or any(
+            item["batch_sequence"] == record["batch_sequence"] for item in committed_records(run_dir, "architecture_plan_batch"))):
+            continue
+        state = read_json(run_dir / ".staging" / f"{step}.planning.json")
+        response = state["bulk_response"]
+        if state["bulk_failed"]:
+            response = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(state["payload"], ensure_ascii=False)}}],
+                        "usage": {}, "_cathedrals_assembled_from_fields": True}
+        attempt = max((item["attempt"] for item in ledger_entries(run_dir) if item["planned_step_id"] == step), default=0) + 1
+        commit_record(run_dir, record, json.dumps(state["payload"], ensure_ascii=False), response,
+            planned_step_id=step, attempt=attempt, step_phase="architecture", prompt=state["prompt"], context=state["context"],
+            parameters=response.get("_cathedrals_request", {}).get("parameters", {"temperature": 0.7, "max_tokens": BASE_OUTPUT_TOKENS, "seed": step_seed(read_json(run_dir / 'generation-brief.json')['generation_seed'], step), "stream": True}),
+            branch_relation="macroarchitecture", usage_already_ledgered=state["bulk_failed"])
+    return batches
+
+
 def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json) -> None:
     verify_engine_snapshot(run_dir)
     ensure_frozen_geomancy(run_dir)
@@ -5671,75 +6273,7 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
         )
     output_fn("[03] Genesis                       ✓ committed (3 bounded records)")
     output_fn("[04] Architecture                  …")
-    if not committed_record(run_dir, "architecture_core"):
-        prompt, context = architecture_core_prompt(run_dir)
-        draft_schema = copy.deepcopy(definition_schema("architectureCorePayload", load_protocol(run_dir)))
-        draft_schema["$defs"]["obligation"].pop("allOf", None)
-        request_bounded_record(
-            run_dir,
-            expected_record_type="architecture_core",
-            step_id="architecture_core",
-            phase="architecture",
-            prompt=prompt,
-            context=context,
-            branch_relation="macroarchitecture",
-            temperature=0.7,
-            transport=transport,
-            response_definition="architectureCorePayload",
-            response_schema=draft_schema,
-            payload_repairer=lambda effective_step, payload, content, response: repair_architecture_core_payload(
-                run_dir, effective_step, payload, content, response, transport
-            ),
-            record_builder=lambda payload: build_architecture_core(run_dir, payload),
-            precommit_validator=lambda record: validate_architecture_core_for_run(record, run_dir),
-        )
-    core = committed_record(run_dir, "architecture_core")
-    batches = plan_batches(core)
-    for sequence, specs in enumerate(batches, 1):
-        if any(item["batch_sequence"] == sequence for item in committed_records(run_dir, "architecture_plan_batch")):
-            continue
-        step_id = f"architecture_plan_batch_{sequence:04d}"
-        prompt, context = architecture_plan_prompt(run_dir, specs, sequence, len(batches))
-        schema = architecture_plan_batch_schema(run_dir, specs)
-        arguments = dict(
-            expected_record_type="architecture_plan_batch",
-            step_id=step_id,
-            phase="architecture",
-            prompt=prompt,
-            context=context,
-            branch_relation="macroarchitecture_plan_batch",
-            temperature=0.65,
-            transport=transport,
-            response_definition="architecturePlanBatchPayload",
-            response_schema=schema,
-            schema_failure_limit=2,
-            reference_context={"specs": specs},
-            record_builder=lambda payload, frozen_specs=specs, frozen_sequence=sequence: build_architecture_plan_batch(
-                run_dir, payload, frozen_specs, frozen_sequence, len(batches)
-            ),
-            precommit_validator=lambda record, frozen_specs=specs, frozen_sequence=sequence: validate_architecture_plan_batch(
-                record, run_dir, frozen_specs, frozen_sequence, len(batches)
-            ),
-        )
-        if architecture_plan_schema_failure_count(run_dir, step_id) < 2:
-            try:
-                request_bounded_record(run_dir, **arguments)
-            except PausedError as error:
-                if error.stage != "Structured record correction" or architecture_plan_schema_failure_count(run_dir, step_id) < 2:
-                    raise
-        if not any(item["batch_sequence"] == sequence for item in committed_records(run_dir, "architecture_plan_batch")):
-            repaired = repair_architecture_plan_batch_payload(run_dir, step_id, specs, transport)
-            repaired_response = {
-                "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(repaired, ensure_ascii=False)}}],
-                "usage": {},
-            }
-            request_record(
-                run_dir,
-                **(arguments | {
-                    "transport": lambda *_args, **_kwargs: repaired_response,
-                    "schema_failure_limit": None,
-                }),
-            )
+    batches = execute_planning_phases(run_dir, transport)
     validate_completed_architecture(run_dir)
     output_fn(f"[04] Architecture                  ✓ committed ({len(batches)} bounded plan batches)")
     architecture = committed_record(run_dir, "architecture")
@@ -6222,7 +6756,7 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
                 transport,
                 api_url(brief["lm_studio_base_url"], "/v1/chat/completions"),
                 payload,
-                float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "3600")),
+                float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")),
                 stream_path=run_dir / "validation" / f"{step_id}-attempt{current_attempt}.api.sse",
                 preserve=lambda value: write_json(
                     run_dir / "validation" / f"{step_id}-attempt{current_attempt}.api.json",

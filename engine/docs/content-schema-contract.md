@@ -72,6 +72,14 @@ The protocol schema validates these independent record types:
 Each JSON record must parse and validate before commit. Raw responses are preserved.
 Truncated, ambiguous, or creatively malformed output is not completed by inference.
 
+Planning recovery uses internal `.staging/<step>.planning.json` checkpoints without
+changing these record schemas. A checkpoint retains the assembled draft, accepted
+field values, raw bulk response, unresolved hints, and backward setup placements.
+Only complete parsed top-level members survive malformed or interrupted JSON;
+missing content is authored through focused requests. The complete core and all
+batches validate before their first commit. Each commit retains `planning-draft.json`
+and field-response evidence as supplemental provenance.
+
 Architecture payload aliases are resolved within each reference field's allowed entity
 kinds before canonical IDs are assigned. An attractor and a topology node may share a
 payload alias without changing an obligation's ending target into a node reference.

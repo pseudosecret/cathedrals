@@ -125,15 +125,32 @@ termination, and typed relevance references. Slot repairs must preserve the froz
 one-to-one allocation. A source-grounded mapping is required; `UNRESOLVED` returns to
 bounded correction, with the existing explicit Genesis expansion path preserved.
 
-Architecture preserves its structurally valid draft before running its focused
-reference pass. A source-grounded mapping may return `UNRESOLVED`; a narrowly typed
-follow-up may replace only that reference, remove an invalid optional list entry, or
-author one missing local obligation or attractor. The engine never invents a target
-or alters committed Genesis. New definitions must use the missing ID and valid typed
-references; counts, dependency checks, and frozen budgets remain binding. Repairs
-and their original responses persist once, so resume never regenerates the accepted
-Architecture or charges a cached repair twice. Exhaustion pauses instead of falling
-back to a complete Architecture rewrite.
+Planning tries one broad core or plan-batch draft, then switches malformed, truncated,
+structurally invalid, or unresolved parts to one value per request. The engine
+assembles containers and IDs, retaining complete parsed top-level members without
+inventing JSON closure. Every focused request carries the complete assembled draft,
+Genesis, staged core and plan batches, original unassigned annotations, and pending
+hints. Full context must fit the frozen budget; it is never silently clipped. Each
+value has three attempts per invocation. Accepted values, including false, zero,
+and empty collections, persist before further requests. Resume continues only pending
+work, with no complete Architecture rewrite or duplicate accounting.
+
+Plan reference catalogs include every allocated literary slot before Architecture is
+committed and dependencies only from earlier staged allocations. Recorded motif-event
+IDs map exactly to their motif IDs. A focused reference value may select an existing
+typed target or create a missing local obligation or attractor field by field within
+schema capacity. An unknown relevance label may become an authored setup requirement,
+preserving its original text and location. It cannot create an arbitrary runtime state
+key. Committed Genesis and unrelated accepted fields cannot change. `UNRESOLVED`
+answers are accounted as failed lookups and never reused as successful resolutions.
+
+Core and all plan batches remain staged while the engine plans backward from ending
+transformations. Each ending seed condition, prerequisite obligation, and preserved
+hint receives an earlier scene placement and authored setup instruction. The engine
+attaches these to packet guidance and dependencies. Complete schema, reference,
+dependency, and setup validation precedes the first Architecture commit. Prose begins
+only after the whole plan is committed; scene and ending requests remain coherent
+literary units. Checkpoints and field-response evidence accompany immutable commits.
 
 Semantic normalization builds and fully validates the candidate packet before staging
 metadata. Metadata errors consume metadata attempts, never another accepted artistic
@@ -147,6 +164,11 @@ New-run budget derivation adds a pooled allowance of three successful reference
 repairs per possible scene/ending chunk to the existing analysis allowance. The
 corresponding cumulative token ceilings freeze with the run; this capacity never
 causes calls when references are already valid.
+Calculation version 8 additionally reserves three attempts per schema-bounded planning
+field, plus earlier placement and instruction values for ending requirements and
+preserved hints. Object arrays use schema cardinality limits; primitive arrays count
+as one value. These are conservative recovery limits, not expected usage. Per-request
+output and whole-work literary limits remain unchanged.
 
 Committed chunks collectively own the original plan. If the provider truncates an
 uncommitted single-content chunk, preserve the failed response and retry once with a larger allowance only
@@ -252,7 +274,7 @@ transport reconstructs the ordinary completion envelope, preserving separate con
 reasoning fields, finish reason, and usage. It archives received SSE bytes and requires
 both a finish reason and `[DONE]` before accepting a stream. Incomplete streams are
 diagnostics, never staged creative payloads. A misleading `stop` finish reason does
-not make malformed JSON valid. The configurable 3,600-second HTTP timeout applies to
+not make malformed JSON valid. The configurable 5,400-second HTTP timeout applies to
 socket inactivity, not total elapsed generation time. Existing buffered responses
 and injected transports remain supported.
 

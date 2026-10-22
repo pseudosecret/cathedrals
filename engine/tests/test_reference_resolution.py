@@ -213,8 +213,27 @@ class ReferenceResolutionTests(unittest.TestCase):
 
         def transport(_method, _url, request, **_kwargs):
             name = request.get("response_format", {}).get("json_schema", {}).get("name", "reference")
+            prompt = request["messages"][1]["content"]
+            if "FIELD PATH\n" in prompt:
+                name = "planningValue"
             calls.append(name)
             schema = request.get("response_format", {}).get("json_schema", {}).get("schema", {})
+            if name == "planningValue":
+                schema = json.loads(prompt.split("VALUE SCHEMA\n", 1)[1].split("\nFULL ASSEMBLED", 1)[0])
+                path = prompt.split("FIELD PATH\n", 1)[1].split("\n", 1)[0]
+                field = path.rsplit(".", 1)[-1]
+                template = architecture_core_payload()["attractors"][0]
+                if "__NEW_ATTRACTOR__" in schema.get("enum", []):
+                    value = "__NEW_ATTRACTOR__"
+                elif "__NARRATIVE_HINT__" in schema.get("enum", []):
+                    value = "__NARRATIVE_HINT__"
+                elif "$setups" in path or "$connect" in path:
+                    value = schema["enum"][0] if "enum" in schema else "Synthetic earlier setup."
+                elif field == "kind":
+                    value = "claimant"
+                else:
+                    value = template[field]
+                return api_response(value, text=isinstance(value, str))
             if name == "reference":
                 prompt = request["messages"][1]["content"]
                 candidates = json.loads(prompt.split("VALID REFERENCES\n", 1)[1].split("\n\nWhich", 1)[0])
@@ -235,6 +254,9 @@ class ReferenceResolutionTests(unittest.TestCase):
                 value["obligation_graph"][0].update(created_by_ids=[foundation["commit_id"]], sources=[{
                     "artifact_type": "genesis", "artifact_id": foundation["commit_id"], "source_locator": "Synthetic foundation."}])
                 value["arcs"] = [copy.deepcopy(value["arcs"][0]) | {"arc_id": f"arc_draft_{index}"} for index in range(1, 5)]
+                response = api_response(value)
+                response["choices"][0]["finish_reason"] = "length"
+                return response
             elif name == "architectureRepair":
                 if "resolutions" in schema["properties"]:
                     value = {"resolutions": {key: "UNRESOLVED" for key in schema["properties"]["resolutions"]["properties"]}}
@@ -242,11 +264,13 @@ class ReferenceResolutionTests(unittest.TestCase):
                     value = {"replacement": "attractor_missing", "new_obligation": None,
                         "new_attractor": architecture_core_payload()["attractors"][0] | {"attractor_id": "attractor_missing", "kind": "claimant"}}
             elif name == "architecturePlanBatchPayload":
-                core = RUNNER.committed_record(self.run, "architecture_core")
+                core = RUNNER.planning_core(self.run)
                 value = {"packet_plans": [{"packet_slot_id": spec["packet_slot_id"], "initial_priority": index,
                     "depends_on_packet_slot_ids": [], "branch_path_relation": "Synthetic relation.",
                     "attractor_ids": [core["attractors"][0]["attractor_id"]] if spec["packet_kind"] == "ending" else [],
-                    "relevance": {}, "soft_guidance": []} for index, spec in enumerate(RUNNER.planned_packet_specs(core), 1)]}
+                    "relevance": {"technical_slot_ids": spec["scene_slot_ids"] + spec["ending_slot_ids"],
+                        "motif_ids": ["motif_pencil"], "state_keys": ["intro_phase"] if index == 1 else ["contamination"]},
+                    "soft_guidance": []} for index, spec in enumerate(RUNNER.planned_packet_specs(core), 1)]}
             elif name == "creativePacketPayload":
                 group = "scenes" if schema["properties"]["scenes"]["maxItems"] else "endings"
                 definition = "scenePayload" if group == "scenes" else "endingPayload"
@@ -293,11 +317,19 @@ class ReferenceResolutionTests(unittest.TestCase):
         self.assertEqual(len(authored_slots), len(set(authored_slots)))
         self.assertEqual(calls.count("reference"), 52)
         self.assertEqual(calls.count("architectureCorePayload"), 1)
-        self.assertEqual(calls.count("architectureRepair"), 2)
+        self.assertGreater(calls.count("planningValue"), 0)
+        self.assertEqual(calls.count("architectureRepair"), 0)
         self.assertEqual(normalization_counts["scene_slot_0006"], 2)
         failures = [entry for entry in RUNNER.ledger_entries(self.run) if entry["commit_status"] == "FAILED_BEFORE_COMMIT"]
-        self.assertEqual(len(failures), 1)
-        self.assertTrue(failures[0]["planned_step_id"].endswith("_semantic"))
+        self.assertEqual(len(failures), 2)
+        self.assertEqual({item["failure_class"] for item in failures}, {"provider_truncation", "malformed_response"})
+        core_commit = next(path for path in RUNNER.committed_directories(self.run) if path.name.endswith("-architecture_core"))
+        core_api = RUNNER.read_json(core_commit / "api-response.json")
+        self.assertTrue(core_api["_cathedrals_assembled_from_fields"])
+        self.assertEqual(core_api["choices"][0]["finish_reason"], "stop")
+        planning = RUNNER.read_json(core_commit / "planning-draft.json")
+        self.assertTrue(planning["setups_complete"])
+        self.assertTrue(all(item["attached"] for item in planning["setups"]))
         finalization = RUNNER.read_json(self.run / "finalization.json")
         self.assertEqual(finalization["run_status"], "READY_TO_PLAY")
         self.assertTrue((build_path / "index.html").exists())

@@ -36,7 +36,7 @@ Request timeouts and interrupted streams are the exception to automatic transpor
 retry: `provider_incomplete_response` immediately pauses and retains partial evidence.
 Require a finish reason and `[DONE]` for streamed completions; never accept an
 incomplete envelope or repair missing JSON by inference. Socket inactivity, including
-the initial wait, defaults to 3,600 seconds; total active generation time is unbounded
+the initial wait, defaults to 5,400 seconds; total active generation time is unbounded
 by HTTP timeout but remains subject to frozen output-token limits.
 Validate the 1,200-word scene/ending chunk ceiling, including nested artifacts, before
 preserving artistic prose or requesting semantic normalization. A length overrun is
@@ -51,11 +51,22 @@ packet validation must precede metadata staging; a metadata error must not spend
 artistic correction attempt. Missing content and committed-history corruption retain
 their existing failure handling.
 
-Architecture drafts are staged before reference lookup. Verify that `UNRESOLVED`
-uses a focused field correction or one missing local obligation/attractor definition,
-preserves unrelated draft fields, and respects bounds and budgets. Exhaustion must
-pause with the original draft intact. Resuming must reuse accepted repairs and count
-their usage once, without another complete Architecture request.
+Architecture drafts, including complete top-level members of malformed responses,
+are staged before field recovery. Verify one broad request per core/batch, then one
+value per focused request with the entire assembled planning context. No missing JSON
+closure may be inferred and no context may be silently clipped. False, zero, and empty
+collections are accepted values. Exhaustion must preserve them and retry only pending
+values on explicit resume. Interrupted bulk responses pause before focused recovery.
+Allocated scene/ending IDs must resolve before assembled Architecture exists; motif
+aliases must match committed event-to-motif identities. Failed `UNRESOLVED` lookups
+must not be cached as success. Usage is counted once for every actual response.
+
+Verify that every ending seed, prerequisite, and retained narrative hint has an earlier
+scene placement and authored setup guidance before any Architecture record commits.
+A pause during this work must leave the core and every batch uncommitted. Resume must
+reuse accepted placements. Arbitrary state labels must not become new runtime keys.
+Check complete schema and dependency validation before the commit barrier and confirm
+that scene/ending prose still uses coherent content requests.
 
 Offline verification: run `python3 -B -m unittest discover -s engine/tests`, then
 `python3 -B engine/tests/validate-generation-protocol.py`. The reference-resolution
@@ -65,6 +76,10 @@ with only provider responses replaced. It creates no fiction in the installation
 The provider-streaming suite uses synthetic SSE data and simulated time to check split
 UTF-8, reasoning fields, usage-only events, long active streams, stalled requests,
 malformed events, interrupted attempts, and replay without network access.
+The planning-recovery suite includes saved failing-run metadata, allocated-slot
+validation, exact aliases, malformed and truncated JSON, full-context field completion,
+staged batch dependencies, and backward setup interruption/resume. All provider
+responses are synthetic; the local model is never required by these checks.
 
 ## 3. Mechanical and Continuity Validation
 

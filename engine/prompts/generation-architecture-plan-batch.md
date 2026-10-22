@@ -7,9 +7,15 @@ Annotate every supplied deterministic packet allocation by its exact `packet_slo
 both literary and ending allocations. Return one annotation per listed allocation; do not infer,
 rename, add, or omit packets. Do not repeat the packet kind, technical slots, artifact count, or formal-composition count;
 the engine merges those fixed allocations. Author priority, lawful dependencies, branch relation, attractor pressure, relevance,
-and soft guidance. Dependencies may reference only prior frozen packet IDs or earlier
+and soft guidance. Dependencies may reference only prior staged packet IDs or earlier
 packet IDs in this batch; this keeps the complete dependency graph acyclic.
 Each ending plan selects exactly one ending attractor. Do not write scenes or prose.
+Plan backward from its terminal transformation and prerequisites to earlier literary
+packets. Express necessary setups in soft guidance. Technical-slot relevance may use
+the allocated scene and ending IDs; state-key relevance must use declared runtime
+state keys. A narrative milestone is a setup instruction, not a new state variable.
+The engine stages every batch and completes backward setup placement before committing
+Architecture or requesting prose.
 
 IMMUTABLE ARCHITECTURE CONTEXT BEGINS
 

@@ -1658,15 +1658,15 @@ class CathedralsRunnerTests(unittest.TestCase):
         def committed(_run, kind):
             return None if kind == "architecture_core" else {"commit_id": f"commit_{kind}"}
 
-        def capture(_run, **kwargs):
-            captured.update(kwargs)
+        def capture(_run, _step, _prompt, _context, schema, _transport):
+            captured["response_schema"] = schema
             raise RuntimeError("captured")
 
         with mock.patch.object(RUNNER, "verify_engine_snapshot"), mock.patch.object(
             RUNNER, "ensure_frozen_geomancy"
         ), mock.patch.object(RUNNER, "committed_record", side_effect=committed), mock.patch.object(
             RUNNER, "architecture_core_prompt", return_value=("prompt", "context")
-        ), mock.patch.object(RUNNER, "request_bounded_record", side_effect=capture), self.assertRaisesRegex(
+        ), mock.patch.object(RUNNER, "staged_planning_request", side_effect=capture), self.assertRaisesRegex(
             RuntimeError, "captured"
         ):
             RUNNER.execute_creative_phases(Path("/offline"), output_fn=lambda _value: None)
@@ -1678,7 +1678,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         with self.assertRaises(RUNNER.SchemaError):
             protocol = RUNNER.load_protocol()
             RUNNER.validate_json_schema(obligation(termination_targets=[]), protocol["$defs"]["obligation"], protocol)
-        self.assertIsNotNone(captured["payload_repairer"])
+        self.assertIn("termination_targets", obligation_schema["properties"])
 
     def test_architecture_shared_aliases_resolve_through_constraint_commit(self):
         payload = architecture_core_payload()
@@ -3010,7 +3010,10 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(derived["scope"]["ending_hard_max"], 5)
         self.assertEqual(derived["budgets"]["max_total_literary_words"], 30000)
         self.assertEqual(derived["budgets"]["max_creative_step_count"], 30)
-        self.assertEqual(derived["budgets"]["max_cumulative_output_tokens"], 2286000)
+        recovery = RUNNER.planning_recovery_allowance(1)
+        self.assertGreater(recovery, 0)
+        self.assertEqual(derived["budgets"]["max_cumulative_output_tokens"],
+                         2286000 + recovery * RUNNER.ANALYSIS_OUTPUT_TOKENS)
 
     def test_chunk_word_boundaries_include_artifacts_for_scenes_and_endings(self):
         for kind in ("literary", "ending"):
