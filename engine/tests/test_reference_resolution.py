@@ -230,10 +230,17 @@ class ReferenceResolutionTests(unittest.TestCase):
                 value = {"claimants": [claimant_expansion(f"claimant_{index:02d}") for index in range(1, 6)], "characters": []}
             elif name == "architectureCorePayload":
                 value = architecture_core_payload()
+                value["obligation_graph"][0]["termination_targets"].append("attractor_missing")
                 foundation = RUNNER.committed_record(self.run, "genesis_foundation")
                 value["obligation_graph"][0].update(created_by_ids=[foundation["commit_id"]], sources=[{
                     "artifact_type": "genesis", "artifact_id": foundation["commit_id"], "source_locator": "Synthetic foundation."}])
                 value["arcs"] = [copy.deepcopy(value["arcs"][0]) | {"arc_id": f"arc_draft_{index}"} for index in range(1, 5)]
+            elif name == "architectureRepair":
+                if "resolutions" in schema["properties"]:
+                    value = {"resolutions": {key: "UNRESOLVED" for key in schema["properties"]["resolutions"]["properties"]}}
+                else:
+                    value = {"replacement": "attractor_missing", "new_obligation": None,
+                        "new_attractor": architecture_core_payload()["attractors"][0] | {"attractor_id": "attractor_missing", "kind": "claimant"}}
             elif name == "architecturePlanBatchPayload":
                 core = RUNNER.committed_record(self.run, "architecture_core")
                 value = {"packet_plans": [{"packet_slot_id": spec["packet_slot_id"], "initial_priority": index,
@@ -285,6 +292,8 @@ class ReferenceResolutionTests(unittest.TestCase):
         self.assertEqual(counts["endings"], 5)
         self.assertEqual(len(authored_slots), len(set(authored_slots)))
         self.assertEqual(calls.count("reference"), 52)
+        self.assertEqual(calls.count("architectureCorePayload"), 1)
+        self.assertEqual(calls.count("architectureRepair"), 2)
         self.assertEqual(normalization_counts["scene_slot_0006"], 2)
         failures = [entry for entry in RUNNER.ledger_entries(self.run) if entry["commit_status"] == "FAILED_BEFORE_COMMIT"]
         self.assertEqual(len(failures), 1)

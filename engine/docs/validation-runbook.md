@@ -32,6 +32,12 @@ creative_step_count >= 1
 Transport failures retry under the provider retry law. Invalid uncommitted structured
 output receives three schema-aware corrections per invocation; exhaustion pauses the
 run, and explicit resume grants three more. No correction may alter committed history.
+Request timeouts and interrupted streams are the exception to automatic transport
+retry: `provider_incomplete_response` immediately pauses and retains partial evidence.
+Require a finish reason and `[DONE]` for streamed completions; never accept an
+incomplete envelope or repair missing JSON by inference. Socket inactivity, including
+the initial wait, defaults to 3,600 seconds; total active generation time is unbounded
+by HTTP timeout but remains subject to frozen output-token limits.
 Validate the 1,200-word scene/ending chunk ceiling, including nested artifacts, before
 preserving artistic prose or requesting semantic normalization. A length overrun is
 an uncommitted payload correction, never a metadata correction. The 4,800-word logical
@@ -45,11 +51,20 @@ packet validation must precede metadata staging; a metadata error must not spend
 artistic correction attempt. Missing content and committed-history corruption retain
 their existing failure handling.
 
+Architecture drafts are staged before reference lookup. Verify that `UNRESOLVED`
+uses a focused field correction or one missing local obligation/attractor definition,
+preserves unrelated draft fields, and respects bounds and budgets. Exhaustion must
+pause with the original draft intact. Resuming must reuse accepted repairs and count
+their usage once, without another complete Architecture request.
+
 Offline verification: run `python3 -B -m unittest discover -s engine/tests`, then
 `python3 -B engine/tests/validate-generation-protocol.py`. The reference-resolution
 suite includes a synthetic 20-scene run through `READY_TO_PLAY`, exercising real
 validation, commits, projection, baseline build, accounting, and automatic repairs
 with only provider responses replaced. It creates no fiction in the installation.
+The provider-streaming suite uses synthetic SSE data and simulated time to check split
+UTF-8, reasoning fields, usage-only events, long active streams, stalled requests,
+malformed events, interrupted attempts, and replay without network access.
 
 ## 3. Mechanical and Continuity Validation
 

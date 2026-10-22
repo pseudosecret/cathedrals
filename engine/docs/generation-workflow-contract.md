@@ -125,6 +125,16 @@ termination, and typed relevance references. Slot repairs must preserve the froz
 one-to-one allocation. A source-grounded mapping is required; `UNRESOLVED` returns to
 bounded correction, with the existing explicit Genesis expansion path preserved.
 
+Architecture preserves its structurally valid draft before running its focused
+reference pass. A source-grounded mapping may return `UNRESOLVED`; a narrowly typed
+follow-up may replace only that reference, remove an invalid optional list entry, or
+author one missing local obligation or attractor. The engine never invents a target
+or alters committed Genesis. New definitions must use the missing ID and valid typed
+references; counts, dependency checks, and frozen budgets remain binding. Repairs
+and their original responses persist once, so resume never regenerates the accepted
+Architecture or charges a cached repair twice. Exhaustion pauses instead of falling
+back to a complete Architecture rewrite.
+
 Semantic normalization builds and fully validates the candidate packet before staging
 metadata. Metadata errors consume metadata attempts, never another accepted artistic
 request. A pending normalization response survives an interrupted focused lookup.
@@ -221,6 +231,8 @@ future. Universal hard obligations cannot be dropped; making one impossible caus
 
 - Transport failure before a response: retry the identical planned step.
 - Provider failure before creative output: retry the identical planned step.
+- Request timeout or interrupted stream: preserve diagnostics and immediately pause
+  as `provider_incomplete_response`; an explicit resume authorizes another attempt.
 - Malformed or unparseable creative output: record it and `FAILED_GENERATION`; do not
   creatively repair or resample.
 - Mechanically valid but weak art: commit and continue.
@@ -234,6 +246,15 @@ future. Universal hard obligations cannot be dropped; making one impossible caus
 
 The terminal states are `READY_TO_PLAY` and `FAILED_GENERATION`.
 `PAUSED_GENERATION` is resumable and never writes finalization.
+
+All generation and analysis requests use streaming with usage reporting. The shared
+transport reconstructs the ordinary completion envelope, preserving separate content,
+reasoning fields, finish reason, and usage. It archives received SSE bytes and requires
+both a finish reason and `[DONE]` before accepting a stream. Incomplete streams are
+diagnostics, never staged creative payloads. A misleading `stop` finish reason does
+not make malformed JSON valid. The configurable 3,600-second HTTP timeout applies to
+socket inactivity, not total elapsed generation time. Existing buffered responses
+and injected transports remain supported.
 
 Every new attempt copies the current local launcher and engine into
 `.cathedrals/runs/<generation-id>/engine-snapshot/`. Resume uses that run-local copy and

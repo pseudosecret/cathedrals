@@ -71,6 +71,22 @@ regenerations, and backtracks. `creative_step_count` may exceed one.
 
 ## Lawful Retry
 
+Generation and analysis requests stream through the OpenAI-compatible Chat Completions
+endpoint, requesting usage totals. The launcher prints request-start status and, as
+chunks arrive, elapsed time and received-character counts at most every 15 seconds.
+It does not print generated content or reasoning. `CATHEDRALS_HTTP_TIMEOUT` defaults
+to 3,600 seconds of socket inactivity, including the wait for initial output; an
+active stream may run longer than one hour. Ordinary JSON responses remain supported.
+The HTTP reader has no overall generation deadline.
+
+Timeouts and interrupted streams use `provider_incomplete_response` and immediately
+pause, without another automatic generation request. Check the named diagnostic
+before resuming: the server may still be finishing the abandoned request. Raw
+`*.api.sse` archives and incomplete `*.api.json` envelopes are retained per attempt;
+partial streams cannot commit. A complete saved stream can be replayed without a
+provider call. Explicit token-limit truncation retains its bounded expanded retry.
+Other failures before a response retain bounded retries with identical requests.
+
 Retry transport/provider failures under the provider law. Invalid uncommitted output
 receives three schema-aware correction attempts per invocation; exhaustion enters
 `PAUSED_GENERATION`, and resume grants three more. Packet prose must pass schema,
@@ -83,7 +99,16 @@ Architecture, packet plans, scenes, endings, and semantic metadata. After determ
 aliases, the model receives the invalid field, source context, and typed valid targets;
 it returns only an exact identifier or `UNRESOLVED`. Repairs change reference fields
 before commit and preserve literary bytes. Missing targets or unsupported mappings
-remain subject to bounded correction rather than invented replacements.
+remain subject to bounded correction rather than automatic invented replacements.
+
+Architecture stages its structurally valid draft before reference resolution. Its
+focused lookup returns typed existing targets or `UNRESOLVED`. For an unresolved
+reference, the model may correct that field, remove an erroneous list entry when
+validation permits, or author one missing local obligation or attractor. Claimants,
+committed sources, and unrelated draft content cannot change. Schema bounds, typed
+references, dependency checks, and frozen analysis/context/token budgets still apply.
+Each accepted repair is persisted once; pause/resume reuses both the draft and accepted
+repairs. Repair exhaustion pauses without requesting the whole Architecture again.
 
 Metadata must pass complete packet validation before staging. A paused lookup retains
 the original artistic and pending metadata responses, so resume continues resolution
