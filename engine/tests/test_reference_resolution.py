@@ -2,6 +2,7 @@
 
 import copy
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,6 +19,32 @@ def api_response(value, *, text=False):
     return {"choices": [{"finish_reason": "stop", "message": {
         "content": value if text else json.dumps(value),
     }}], "usage": {"prompt_tokens": 11, "completion_tokens": 7}}
+
+
+def planning_path(path):
+    return [json.loads(quoted) if quoted else int(index) if index else name
+            for name, index, quoted in re.findall(r'\.([A-Za-z_][A-Za-z0-9_]*)|\[(\d+)\]|\[("[^\"]*")\]', path)]
+
+
+def planning_response(request, resolve):
+    prompt = request["messages"][1]["content"]
+    schema = json.loads(prompt.split("VALUE SCHEMA\n", 1)[1].split("\nFULL ASSEMBLED", 1)[0])
+
+    def project(value, node):
+        node = RUNNER.planning_schema_node(node, schema)
+        if isinstance(value, dict) and node.get("type") == "object":
+            return {key: project(value[key], child) for key, child in node.get("properties", {}).items() if key in value}
+        if isinstance(value, list) and "items" in node:
+            return [project(item, node["items"]) for item in value]
+        return value
+
+    if "BATCH TARGETS\n" in prompt:
+        targets = json.loads(prompt.split("BATCH TARGETS\n", 1)[1].split("\nVALUE SCHEMA", 1)[0])
+        return api_response({item["key"]: project(resolve(planning_path(item["path"]),
+            schema["properties"][item["key"]] | {"$defs": schema.get("$defs", {})}), schema["properties"][item["key"]]) for item in targets})
+    path = prompt.split("FIELD PATH\n", 1)[1].split("\n", 1)[0]
+    value = project(resolve(planning_path(path), schema), schema)
+    return api_response(value, text=isinstance(value, str))
 
 
 def foundation_payload():
@@ -216,24 +243,23 @@ class ReferenceResolutionTests(unittest.TestCase):
             prompt = request["messages"][1]["content"]
             if "FIELD PATH\n" in prompt:
                 name = "planningValue"
+            if "BATCH TARGETS\n" in prompt:
+                name = "planningBatchValues"
             calls.append(name)
             schema = request.get("response_format", {}).get("json_schema", {}).get("schema", {})
-            if name == "planningValue":
-                schema = json.loads(prompt.split("VALUE SCHEMA\n", 1)[1].split("\nFULL ASSEMBLED", 1)[0])
-                path = prompt.split("FIELD PATH\n", 1)[1].split("\n", 1)[0]
-                field = path.rsplit(".", 1)[-1]
-                template = architecture_core_payload()["attractors"][0]
-                if "__NEW_ATTRACTOR__" in schema.get("enum", []):
-                    value = "__NEW_ATTRACTOR__"
-                elif "__NARRATIVE_HINT__" in schema.get("enum", []):
-                    value = "__NARRATIVE_HINT__"
-                elif "$setups" in path or "$connect" in path:
-                    value = schema["enum"][0] if "enum" in schema else "Synthetic earlier setup."
-                elif field == "kind":
-                    value = "claimant"
-                else:
-                    value = template[field]
-                return api_response(value, text=isinstance(value, str))
+            if name in {"planningValue", "planningBatchValues"}:
+                def resolve(path, node):
+                    if "__NEW_ATTRACTOR__" in node.get("enum", []):
+                        return "__NEW_ATTRACTOR__"
+                    if "__NARRATIVE_HINT__" in node.get("enum", []):
+                        return "__NARRATIVE_HINT__"
+                    if path[0] == "$setups":
+                        return {"setup_slot_id": "scene_slot_0001", "instruction": "Synthetic earlier setup."}
+                    if "enum" in node:
+                        return node["enum"][0]
+                    template = architecture_core_payload()["attractors"][0] | {"kind": "claimant"}
+                    return template if len(path) == 2 else template[path[-1]]
+                return planning_response(request, resolve)
             if name == "reference":
                 prompt = request["messages"][1]["content"]
                 candidates = json.loads(prompt.split("VALID REFERENCES\n", 1)[1].split("\n\nWhich", 1)[0])
@@ -318,6 +344,7 @@ class ReferenceResolutionTests(unittest.TestCase):
         self.assertEqual(calls.count("reference"), 52)
         self.assertEqual(calls.count("architectureCorePayload"), 1)
         self.assertGreater(calls.count("planningValue"), 0)
+        self.assertGreater(calls.count("planningBatchValues"), 0)
         self.assertEqual(calls.count("architectureRepair"), 0)
         self.assertEqual(normalization_counts["scene_slot_0006"], 2)
         failures = [entry for entry in RUNNER.ledger_entries(self.run) if entry["commit_status"] == "FAILED_BEFORE_COMMIT"]

@@ -2,7 +2,6 @@
 
 import copy
 import json
-import re
 import socket
 import unittest
 from unittest import mock
@@ -11,6 +10,8 @@ from test_cathedrals import ROOT, RUNNER, architecture_core_payload, architectur
 import test_reference_resolution as reference_fixtures
 
 api_response = reference_fixtures.api_response
+planning_response = reference_fixtures.planning_response
+planning_path = reference_fixtures.planning_path
 
 
 class PlanningRecoveryTests(unittest.TestCase):
@@ -51,11 +52,12 @@ class PlanningRecoveryTests(unittest.TestCase):
             self.assertEqual(len(issues), 8)
             self.assertEqual({item["kind"] for item in issues}, {"state variable"})
             state = self.state(payload)
-            transport = mock.Mock(return_value=api_response("__NARRATIVE_HINT__", text=True))
+            transport = mock.Mock(side_effect=lambda method, url, request, **kwargs:
+                planning_response(request, lambda path, node: "__NARRATIVE_HINT__"))
             RUNNER.repair_planning_references(self.run, "architecture_plan_batch_0001", state,
                 RUNNER.architecture_plan_batch_schema(self.run, RUNNER.planned_packet_specs(core)), transport,
                 specs=RUNNER.planned_packet_specs(core))
-            self.assertEqual(transport.call_count, 8)
+            self.assertEqual(transport.call_count, 1)
             self.assertEqual(len(state["hints"]), 8)
             self.assertEqual(RUNNER.named_reference_issues(self.run, state["payload"], "architecturePlanBatchPayload", specs=RUNNER.planned_packet_specs(core)), [])
         self.assertIn("scene_slot_0001", state["payload"]["packet_plans"][0]["relevance"]["technical_slot_ids"])
@@ -81,7 +83,7 @@ class PlanningRecoveryTests(unittest.TestCase):
         RUNNER.fill_planning_shape(self.run, "architecture_plan_batch_test", state, schema, transport)
         self.assertEqual(state["payload"], {"accepted": "keep me", "missing": 0})
         prompt = transport.call_args.args[2]["messages"][1]["content"]
-        self.assertIn('"accepted": "keep me"', prompt)
+        self.assertIn('"accepted":"keep me"', prompt)
         self.assertIn("$.missing", prompt)
         self.assertNotIn("complete corrected payload", prompt)
         self.assertEqual(transport.call_count, 2)
@@ -96,6 +98,37 @@ class PlanningRecoveryTests(unittest.TestCase):
                 self.assertEqual(result, value)
                 self.assertEqual(RUNNER.planning_value(self.run, "architecture_core", state, ["field"], schema, "synthetic", mock.Mock(side_effect=AssertionError("repeated"))), value)
                 self.assertEqual(transport.call_count, 1)
+        state = self.state({})
+        schemas = {"flag": {"type": "boolean"}, "count": {"type": "integer"}, "empty": {"type": "array"}}
+        values = {"flag": False, "count": 0, "empty": []}
+        tasks = [{"path": [key], "schema": schema, "reason": "Synthetic batch value."} for key, schema in schemas.items()]
+        transport = mock.Mock(side_effect=lambda method, url, request, **kwargs: planning_response(request, lambda path, node: values[path[-1]]))
+        RUNNER.planning_batch(self.run, "architecture_core", state, tasks, transport)
+        RUNNER.planning_batch(self.run, "architecture_core", state, tasks, mock.Mock(side_effect=AssertionError("repeated")))
+        self.assertEqual(state["payload"], values)
+        self.assertEqual(transport.call_count, 1)
+
+    def test_response_replays_after_success_was_ledgered_before_checkpoint_restore(self):
+        state = self.state({"accepted": "keep"})
+        transport = mock.Mock(return_value=api_response(7))
+        value = RUNNER.planning_value(self.run, "architecture_core", state, ["pending"], {"type": "integer"}, "Synthetic recovery.", transport)
+        self.assertEqual(value, 7)
+        restored = self.state({"accepted": "keep"})
+        forbidden = mock.Mock(side_effect=AssertionError("successful response repeated"))
+        value = RUNNER.planning_value(self.run, "architecture_core", restored, ["pending"], {"type": "integer"}, "Synthetic recovery.", forbidden)
+        self.assertEqual(value, 7)
+        forbidden.assert_not_called()
+        self.assertEqual(len([item for item in RUNNER.ledger_entries(self.run) if item["step_type"] == "analysis"]), 1)
+
+    def test_reasoning_only_exact_enum_response_replays_with_same_validation(self):
+        state = self.state({"accepted": "keep"})
+        response = api_response("", text=True)
+        response["choices"][0]["message"]["reasoning_content"] = "source_one"
+        schema = {"type": "string", "enum": ["source_one"]}
+        value = RUNNER.planning_value(self.run, "architecture_core", state, ["pending"], schema, "Synthetic identity.", lambda *args, **kwargs: response)
+        self.assertEqual(value, "source_one")
+        value = RUNNER.planning_value(self.run, "architecture_core", self.state({"accepted": "keep"}), ["pending"], schema, "Synthetic identity.", mock.Mock(side_effect=AssertionError("repeated")))
+        self.assertEqual(value, "source_one")
 
     def test_interrupted_initial_draft_pauses_then_resumes_only_missing_values(self):
         schema = {"type": "object", "required": ["accepted", "missing"], "properties": {
@@ -116,7 +149,8 @@ class PlanningRecoveryTests(unittest.TestCase):
                                   lambda *a, **kw: api_response(0))
         self.assertEqual(state["payload"], {"accepted": "keep me", "missing": 0})
         self.assertEqual(raw.read_bytes(), original)
-        self.assertEqual(RUNNER.ledger_entries(self.run)[-1]["failure_class"], "provider_incomplete_response")
+        self.assertEqual([entry["failure_class"] for entry in RUNNER.ledger_entries(self.run)
+                          if entry["commit_status"] == "FAILED_BEFORE_COMMIT"], ["provider_incomplete_response"])
 
     def test_truncated_core_is_assembled_from_values_in_backward_order(self):
         desired = self.core()
@@ -138,22 +172,29 @@ class PlanningRecoveryTests(unittest.TestCase):
         paths = []
         def transport(_method, _url, request, **kwargs):
             prompt = request["messages"][1]["content"]
-            if "FIELD PATH\n" not in prompt:
+            if "FIELD PATH\n" not in prompt and "BATCH TARGETS\n" not in prompt:
                 response = api_response('{"saturation_rationale":"keep me", "attractors":[', text=True)
                 response["choices"][0]["finish_reason"] = "length"
                 return response
-            path = prompt.split("FIELD PATH\n", 1)[1].split("\n", 1)[0]
-            paths.append(path)
-            value = desired
-            for component, index, quoted in re.findall(r'\.([A-Za-z_][A-Za-z0-9_]*)|\[(\d+)\]|\[("[^\"]*")\]', path):
-                component = json.loads(quoted) if quoted else component
-                value = len(value) if component == "$count" else value[int(index)] if index else value[component]
-            return api_response(value, text=isinstance(value, str))
+            def resolve(path, node):
+                paths.append(RUNNER.reference_path(path))
+                if path[0] == "$layout":
+                    value = desired
+                    for part in planning_path(path[1]):
+                        value = value[part]
+                    return len(value)
+                value = desired
+                for part in path:
+                    value = value[part]
+                return value
+            return planning_response(request, resolve)
         with mock.patch.object(RUNNER, "architecture_core_prompt", return_value=("prompt", "context")):
             core = RUNNER.prepare_core_draft(self.run, transport)
         self.assertEqual(core["scope_commitment"]["saturation_rationale"], "keep me")
         self.assertEqual(len(core["arcs"]), 4)
-        self.assertLess(paths.index("$.attractors[0].terminal_transformation"), paths.index("$.obligation_graph[0].description"))
+        self.assertLess(paths.index("$.attractors[0]"), paths.index("$.obligation_graph[0]"))
+        self.assertFalse(any(path.endswith(".status") for path in paths))
+        self.assertLess(len(paths), 25)
         state = RUNNER.read_json(self.run / ".staging/architecture_core.planning.json")
         self.assertTrue(state["ready"])
         self.assertTrue(state["bulk_failed"])
@@ -177,15 +218,18 @@ class PlanningRecoveryTests(unittest.TestCase):
                     attractor_ids=[core["attractors"][0]["attractor_id"]] if spec["packet_kind"] == "ending" else [])
                     for spec in RUNNER.planned_packet_specs(core)]})
             self.assertFalse(commits, "Planning committed before all setups were accepted")
-            path = prompt.split("FIELD PATH\n", 1)[1].split("\n", 1)[0]
-            calls.append(path)
-            schema = json.loads(prompt.split("VALUE SCHEMA\n", 1)[1].split("\nFULL ASSEMBLED", 1)[0])
-            if path.endswith("setup_slot_id"):
-                return api_response(schema["enum"][0], text=True)
             if not stopped:
                 stopped = True
-                raise RUNNER.IncompleteResponseError("synthetic setup interruption", api_response("partial", text=True))
-            return api_response("Synthetic coherent earlier setup.", text=True)
+                raise RUNNER.IncompleteResponseError("synthetic setup interruption", api_response(
+                    {"value_001": {"setup_slot_id": "scene_slot_0001"}}))
+            def resolve(path, node):
+                calls.append(path)
+                if path[0] == "$setups":
+                    if path[-1] == "instruction":
+                        return "Synthetic coherent earlier setup."
+                    return {"setup_slot_id": "scene_slot_0001", "instruction": "Synthetic coherent earlier setup."}
+                self.fail(path)
+            return planning_response(request, resolve)
         def commit(_run, record, _raw, response, **kwargs):
             draft = RUNNER.read_json(self.run / ".staging/architecture_core.planning.json")
             self.assertTrue(draft["setups_complete"])
@@ -202,7 +246,7 @@ class PlanningRecoveryTests(unittest.TestCase):
             RUNNER.execute_planning_phases(self.run, transport)
         self.assertEqual(calls.count("architectureCorePayload"), 1)
         self.assertEqual(calls.count("architecturePlanBatchPayload"), 1)
-        self.assertEqual(calls.count(RUNNER.reference_path(["$setups", 0, "setup_slot_id"])), 1)
+        self.assertNotIn(["$setups", 0, "setup_slot_id"], calls)
         self.assertEqual(len(commits), 2)
         plans = commits[1]["packet_plans"]
         self.assertTrue(any("Setup in scene_slot_0001" in text for text in plans[0]["soft_guidance"]))
@@ -236,24 +280,17 @@ class PlanningRecoveryTests(unittest.TestCase):
         calls = []
         def transport(_method, _url, request, **kwargs):
             prompt = request["messages"][1]["content"]
-            if "FIELD PATH\n" not in prompt:
+            if "FIELD PATH\n" not in prompt and "BATCH TARGETS\n" not in prompt:
                 calls.append("bulk")
                 return api_response(payload)
-            path = prompt.split("FIELD PATH\n", 1)[1].split("\n", 1)[0]
-            calls.append(path)
-            schema = json.loads(prompt.split("VALUE SCHEMA\n", 1)[1].split("\nFULL ASSEMBLED", 1)[0])
-            if "$ending_attractor" in path:
-                value = schema["enum"][0]
-            elif "$opening_targets" in path:
-                value = schema["items"]["enum"][:3]
-            elif path.endswith(".node_type"):
-                value = "branch_family"
-            elif path.endswith(".purpose"):
-                value = "Synthetic distinct branch purpose."
-            else:
-                self.assertTrue(path.endswith(".hard_obligation_ids"), path)
-                value = []
-            return api_response(value, text=isinstance(value, str))
+            def resolve(path, node):
+                calls.append(path)
+                if "$ending_attractor" in path:
+                    return node["enum"][0]
+                if "$opening_targets" in path:
+                    return node["items"]["enum"][:3]
+                return {"node_type": "branch_family", "purpose": "Synthetic distinct branch purpose.", "hard_obligation_ids": []}
+            return planning_response(request, resolve)
         with mock.patch.object(RUNNER, "architecture_core_prompt", return_value=("prompt", "context")):
             core = RUNNER.prepare_core_draft(self.run, transport)
         self.assertEqual(calls.count("bulk"), 1)
@@ -299,11 +336,184 @@ class PlanningRecoveryTests(unittest.TestCase):
     def test_complete_draft_never_silently_disappears_under_context_pressure(self):
         state = self.state({"must_keep": "x" * 220000})
         transport = mock.Mock(side_effect=AssertionError("oversized prompt was sent"))
-        with self.assertRaises(RUNNER.CathedralsError) as raised:
+        with self.assertRaises(RUNNER.PausedError) as raised:
             RUNNER.planning_value(self.run, "architecture_core", state, ["value"], {"type": "integer"}, "synthetic", transport)
         self.assertEqual(raised.exception.failure_class, "budget_exhaustion")
         transport.assert_not_called()
         self.assertEqual(len(state["payload"]["must_keep"]), 220000)
+        self.assertIn("estimated prompt", raised.exception.reason)
+        self.assertFalse(any(item["failure_class"] == "budget_exhaustion" for item in RUNNER.ledger_entries(self.run)))
+
+    def test_saved_prompt_sizes_fit_after_lossless_compaction_and_unused_schema_removal(self):
+        fixture = RUNNER.read_json(ROOT / "engine/tests/fixtures/planning-context-budget-failure.json")
+        def padded(size):
+            value = {"records": [{"text": "synthetic context"} for _ in range(512)], "padding": ""}
+            value["padding"] = "x" * (size - len(json.dumps(value, indent=2).encode()))
+            self.assertEqual(len(json.dumps(value, indent=2).encode()), size)
+            return value
+        payload = padded(fixture["draft_pretty_bytes"])
+        self.records["genesis"] = padded(fixture["genesis_pretty_bytes"])
+        schema = {"type": "string", "$defs": {"unused": {"description": "x" * fixture["unused_schema_bytes"]}}}
+        state = self.state(payload)
+        transport = mock.Mock(return_value=api_response("active", text=True))
+        RUNNER.planning_value(self.run, "architecture_core", state, ["status"], schema, "Synthetic regression.", transport)
+        request = transport.call_args.args[2]
+        prompt = request["messages"][1]["content"]
+        context = json.loads(prompt.split("FULL ASSEMBLED PLANNING CONTEXT\n", 1)[1].split("\n\nReturn", 1)[0])
+        self.assertEqual(context["assembled_draft"], payload)
+        self.assertEqual(context["genesis"], self.records["genesis"])
+        self.assertNotIn('"unused"', prompt)
+        self.assertLess((len(prompt.encode()) + 2) // 3, fixture["max_prepared_context_tokens"])
+        self.assertGreater(fixture["original_prompt_estimate_tokens"], fixture["max_prepared_context_tokens"])
+
+    def test_truncated_array_keeps_eight_records_and_does_not_accept_broken_tokens(self):
+        records = [{"obligation_id": f"debt_{index}", "description": f"Synthetic debt {index}."} for index in range(8)]
+        content = '{"obligation_graph":[' + ','.join(json.dumps(item) for item in records) + ',{"description":"unfinished'
+        value, incomplete = RUNNER.parsed_planning_fragment(content)
+        self.assertEqual(value["obligation_graph"], records)
+        self.assertIn(["obligation_graph"], incomplete)
+        for suffix in ('1e', '"bad\\u12', 'tru'):
+            with self.subTest(suffix=suffix):
+                value, _ = RUNNER.parsed_planning_fragment('{"accepted":false,"unfinished":' + suffix)
+                self.assertEqual(value, {"accepted": False})
+
+    def test_record_batches_reduce_calls_and_preserve_owned_status_and_accepted_siblings(self):
+        desired = self.core()
+        original = desired["obligation_graph"][0]
+        desired["obligation_graph"] = [copy.deepcopy(original) | {"obligation_id": f"debt_{index}", "description": f"Synthetic debt {index}."} for index in range(12)]
+        payload = copy.deepcopy(desired)
+        payload["obligation_graph"] = [{"obligation_id": item["obligation_id"], "description": item["description"]} for item in desired["obligation_graph"]]
+        schema = RUNNER.definition_schema("architectureCorePayload")
+        schema["$defs"]["obligation"].pop("allOf", None)
+        state, calls = self.state(payload), []
+        def transport(_method, _url, request, **kwargs):
+            def resolve(path, node):
+                calls.append(path)
+                value = desired
+                if path[0] == "$layout":
+                    for part in planning_path(path[1]):
+                        value = value[part]
+                    return len(value)
+                for part in path:
+                    value = value[part]
+                return value
+            return planning_response(request, resolve)
+        RUNNER.fill_planning_shape(self.run, "architecture_core", state, schema, transport)
+        self.assertEqual(state["payload"], desired)
+        self.assertTrue(all(item["status"] == "active" for item in state["payload"]["obligation_graph"]))
+        self.assertFalse(any(path[-1] == "status" for path in calls))
+        self.assertEqual(len(state["batch_calls"]), 4)  # One layout and three four-record batches.
+        self.assertLess(len(state["batch_calls"]), 225 // 10)
+
+    def test_mixed_batch_retains_valid_entries_and_retries_only_invalid_value(self):
+        state = self.state({})
+        tasks = [{"path": [name], "schema": {"type": "integer"}, "reason": "Synthetic value."} for name in ("good", "bad")]
+        transport = mock.Mock(side_effect=[api_response({"value_001": 0, "value_002": "bad"}), api_response(4)])
+        RUNNER.planning_batch(self.run, "architecture_core", state, tasks, transport)
+        self.assertEqual(state["payload"], {"good": 0, "bad": 4})
+        self.assertEqual(transport.call_count, 2)
+        self.assertIn("$.bad", transport.call_args.args[2]["messages"][1]["content"])
+        self.assertNotIn("FIELD PATH\n$.good", transport.call_args.args[2]["messages"][1]["content"])
+        entries = [item for item in RUNNER.ledger_entries(self.run) if item["step_type"] == "analysis"]
+        self.assertEqual(sum(item["token_accounting"]["output_tokens"] for item in entries), 14)
+        self.assertEqual(len(entries), 2)
+
+    def test_batch_exhaustion_and_resume_do_not_repeat_accepted_field(self):
+        state = self.state({})
+        tasks = [{"path": [name], "schema": {"type": "integer"}, "reason": "Synthetic value."} for name in ("good", "bad")]
+        transport = mock.Mock(side_effect=[api_response({"value_001": 0}), *[api_response("bad", text=True) for _ in range(3)]])
+        with self.assertRaises(RUNNER.PausedError):
+            RUNNER.planning_batch(self.run, "architecture_core", state, tasks, transport)
+        state = RUNNER.read_json(self.run / ".staging/architecture_core.planning.json")
+        self.assertEqual(state["payload"], {"good": 0})
+        resume = mock.Mock(return_value=api_response(5))
+        RUNNER.planning_batch(self.run, "architecture_core", state, tasks, resume)
+        self.assertEqual(state["payload"], {"good": 0, "bad": 5})
+        self.assertEqual(resume.call_count, 1)
+
+    def test_missing_nullable_batch_value_is_not_accepted_as_explicit_null(self):
+        state = self.state({})
+        tasks = [{"path": [name], "schema": {"type": "null"}, "reason": "Synthetic nullable value."} for name in ("one", "two")]
+        transport = mock.Mock(side_effect=[api_response({"value_001": None}), api_response(None)])
+        RUNNER.planning_batch(self.run, "architecture_core", state, tasks, transport)
+        self.assertEqual(transport.call_count, 2)
+        self.assertEqual(state["payload"], {"one": None, "two": None})
+
+    def test_truncated_batch_array_retains_closed_records_and_partial_record_members(self):
+        state = self.state({"records": [{}, {}]})
+        item = {"type": "object", "required": ["a", "b"], "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}}}
+        tasks = [{"path": ["records"], "schema": {"type": "array", "minItems": 2, "maxItems": 2, "items": item}, "reason": "Synthetic records."}]
+        transport = mock.Mock(side_effect=[api_response('{"value_001":[{"a":1,"b":2},{"a":3,"b":', text=True), api_response(4)])
+        RUNNER.planning_batch(self.run, "architecture_core", state, tasks, transport)
+        self.assertEqual(state["payload"], {"records": [{"a": 1, "b": 2}, {"a": 3, "b": 4}]})
+        self.assertEqual(transport.call_count, 2)
+        self.assertIn("FIELD PATH\n$.records[1].b", transport.call_args.args[2]["messages"][1]["content"])
+
+    def test_record_batch_cannot_rewrite_accepted_siblings_or_nested_array_entries(self):
+        state = self.state({"record": {"kept": "original", "sources": [{"key": "stay"}, {}]}})
+        sources = {"type": "array", "minItems": 2, "maxItems": 2, "items": {
+            "type": "object", "required": ["key"], "properties": {"key": {"type": "string"}}}}
+        node = {"type": "object", "required": ["kept", "sources"], "properties": {"kept": {"type": "string"}, "sources": sources}}
+        schema = {"type": "object", "additionalProperties": False, "required": ["sources"], "properties": {"sources": sources}}
+        task = {"path": ["record"], "schema": schema, "preserve_schema": node, "root_schema": node, "reason": "Synthetic record."}
+        transport = mock.Mock(return_value=api_response({"value_001": {"kept": "rewrite", "sources": [{"key": "rewrite"}, {"key": "new"}]}}))
+        RUNNER.planning_batch(self.run, "architecture_core", state, [task], transport)
+        self.assertEqual(state["payload"], {"record": {"kept": "original", "sources": [{"key": "stay"}, {"key": "new"}]}})
+        self.assertEqual(transport.call_count, 1)
+
+    def test_failed_group_splits_into_smaller_groups_without_repeating_success(self):
+        state = self.state({})
+        tasks = [{"path": [f"field_{index}"], "schema": {"type": "integer"}, "reason": "Synthetic independent value."} for index in range(4)]
+        calls = []
+        def transport(_method, _url, request, **kwargs):
+            calls.append(request)
+            if len(calls) == 1:
+                return api_response({})
+            return planning_response(request, lambda path, node: int(path[-1].split("_")[-1]))
+        RUNNER.planning_batch(self.run, "architecture_core", state, tasks, transport)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(state["payload"], {f"field_{index}": index for index in range(4)})
+        self.assertTrue(all("BATCH TARGETS\n" in request["messages"][1]["content"] for request in calls))
+
+    def test_planning_output_allowance_shrinks_to_loaded_model_headroom(self):
+        budgets = RUNNER.read_json(self.run / "run-manifest.json")["budgets"]
+        read_json = RUNNER.read_json
+        budgets = budgets | {"model_context_window_tokens": 6000, "context_safety_reserve_tokens": 4096}
+        with mock.patch.object(RUNNER, "read_json", side_effect=lambda path: {"budgets": budgets} if path.name == "run-manifest.json" else read_json(path)):
+            limit = RUNNER.planning_output_limit(self.run, "x" * 300, {"type": "string"}, 8192, "Synthetic capacity")
+        self.assertEqual(limit, 1804)
+
+    def test_batch_reduces_schema_size_before_pausing_for_context(self):
+        state = self.state({"keep": "x" * 125000})
+        choices = [f"choice_{index}_" + "x" * 64 for index in range(100)]
+        tasks = [{"path": [f"field_{index}"], "schema": {"type": "string", "enum": choices}, "reason": "Synthetic independent choice."} for index in range(4)]
+        transport = mock.Mock(side_effect=lambda method, url, request, **kwargs: planning_response(request, lambda path, node: choices[0]))
+        RUNNER.planning_batch(self.run, "architecture_core", state, tasks, transport)
+        self.assertEqual(transport.call_count, 2)
+        self.assertEqual(state["payload"]["keep"], "x" * 125000)
+        self.assertTrue(all(state["payload"][f"field_{index}"] == choices[0] for index in range(4)))
+        for call in transport.call_args_list:
+            prompt = call.args[2]["messages"][1]["content"]
+            context = json.loads(prompt.split("FULL ASSEMBLED PLANNING CONTEXT\n", 1)[1].split("\n\nReturn", 1)[0])
+            self.assertEqual(context["assembled_draft"]["keep"], state["payload"]["keep"])
+
+    def test_true_context_overflow_pauses_main_without_terminal_finalization(self):
+        state = self.state({"accepted": "x" * 220000})
+        RUNNER.save_planning_draft(self.run, "architecture_core", state)
+        draft = self.run / ".staging/architecture_core.planning.json"
+        original = draft.read_bytes()
+        forbidden = mock.Mock(side_effect=AssertionError("network forbidden"))
+        def execute(*args, **kwargs):
+            RUNNER.planning_value(self.run, "architecture_core", state, ["missing"], {"type": "integer"}, "Synthetic limit.", forbidden)
+        with mock.patch.object(RUNNER, "ensure_runtime_layout"), mock.patch.object(RUNNER, "choose_resume", return_value=self.run), mock.patch.object(
+            RUNNER, "snapshot_root", return_value=self.root / "absent"
+        ), mock.patch.object(RUNNER, "ensure_resume_ready"), mock.patch.object(RUNNER, "execute_run", side_effect=execute):
+            result = RUNNER.main([], output_fn=lambda value: None, transport=forbidden)
+        self.assertEqual(result, 2)
+        self.assertEqual(RUNNER.load_state(self.run)["status"], "PAUSED_GENERATION")
+        self.assertFalse((self.run / "finalization.json").exists())
+        self.assertEqual(draft.read_bytes(), original)
+        forbidden.assert_not_called()
 
     def test_unresolved_lookup_is_not_reused_as_success_and_every_attempt_is_accounted(self):
         issue = {"path": ["target"], "kind": "source", "invalid": "missing", "context": "Synthetic use.", "candidates": {"source_one": "Synthetic source."}}

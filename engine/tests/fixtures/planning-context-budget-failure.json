@@ -1,0 +1,15 @@
+{
+  "generation_id": "cathedrals_20261022_231021_b263c0",
+  "model_context_window_tokens": 80384,
+  "max_prepared_context_tokens": 49152,
+  "failed_field": "$.obligation_graph[9].status",
+  "original_prompt_estimate_tokens": 49224,
+  "unused_schema_bytes": 11678,
+  "draft_pretty_bytes": 68630,
+  "genesis_pretty_bytes": 61582,
+  "original_compact_prompt_estimate_tokens": 35860,
+  "complete_obligations_in_truncated_array": 8,
+  "field_requests": 225,
+  "field_input_tokens": 7056968,
+  "field_output_tokens": 149169
+}

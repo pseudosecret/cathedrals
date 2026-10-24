@@ -125,15 +125,26 @@ termination, and typed relevance references. Slot repairs must preserve the froz
 one-to-one allocation. A source-grounded mapping is required; `UNRESOLVED` returns to
 bounded correction, with the existing explicit Genesis expansion path preserved.
 
-Planning tries one broad core or plan-batch draft, then switches malformed, truncated,
-structurally invalid, or unresolved parts to one value per request. The engine
-assembles containers and IDs, retaining complete parsed top-level members without
-inventing JSON closure. Every focused request carries the complete assembled draft,
-Genesis, staged core and plan batches, original unassigned annotations, and pending
-hints. Full context must fit the frozen budget; it is never silently clipped. Each
-value has three attempts per invocation. Accepted values, including false, zero,
-and empty collections, persist before further requests. Resume continues only pending
-work, with no complete Architecture rewrite or duplicate accounting.
+Planning tries one broad core or plan-batch draft with up to 21,800 output tokens
+when context permits, then recovers pending content in coherent batches. Defaults
+are four records, sixteen reference resolutions, or four backward setup requirements
+per batch, with an 8,192-token output ceiling. Unknown collection counts are resolved
+together. A failed batch preserves independently valid entries and members, then
+splits only the unsuccessful remainder. Isolated values retain three attempts per
+invocation. The engine supplies containers, IDs, and initial active obligation status.
+
+Complete parsed members and array elements survive inside unfinished containers;
+the engine never invents JSON closure or treats a truncated array prefix as its final
+count. Every recovery request carries the complete assembled draft, Genesis, staged
+core and plan batches, original unassigned annotations, and pending hints. Compact
+JSON and referenced schema definitions reduce overhead without removing authored
+content. If full context still cannot fit frozen prompt/model limits, pause with a
+capacity breakdown and saved progress. Other hard resource exhaustion remains a
+terminal failure. No oversized request is sent and no context is silently clipped.
+Accepted values, including false, zero, and empty collections, persist before further
+requests. Actual response usage is ledgered immediately, once per request, and is
+not charged again for split successes or the eventual parent commit. Resume continues
+only pending work, with no complete Architecture rewrite.
 
 Plan reference catalogs include every allocated literary slot before Architecture is
 committed and dependencies only from earlier staged allocations. Recorded motif-event
@@ -164,7 +175,7 @@ New-run budget derivation adds a pooled allowance of three successful reference
 repairs per possible scene/ending chunk to the existing analysis allowance. The
 corresponding cumulative token ceilings freeze with the run; this capacity never
 causes calls when references are already valid.
-Calculation version 8 additionally reserves three attempts per schema-bounded planning
+Calculation version 9 retains the reserve of three attempts per schema-bounded planning
 field, plus earlier placement and instruction values for ending requirements and
 preserved hints. Object arrays use schema cardinality limits; primitive arrays count
 as one value. These are conservative recovery limits, not expected usage. Per-request

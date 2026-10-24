@@ -101,20 +101,34 @@ it returns only an exact identifier or `UNRESOLVED`. Repairs change reference fi
 before commit and preserve literary bytes. Missing targets or unsupported mappings
 remain subject to bounded correction rather than automatic invented replacements.
 
-Planning makes one broad draft request for the core and each plan batch. Malformed,
-truncated, or invalid drafts then use one field value per request; the engine builds
-the JSON containers and IDs. Complete parsed top-level members survive malformed JSON;
-missing delimiters and missing content are never inferred. Interrupted streams pause
-first, saving those members for focused completion on explicit resume. Every field
-request includes the whole assembled draft, Genesis, staged plans, and pending hints.
-If that full context exceeds the frozen budget, pause or fail without silently clipping it.
-Each value gets three attempts per invocation; accepted values, including false, zero,
-and empty arrays, survive pause/resume without another broad request.
+Planning makes one broad draft request for the core and each plan batch, allowing up
+to 21,800 output tokens when frozen context headroom permits. Recovery then requests
+up to four coherent records together, sixteen independent reference resolutions, or
+four setup requirements with their placements and instructions. Recovery batches allow
+up to 8,192 output tokens, reduced to fit model headroom. Unknown collection counts
+are chosen together in a layout request. The engine constructs containers, IDs, and
+initial obligation status without asking the model for engine-owned values.
+
+Each batch is attempted once. Valid entries and valid members of partially invalid
+records are saved immediately; only unsuccessful entries split into smaller groups.
+Isolated values receive three attempts per invocation. Accepted values, including
+false, zero, and empty arrays, survive pause/resume without another broad request.
+Complete members and array elements survive malformed or truncated JSON, including
+records inside unfinished arrays. Unfinished containers remain explicit; missing
+delimiters, collection completion, and missing text are never inferred. Interrupted
+streams pause before continuing recovery on explicit resume.
+
+Every request retains the whole assembled planning context and Genesis. JSON is
+compact, repeated record bodies are removed, and only referenced schema definitions
+are included. If complete compact context still exceeds the frozen prompt limit or
+model capacity, planning enters `PAUSED_GENERATION`, preserving all accepted work.
+The diagnostic reports prompt estimates, schema size, limits, and output/safety
+reserves. No oversized request is sent and no authored context is silently clipped.
 
 Planning catalogs include allocated scene and ending slots before Architecture exists.
 Motif-event aliases use their exact recorded motif IDs. For an unresolved reference,
 the model selects an existing typed target or authors a missing local obligation or
-attractor one value at a time. Unknown relevance hints can instead become explicit
+attractor through record recovery. Unknown relevance hints can instead become explicit
 earlier setup instructions; they are retained with their original field and text,
 not invented runtime state variables. `UNRESOLVED` is never cached as a successful
 mapping. Claimants, committed sources, and accepted unrelated content remain fixed.
@@ -136,9 +150,11 @@ lookup costs are already ledgered and are not charged again at artistic commit.
 New runs reserve three successful reference repairs per possible scene/ending chunk
 in addition to the existing analysis allowance; unused capacity makes no calls. This
 allowance is pooled across the run. Cumulative token ceilings use the resulting
-analysis-step count and remain frozen at run creation. Calculation version 8 also
-reserves three attempts per schema-bounded planning field and per backward setup
+analysis-step count and remain frozen at run creation. Calculation version 9 retains
+the reserve of three attempts per schema-bounded planning field and per backward setup
 value. This conservative recovery ceiling is capacity, not a forecast of calls or cost.
+Successful and failed planning response usage is recorded before later requests;
+accepted batch entries and eventual parent commits do not charge the response twice.
 
 Each scene or ending chunk has a 1,200-word ceiling including nested artifact prose.
 The logical packet's 4,800-word target is guidance only. The whole-work ceiling is

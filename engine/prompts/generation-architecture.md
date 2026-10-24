@@ -2,6 +2,8 @@
 
 Return exactly one Architecture core payload conforming to the supplied schema.
 Return JSON only.
+Keep planning descriptions concise and proportionate to the requested scene count;
+schema maxima are capacity limits. Every initial obligation has status `active`.
 
 Using completed immutable Genesis, author macro arcs, high-level
 topology, initial obligation graph, and attractors. This is macro structure, not one
@@ -25,6 +27,8 @@ ALLOWED COMMITTED SOURCES; never invent aliases. Every attractor prerequisite mu
 name a hard obligation authored in this record.
 Relevance IDs must be declared typed IDs. Narrative conditions belong in seed conditions,
 obligations, or guidance; do not invent runtime state keys to represent them.
+If recovery is required, the engine preserves accepted content and requests pending
+records together before isolating individual fields. Do not regenerate accepted work.
 
 FROZEN ARCHITECTURE CONTEXT BEGINS
 

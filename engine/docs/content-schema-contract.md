@@ -75,8 +75,10 @@ Truncated, ambiguous, or creatively malformed output is not completed by inferen
 Planning recovery uses internal `.staging/<step>.planning.json` checkpoints without
 changing these record schemas. A checkpoint retains the assembled draft, accepted
 field values, raw bulk response, unresolved hints, and backward setup placements.
-Only complete parsed top-level members survive malformed or interrupted JSON;
-missing content is authored through focused requests. The complete core and all
+Checkpoint version 2 also retains batch progress, accepted targets, collection layout,
+and unfinished-container paths. Complete parsed members and array elements survive
+malformed or interrupted JSON; missing content is authored through record batches
+and progressively smaller recovery requests. The complete core and all
 batches validate before their first commit. Each commit retains `planning-draft.json`
 and field-response evidence as supplemental provenance.
 

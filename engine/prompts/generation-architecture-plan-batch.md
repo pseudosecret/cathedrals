@@ -16,6 +16,9 @@ the allocated scene and ending IDs; state-key relevance must use declared runtim
 state keys. A narrative milestone is a setup instruction, not a new state variable.
 The engine stages every batch and completes backward setup placement before committing
 Architecture or requesting prose.
+Keep annotations concise. During recovery, the engine may request several pending
+records or setup requirements together; preserve already accepted fields and answer
+only the supplied targets.
 
 IMMUTABLE ARCHITECTURE CONTEXT BEGINS
 

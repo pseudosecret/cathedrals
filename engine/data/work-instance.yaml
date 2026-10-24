@@ -439,7 +439,7 @@ format_selection:
   renpy_bootstrap_active: false
 
 generation_budget:
-  calculation_version: 8
+  calculation_version: 9
   primary_scale_input: possible_scene_count
   words_per_token_assumption: 0.75
   max_prepared_context_tokens: 49152
@@ -458,6 +458,12 @@ generation_budget:
   reference_repair_allowance_per_chunk: 3
   planning_recovery_attempts_per_value: 3
   planning_recovery_allowance: schema_bounded_fields_and_backward_setups
+  planning_whole_draft_output_ceiling: 21800
+  planning_batch_output_ceiling: 8192
+  planning_records_per_recovery_batch: 4
+  planning_references_per_recovery_batch: 16
+  planning_setup_requirements_per_recovery_batch: 4
+  planning_context_overflow: pause_with_complete_context_retained
   max_creative_step_count: derived_per_run
   max_analysis_step_count: derived_per_run
   max_cumulative_input_tokens: derived_per_run
@@ -490,6 +496,8 @@ generation_budget:
     - "The 4,800-word logical packet target is guidance, not a shared hard ceiling or equal per-chunk allocation."
     - "Keep existing output-token allowances as conservative headroom for structured output and reasoning."
     - "Planning recovery is unused capacity, not an expected call or token count; valid drafts do not spend it on field completion."
+    - "Planning first requests a whole draft with context-safe output headroom, then batches pending records and finally isolates failed values."
+    - "Planning compacts complete authored context and includes only referenced schema definitions; genuine prompt-capacity shortfalls pause without truncating context."
     - "Record documented context-window and maximum-output limits for each selected model."
     - "Fail before generation if any planned step exceeds its model's context or output limit."
     - "Fail before generation if the derived scope cannot fit cumulative token, constraint-event, or configured cost limits."
