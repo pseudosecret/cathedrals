@@ -523,6 +523,7 @@ def derive_scope(possible_scene_count: int) -> dict:
         max(4, math.ceil(count / 3) + math.ceil(ending_max / 2) + 2)
         + REFERENCE_REPAIRS_PER_CHUNK * (count + ending_max)
         + planning_recovery_allowance(plan_batch_count)
+        + 3 * (5 * (count + ending_max) + max(1000, count * 45))
     )
     return {
         "scope": {
@@ -1476,6 +1477,7 @@ def commit_record(
         (".artistic.api.json", "artistic-api-response.json"),
         (".semantic.json", "semantic-normalization.json"),
         (".semantic.api.json", "semantic-api-response.json"),
+        (".semantic-recovery.json", "semantic-recovery.json"),
         (".repair.json", "reference-repair.json"),
         (".references.json", "named-reference-repair.json"),
     ):
@@ -1508,7 +1510,7 @@ def commit_record(
     state["stage"] = step_phase.upper()
     save_state(run_dir, state)
     reconcile_run(run_dir)
-    for suffix in (".artistic.json", ".artistic.txt", ".artistic.api.json", ".semantic.json", ".semantic.api.json", ".repair.json", ".references.json"):
+    for suffix in (".artistic.json", ".artistic.txt", ".artistic.api.json", ".semantic.json", ".semantic.api.json", ".semantic-recovery.json", ".repair.json", ".references.json"):
         (run_dir / ".staging" / f"{planned_step_id}{suffix}").unlink(missing_ok=True)
     if record["record_type"] == "creative_packet" or (
         record["record_type"] == "architecture_plan_batch" and assembled_architecture(run_dir)
@@ -3661,7 +3663,7 @@ def request_architecture_analysis(
     *, phase="architecture", system_prompt="Repair only the identified uncommitted Architecture fields. Return JSON only.",
     response_name="architectureRepair", pause_stage="Architecture repair",
     value_mode=False, initial_draft=False, temperature=0.0, max_tokens=None,
-    planning_mode=False,
+    planning_mode=False, context_purpose="planning",
 ):
     brief = read_json(run_dir / "generation-brief.json")
     seed = step_seed(brief["generation_seed"], step_id)
@@ -3671,7 +3673,7 @@ def request_architecture_analysis(
     for correction in range(3):
         current_prompt = prompt + feedback
         if planning_mode:
-            parameters["max_tokens"] = planning_output_limit(run_dir, current_prompt, schema, maximum, pause_stage)
+            parameters["max_tokens"] = planning_output_limit(run_dir, current_prompt, schema, maximum, pause_stage, purpose=context_purpose)
         entries = [entry for entry in ledger_entries(run_dir) if entry["planned_step_id"] == step_id]
         attempts = [entry["attempt"] for entry in entries]
         attempt = max(attempts, default=0) + 1
@@ -4688,17 +4690,236 @@ def build_semantic_delta(run_dir: Path, step_id: str, payload: dict, content_ids
     }
 
 
+SEMANTIC_CATEGORIES = ("canonical_facts", "knowledge_changes", "new_soft_obligations", "obligation_updates", "motif_events")
+SEMANTIC_INSTRUCTION = (
+    "Extract only NEW continuity, evidence, knowledge, obligation, and motif CHANGES supported by the immutable content. "
+    "Keep metadata concise; do not restate canon, inventory every descriptive detail, or create knowledge entries automatically for every fact. "
+    "Preserve contested evidence and uncertainty. Never invent events, prose, or resolutions. New obligations must be soft. "
+    "Use an authored content technical_slot_id as every source. fact_01, fact_02, etc. name the accepted facts in their original order. "
+    "Include every important supported change, using continuation pages when needed rather than dropping it to fit."
+)
+
+
+def compact_semantic_context(context: str) -> str:
+    chunks = re.split(r"(?m)(^===== [^\n]+ =====\n)", context)
+    decoder = json.JSONDecoder()
+    for index, chunk in enumerate(chunks):
+        remaining, values = chunk.strip(), []
+        if not remaining.startswith(("{", "[")):
+            continue
+        try:
+            while remaining:
+                value, end = decoder.raw_decode(remaining)
+                values.append(value)
+                remaining = remaining[end:].lstrip()
+        except json.JSONDecodeError:
+            continue
+        chunks[index] = "\n".join(canonical_json(value).decode() for value in values)
+    return "".join(chunks)
+
+
+def semantic_prompt(artistic: dict, context: str, instruction: str, accepted=None) -> str:
+    prompt = ("IMMUTABLE ARTISTIC PAYLOAD\n" + canonical_json(artistic).decode() +
+              "\nRELEVANT CANON AND CONSTRAINTS\n" + compact_semantic_context(context) + "\n")
+    if accepted is not None:
+        prompt += "ACCEPTED SEMANTIC METADATA\n" + canonical_json(accepted).decode()
+    return prompt + "\nINSTRUCTION\n" + SEMANTIC_INSTRUCTION + " " + instruction
+
+
+def semantic_attempt(run_dir: Path, step_id: str) -> int:
+    attempts = [entry["attempt"] for entry in ledger_entries(run_dir) if entry["planned_step_id"] == f"{step_id}_semantic"]
+    attempts.extend(int(match.group(1)) for path in (run_dir / "raw").glob(f"{step_id}-semantic-attempt*.api.json")
+                    if (match := re.fullmatch(rf"{re.escape(step_id)}-semantic-attempt([0-9]+)\.api\.json", path.name)))
+    return max(attempts, default=0) + 1
+
+
+def semantic_output_limit(run_dir: Path, prompt: str, schema: dict, maximum=8192) -> int:
+    manifest = run_dir / "run-manifest.json"
+    if not manifest.exists():
+        return maximum
+    budgets = read_json(manifest)["budgets"]
+    maximum = min(maximum, budgets.get("max_analysis_output_tokens", maximum))
+    maximum = planning_output_limit(run_dir, prompt, schema, maximum, "Semantic normalization", purpose="semantic normalization")
+    if load_state(run_dir).get("analysis_step_count", 0) + successful_structural_repair_count(run_dir) >= budgets.get("max_analysis_step_count", float("inf")):
+        raise CathedralsError("Semantic normalization", "Normalization exceeds max_analysis_step_count", "budget_exhaustion")
+    usage = [read_json(path).get("usage") or {} for path in (run_dir / "raw").glob("*.api.json")]
+    for key, ceiling, reserve in (("prompt_tokens", "max_cumulative_input_tokens", math.ceil(len(prompt.encode()) / 3)),
+                                   ("completion_tokens", "max_cumulative_output_tokens", maximum)):
+        if sum(item.get(key) or 0 for item in usage) + reserve > budgets.get(ceiling, float("inf")):
+            raise CathedralsError("Semantic normalization", f"Normalization exceeds {ceiling}", "budget_exhaustion")
+    return maximum
+
+
+def seed_semantic_recovery(run_dir: Path, step_id: str, artistic: dict, response: dict) -> dict:
+    message = (response.get("choices") or [{}])[0].get("message") or {}
+    content = message.get("content") or ""
+    content = content if isinstance(content, str) else ""
+    try:
+        payload, incomplete = parse_structured_content(content), []
+    except SchemaError:
+        payload, incomplete = parsed_planning_fragment(content)
+    payload = payload if isinstance(payload, dict) else {}
+    base = definition_schema("semanticDeltaPayload", load_protocol(run_dir))
+    state = {"version": 1, "artistic_hash": sha256_bytes(canonical_json(artistic)),
+             "payload": {key: [] for key in SEMANTIC_CATEGORIES}, "complete": {}, "pending": {},
+             "page_size": {key: 8 for key in SEMANTIC_CATEGORIES}, "feedback": {}, "revision": {}, "calls": []}
+    for key in SEMANTIC_CATEGORIES:
+        items = payload.get(key)
+        accepted = state["payload"][key]
+        if isinstance(items, list):
+            for item in items:
+                if _collect_schema_errors(item, base["properties"][key]["items"], base, "$"):
+                    break
+                accepted.append(item)
+            state["pending"][key] = items[len(accepted):]
+        state["complete"][key] = isinstance(items, list) and len(accepted) == len(items) and not any(path and path[0] == key for path in incomplete)
+    write_json(run_dir / ".staging" / f"{step_id}.semantic-recovery.json", state)
+    return state
+
+
+def semantic_event_capacity(run_dir: Path, payload: dict) -> None:
+    manifest = run_dir / "run-manifest.json"
+    if manifest.exists():
+        events = run_dir / "constraints/constraint-events.jsonl"
+        used = len(events.read_text().splitlines()) if events.exists() else 0
+        if used + sum(len(items) for items in payload.values()) > read_json(manifest)["budgets"].get("max_constraint_events", float("inf")):
+            raise CathedralsError("Semantic normalization", "Semantic normalization exceeds max_constraint_events", "budget_exhaustion")
+
+
+def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, context: str, schema: dict, transport) -> tuple[dict, dict]:
+    path = run_dir / ".staging" / f"{step_id}.semantic-recovery.json"
+    state = read_json(path)
+    if state["artistic_hash"] != sha256_bytes(canonical_json(artistic)):
+        raise IntegrityError("Semantic recovery belongs to different immutable artistic content")
+    base = definition_schema("semanticDeltaPayload", load_protocol(run_dir))
+    if state.get("rejected"):
+        reason = state["rejected"]
+        prompt = semantic_prompt(artistic, context, "Choose ONLY the category needing correction for this validation error: " + reason, state["payload"])
+        selection = {"type": "string", "enum": list(SEMANTIC_CATEGORIES)}
+        revision = sum(state["revision"].values()) + 1
+        query = f"{step_id}_semantic_correction_{revision}"
+        key, response = request_architecture_analysis(run_dir, query, prompt, selection, transport,
+            phase="validation", response_name="semanticCorrectionCategory", system_prompt="Select one metadata category. Return only its exact name.",
+            value_mode=True, planning_mode=True, context_purpose="semantic normalization", pause_stage="Semantic normalization")
+        preserve_planning_result(run_dir, step_id, query, key, response, kind="semantic_correction", phase="validation")
+        state["revision"][key] = state["revision"].get(key, 0) + 1
+        state["feedback"][key] = "Correct this rejected category while preserving unrelated valid entries: " + reason
+        # Facts keep their positions; a correction may add a missing fact for an unresolved knowledge reference.
+        if key != "canonical_facts":
+            state["pending"][key] = state["payload"][key]
+            state["payload"][key] = []
+        state["complete"][key] = False
+        state.pop("rejected")
+        write_json(path, state)
+    for key in SEMANTIC_CATEGORIES:
+        failures = 0
+        ledger_start = len(ledger_entries(run_dir))
+        while not state["complete"][key]:
+            semantic_event_capacity(run_dir, state["payload"])
+            size = state["page_size"][key]
+            offset = len(state["payload"][key])
+            query = f"{step_id}_semantic_{key}_{state['revision'].get(key, 0)}_{offset:04d}_{size}"
+            page_schema = compact_planning_schema({"type": "object", "additionalProperties": False,
+                "required": ["items", "complete"], "properties": {
+                    "items": schema["properties"][key] | {"maxItems": size}, "complete": {"type": "boolean"}}, "$defs": schema.get("$defs", {})})
+            instruction = (f"Continue ONLY {key} after its {offset} accepted records. Return at most {size} NEW records in items. "
+                "Set complete=true only when this category has no remaining important changes; otherwise complete=false. "
+                "Never repeat accepted records or renumber accepted facts. An empty items array is allowed only with complete=true. "
+                "Complete partial candidates in their original order when supported. Partial candidates: " +
+                canonical_json(state["pending"].get(key, [])).decode() + " " + state["feedback"].get(key, ""))
+            prompt = semantic_prompt(artistic, context, instruction, state["payload"])
+            print(f"Semantic normalization: {key}, {offset} accepted records, up to {size} per page", file=sys.stderr)
+            response, error = None, None
+            try:
+                result, response = request_architecture_analysis(run_dir, query, prompt, page_schema, transport,
+                    phase="validation", system_prompt="Extract concise changes from immutable authored content. Return JSON only.",
+                    response_name="semanticCategoryPage", pause_stage="Semantic normalization", initial_draft=True,
+                    planning_mode=True, context_purpose="semantic normalization", max_tokens=15000 if size == 1 and state.get("expanded") == key else 8192)
+                incomplete = []
+            except PausedError as paused:
+                error = paused.__cause__
+                if not isinstance(error, (SchemaError, TruncationError, IncompleteResponseError)):
+                    raise
+                paths = list((run_dir / "raw").glob(f"{query}-attempt*.api.json"))
+                response = read_json(max(paths, key=lambda p: int(p.name.split("-attempt")[-1].split(".")[0])))
+                content = ((response.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+                content = content if isinstance(content, str) else ""
+                try:
+                    result, incomplete = parse_structured_content(content), []
+                except SchemaError:
+                    result, incomplete = parsed_planning_fragment(content)
+            items = result.get("items", []) if isinstance(result, dict) else []
+            complete = isinstance(result, dict) and "items" in result and isinstance(items, list) and result.get("complete") is True and not any(p and p[0] == "items" for p in incomplete)
+            before = len(state["payload"][key])
+            consumed = 0
+            if isinstance(items, list):
+                for item in items:
+                    if _collect_schema_errors(item, base["properties"][key]["items"], base, "$"):
+                        complete = False
+                        break
+                    consumed += 1
+                    if item not in state["payload"][key]:
+                        state["payload"][key].append(item)
+                state["pending"][key] = items[consumed:]
+            else:
+                complete = False
+            added = len(state["payload"][key]) - before
+            if (items and not added) or not complete and not added:
+                error = error or SchemaError("A continuation page must add a new supported record or finish with empty items and complete=true")
+                complete = False
+            if state["pending"].get(key):
+                complete = False
+            state["complete"][key] = complete
+            if response is not None:
+                meta = response["_cathedrals_request"]
+                if not any(call["step_id"] == query and call["attempt"] == meta["attempt"] for call in state["calls"]):
+                    state["calls"].append({"step_id": query, "attempt": meta["attempt"], "category": key})
+                if error is None:
+                    preserve_planning_result(run_dir, step_id, query, result, response, kind="semantic_page", phase="validation")
+                elif not any(entry["planned_step_id"] == query and entry["attempt"] == meta["attempt"] for entry in ledger_entries(run_dir)):
+                    append_failed_attempt(run_dir, step_id=query, attempt=meta["attempt"], phase="validation", prompt=prompt,
+                        context=context, parameters=meta["parameters"], started_at=response.get("_cathedrals_started_at", utc_now()),
+                        failure_class=error.failure_class, step_type="analysis", usage=response.get("usage") or {})
+            write_json(path, state)
+            semantic_event_capacity(run_dir, state["payload"])
+            if isinstance(error, IncompleteResponseError):
+                raise PausedError("Semantic normalization", f"{key}: interrupted after retaining {added} complete records. {error.reason}", error.failure_class) from error
+            if isinstance(error, TruncationError) and not complete:
+                if size > 1:
+                    state["page_size"][key] = max(1, size // 2)
+                    failures = 0
+                elif state.get("expanded") != key:
+                    state["expanded"] = key
+                    failures = 0
+                else:
+                    failures += 1
+            elif error is not None and not added:
+                failures += 1
+            else:
+                failures = 0
+            if error is not None:
+                state["feedback"][key] = error.reason
+            write_json(path, state)
+            if failures >= 3:
+                attempts = sum(entry["planned_step_id"].startswith(f"{step_id}_semantic_{key}_")
+                               for entry in ledger_entries(run_dir)[ledger_start:])
+                raise PausedError("Semantic normalization", f"{key} exhausted {failures} page correction attempts in this invocation. "
+                    f"This category made {attempts} provider attempts. Accepted metadata and prose were retained. Last problem: {error.reason}") from error
+    semantic_event_capacity(run_dir, state["payload"])
+    assembled = {"choices": [{"finish_reason": "stop", "message": {"content": canonical_json(state['payload']).decode()}}],
+                 "usage": {}, "_cathedrals_semantic_assembled": True}
+    return state["payload"], assembled
+
+
 def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload: dict, context: str, transport=http_json, *, plan=None) -> dict:
     target = run_dir / ".staging" / f"{step_id}.semantic.json"
     pending_path = run_dir / ".staging" / f"{step_id}.semantic-pending.json"
     semantic_api_path = run_dir / ".staging" / f"{step_id}.semantic.api.json"
+    recovery_path = run_dir / ".staging" / f"{step_id}.semantic-recovery.json"
     cached = read_json(target) if target.exists() and semantic_api_path.exists() else None
     cached_response = read_json(semantic_api_path) if cached is not None else None
-    source_slots = [
-        item["technical_slot_id"]
-        for item in artistic_payload["scenes"] + artistic_payload["endings"]
-    ]
-    schema = semantic_delta_schema(run_dir, source_slots, plan=plan)
+    source_slots = [item["technical_slot_id"] for item in artistic_payload["scenes"] + artistic_payload["endings"]]
+    schema = compact_planning_schema(semantic_delta_schema(run_dir, source_slots, plan=plan))
     reference_plan = plan or {"scene_slot_ids": [item["technical_slot_id"] for item in artistic_payload["scenes"]],
         "ending_slot_ids": [item["technical_slot_id"] for item in artistic_payload["endings"]], "packet_slot_id": step_id}
 
@@ -4716,56 +4937,68 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
             validate_packet_for_run(record, run_dir, plan)
     brief = read_json(run_dir / "generation-brief.json")
     seed = step_seed(brief["generation_seed"], f"{step_id}_semantic")
-    parameters = {"temperature": 0.0, "max_tokens": 4096, "seed": seed, "stream": True, "stream_options": {"include_usage": True}}
+    parameters = {"temperature": 0.0, "max_tokens": 8192, "seed": seed, "stream": True, "stream_options": {"include_usage": True}}
     feedback_path = run_dir / "state" / f"{step_id}.semantic-feedback.txt"
     feedback = f" Previous normalization failed canonical validation: {feedback_path.read_text(encoding='utf-8')}" if feedback_path.exists() else ""
+    if feedback and recovery_path.exists():
+        state = read_json(recovery_path)
+        state["rejected"] = feedback
+        write_json(recovery_path, state)
+    sent = 0
     for correction in range(3):
-        attempts = [entry["attempt"] for entry in ledger_entries(run_dir) if entry["planned_step_id"] == f"{step_id}_semantic"]
-        # Successful normalizations can leave raw responses without semantic ledger entries.
-        attempts.extend(
-            int(match.group(1))
-            for path in (run_dir / "raw").glob(f"{step_id}-semantic-attempt*.api.json")
-            if (match := re.fullmatch(rf"{re.escape(step_id)}-semantic-attempt([0-9]+)\.api\.json", path.name))
-        )
-        attempt = max(attempts, default=0) + 1
+        attempt = semantic_attempt(run_dir, step_id)
         pending = read_json(pending_path) if pending_path.exists() else None
         if pending:
             attempt = pending["attempt"]
-        prompt = bounded_context([
-            ("IMMUTABLE ARTISTIC PAYLOAD", artistic_payload),
-            ("RELEVANT CANON AND CONSTRAINTS", context),
-            ("INSTRUCTION", "Normalize only semantic facts, knowledge, motif pressure, soft obligations, and updates to existing obligations. Never author prose. New obligations must be soft. Use a content technical_slot_id as every source. For a fact created in this payload, knowledge may refer to fact_01, fact_02, and so on." + feedback),
-        ], 42000)
-        request = {
-            "model": load_state(run_dir)["model"],
-            "messages": [{"role": "system", "content": "Normalize immutable authored content into constraint metadata. Return JSON only."}, {"role": "user", "content": prompt}],
-            **parameters,
-            "response_format": {"type": "json_schema", "json_schema": {"name": "semanticDeltaPayload", "strict": True, "schema": schema}},
-        }
+        prompt = semantic_prompt(artistic_payload, context, "Return the complete semantic delta. " + feedback)
         response_path = run_dir / "raw" / f"{step_id}-semantic-attempt{attempt}.api.json"
-        started = utc_now()
-        response = None
+        started, response = utc_now(), None
         try:
             if cached is not None:
                 normalized, response = cached, cached_response
                 cached = None
             elif pending:
-                normalized, response = pending["payload"], read_json(response_path)
+                normalized = pending["payload"]
+                response = pending.get("response") or read_json(response_path)
+            elif recovery_path.exists():
+                normalized, response = recover_semantic_categories(run_dir, step_id, artistic_payload, context, schema, transport)
             else:
-                response, content = provider_response(transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
-                    float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")), started_at=started,
-                    preserve=lambda value: write_json(response_path, value, mode=0o444, exclusive=True),
-                    stream_path=response_path.with_suffix(".sse"))
-                normalized = parse_structured_content(content)
-                write_json(pending_path, {"attempt": attempt, "payload": normalized})
+                parameters["max_tokens"] = semantic_output_limit(run_dir, prompt, schema)
+                request = {"model": load_state(run_dir)["model"],
+                    "messages": [{"role": "system", "content": "Normalize immutable authored content into concise constraint changes. Return JSON only."},
+                                 {"role": "user", "content": prompt}],
+                    **parameters, "response_format": {"type": "json_schema", "json_schema": {"name": "semanticDeltaPayload", "strict": True, "schema": schema}}}
+                sent += 1
+                try:
+                    response, content = provider_response(transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
+                        float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")), started_at=started,
+                        preserve=lambda value: write_json(response_path, value, mode=0o444, exclusive=True),
+                        stream_path=response_path.with_suffix(".sse"))
+                    normalized = parse_structured_content(content)
+                except (TruncationError, IncompleteResponseError) as error:
+                    response = read_json(response_path) if response_path.exists() else error.response or {}
+                    append_failed_attempt(run_dir, step_id=f"{step_id}_semantic", attempt=attempt, phase="validation", prompt=prompt,
+                        context=context, parameters=parameters, started_at=started, failure_class=error.failure_class, step_type="analysis",
+                        output_hash=sha256_file(response_path) if response_path.exists() else None, usage=response.get("usage") or {})
+                    seed_semantic_recovery(run_dir, step_id, artistic_payload, response)
+                    response = None
+                    if isinstance(error, IncompleteResponseError):
+                        raise PausedError("Semantic normalization", error.reason, error.failure_class) from error
+                    normalized, response = recover_semantic_categories(run_dir, step_id, artistic_payload, context, schema, transport)
+            write_json(pending_path, {"attempt": attempt, "payload": normalized, "response": response})
             normalized = repair_named_references(run_dir, step_id, normalized, "semanticDeltaPayload", schema, transport,
                 plan=reference_plan, source_context=artistic_payload)
             validate_json_schema(normalized, schema)
             validate_normalized(normalized)
+            semantic_event_capacity(run_dir, normalized)
             target.unlink(missing_ok=True)
-            (run_dir / ".staging" / f"{step_id}.semantic.api.json").unlink(missing_ok=True)
+            semantic_api_path.unlink(missing_ok=True)
             write_json(target, normalized, mode=0o444, exclusive=True)
-            write_json(run_dir / ".staging" / f"{step_id}.semantic.api.json", response, mode=0o444, exclusive=True)
+            write_json(semantic_api_path, response, mode=0o444, exclusive=True)
+            if recovery_path.exists():
+                state = read_json(recovery_path)
+                state["payload"] = normalized
+                write_json(recovery_path, state)
             feedback_path.unlink(missing_ok=True)
             pending_path.unlink(missing_ok=True)
             return normalized
@@ -4774,22 +5007,29 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
         except CathedralsError as error:
             pending_path.unlink(missing_ok=True)
             target.unlink(missing_ok=True)
-            (run_dir / ".staging" / f"{step_id}.semantic.api.json").unlink(missing_ok=True)
-            append_failed_attempt(run_dir, step_id=f"{step_id}_semantic", attempt=attempt, phase="validation", prompt=prompt,
-                context=context, parameters=parameters, started_at=started, failure_class=error.failure_class, step_type="analysis",
-                output_hash=sha256_file(response_path) if response_path.exists() else None,
-                usage=read_json(response_path).get("usage", {}) if response_path.exists() else
-                    response.get("usage", {}) if isinstance(response, dict) else {})
-            if error.failure_class == "budget_exhaustion":
+            semantic_api_path.unlink(missing_ok=True)
+            assembled = isinstance(response, dict) and response.get("_cathedrals_semantic_assembled")
+            already_accounted = any(entry["planned_step_id"] == f"{step_id}_semantic" and entry["attempt"] == attempt for entry in ledger_entries(run_dir))
+            if not assembled and not already_accounted:
+                append_failed_attempt(run_dir, step_id=f"{step_id}_semantic", attempt=attempt, phase="validation", prompt=prompt,
+                    context=context, parameters=parameters, started_at=started, failure_class=error.failure_class, step_type="analysis",
+                    output_hash=sha256_file(response_path) if response_path.exists() else None,
+                    usage=read_json(response_path).get("usage") or {} if response_path.exists() else response.get("usage") or {} if isinstance(response, dict) else {})
+            if error.failure_class == "budget_exhaustion" or isinstance(error, IntegrityError):
                 raise
-            if isinstance(error, IncompleteResponseError):
-                raise PausedError("Semantic normalization", error.reason, error.failure_class) from error
+            if recovery_path.exists() and isinstance(error, SchemaError):
+                state = read_json(recovery_path)
+                state["rejected"] = error.reason
+                write_json(recovery_path, state)
             if isinstance(error, SchemaError) and correction < 2:
                 feedback = f" Previous normalization failed: {error.reason}"
                 continue
             if error.failure_class in RETRYABLE_PROVIDER_FAILURES and correction < 2:
                 continue
-            raise PausedError("Semantic normalization", f"{step_id} preserved its schema-valid artistic payload, but semantic normalization exhausted 3 attempts. Resume to continue without regenerating prose. Last problem: {error.reason}") from error
+            detail = (f"metadata validation failed after {correction + 1} checks" if assembled else
+                      f"semantic normalization exhausted {sent} attempts in this invocation")
+            raise PausedError("Semantic normalization", f"{step_id} preserved its schema-valid artistic payload, but {detail}. "
+                f"Resume without regenerating prose. Last problem: {error.reason}") from error
     raise PausedError("Semantic normalization", f"{step_id} semantic normalization paused")
 
 
@@ -5736,7 +5976,7 @@ def planning_context(run_dir: Path, step_id: str, state: dict) -> dict:
     return context
 
 
-def planning_output_limit(run_dir: Path, prompt: str, schema: dict, requested: int, stage: str) -> int:
+def planning_output_limit(run_dir: Path, prompt: str, schema: dict, requested: int, stage: str, *, purpose="planning") -> int:
     budgets = read_json(run_dir / "run-manifest.json")["budgets"]
     prompt_tokens = math.ceil(len(prompt.encode()) / 3)
     reserve = budgets.get("context_safety_reserve_tokens", 4096)
@@ -5746,19 +5986,19 @@ def planning_output_limit(run_dir: Path, prompt: str, schema: dict, requested: i
     if prompt_tokens > budgets["max_prepared_context_tokens"] or available < 256:
         schema_tokens = math.ceil(len(canonical_json(schema)) / 3)
         raise PausedError(stage,
-            f"Complete compact planning context cannot fit: estimated prompt {prompt_tokens:,} tokens "
+            f"Complete compact {purpose} context cannot fit: estimated prompt {prompt_tokens:,} tokens "
             f"(response schema {schema_tokens:,}); prepared-context limit {budgets['max_prepared_context_tokens']:,}, "
             f"model window {window:,}, requested output {requested:,}, safety reserve {reserve:,}. "
             "All context and accepted work were retained; no oversized request was sent.", "budget_exhaustion")
-    return min(requested, int(available))
+    return int(min(requested, available))
 
 
-def preserve_planning_result(run_dir: Path, step_id: str, repair_step: str, result, response: dict, *, kind: str) -> None:
+def preserve_planning_result(run_dir: Path, step_id: str, repair_step: str, result, response: dict, *, kind: str, phase="architecture") -> None:
     meta = response["_cathedrals_request"]
     if not any(item["planned_step_id"] == repair_step and item["attempt"] == meta["attempt"] for item in ledger_entries(run_dir)):
         state = load_state(run_dir)
         entry = new_ledger_entry(run_dir, planned_step_id=repair_step, attempt=meta["attempt"],
-            step_type="analysis", step_phase="architecture", parent_state_hash=state["canonical_state_hash"],
+            step_type="analysis", step_phase=phase, parent_state_hash=state["canonical_state_hash"],
             prompt_hash=meta["prompt_hash"], context_hash=meta["context_hash"], provider="LM Studio", model=state["model"],
             parameters=meta["parameters"], seed=meta["parameters"]["seed"], started_at=response.get("_cathedrals_started_at", utc_now()),
             output_hash=sha256_bytes(canonical_json(result)), generated_ids=[], past_constraint_ids=[], future_obligation_ids=[],

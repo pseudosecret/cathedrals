@@ -82,6 +82,17 @@ and progressively smaller recovery requests. The complete core and all
 batches validate before their first commit. Each commit retains `planning-draft.json`
 and field-response evidence as supplemental provenance.
 
+Semantic recovery uses `.staging/<step>.semantic-recovery.json` without changing the
+committed packet schema. It retains source-content identity, category completion,
+accepted records, partial candidates, page sizes, corrections, and response provenance.
+Category page responses contain `items` and an explicit `complete` boolean. Only
+complete records are accepted; an unfinished category is never inferred to be empty
+or complete. Fact aliases follow stable accepted positions across pages. After all
+categories pass aggregate validation, the staged semantic delta retains the existing
+wire shape. A recovered delta uses an assembled metadata envelope; original incomplete
+provider envelopes remain immutable diagnostics. The recovery checkpoint is copied
+into the artistic commit as supplemental provenance.
+
 Architecture payload aliases are resolved within each reference field's allowed entity
 kinds before canonical IDs are assigned. An attractor and a topology node may share a
 payload alias without changing an obligation's ending target into a node reference.

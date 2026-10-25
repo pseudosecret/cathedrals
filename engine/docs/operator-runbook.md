@@ -141,6 +141,33 @@ reference, dependency, and setup checks does the engine commit it and request pr
 Commits include `planning-draft.json` and field-response evidence. Scene and ending
 prose still uses coherent bounded requests, without field-by-field literary generation.
 
+Semantic normalization is separate from story generation. Its initial output allowance
+is 8,192 tokens, including reasoning and JSON; the streamed character count is progress
+information. Extract new continuity, evidence, knowledge, obligation, and motif changes
+concisely, without restating canon or indexing every descriptive detail. Story-length
+allowances remain unchanged.
+
+When a whole metadata response truncates, retain its complete records and explicitly
+closed categories. Continue pending categories in order: facts, knowledge, new soft
+obligations, obligation updates, and motifs. Pages contain up to eight new records and
+an explicit completion flag. This bounds each response, not the total information:
+important changes may span multiple pages. Accepted facts keep their order and aliases;
+references to new facts or motifs resolve after the full delta is assembled.
+
+A truncated page retains its complete prefix and halves the next page size. A single
+oversized record may use up to the frozen 15,000-token analysis ceiling when context
+permits. Repeated pages that make no progress receive three correction attempts per
+invocation, with accurate attempt counts. Interrupted streams pause immediately after
+retaining complete records. Context capacity shortfalls pause without clipping source
+content; other hard resource limits remain binding.
+
+Progress lives in `.staging/<step>.semantic-recovery.json`; resume keeps accepted prose
+and metadata and continues pending work. Canonical errors after paging correct only
+the selected rejected category, preserving other categories and fact positions. Full
+schema, reference, and packet validation precedes final metadata staging. Commits
+include the recovery checkpoint and response evidence; incomplete provider envelopes
+are never used as completed metadata responses.
+
 Metadata must pass complete packet validation before staging. A paused lookup retains
 the original artistic and pending metadata responses, so resume continues resolution
 without repeating either accepted request. Each lookup has three attempts within the
@@ -150,11 +177,14 @@ lookup costs are already ledgered and are not charged again at artistic commit.
 New runs reserve three successful reference repairs per possible scene/ending chunk
 in addition to the existing analysis allowance; unused capacity makes no calls. This
 allowance is pooled across the run. Cumulative token ceilings use the resulting
-analysis-step count and remain frozen at run creation. Calculation version 9 retains
+analysis-step count and remain frozen at run creation. Calculation version 10 retains
 the reserve of three attempts per schema-bounded planning field and per backward setup
 value. This conservative recovery ceiling is capacity, not a forecast of calls or cost.
 Successful and failed planning response usage is recorded before later requests;
 accepted batch entries and eventual parent commits do not charge the response twice.
+Semantic recovery additionally reserves three attempts per remaining event and per
+category/scene-or-ending chunk. Actual category-page usage is ledgered once; the
+assembled metadata envelope adds no provider usage at the containing artistic commit.
 
 Each scene or ending chunk has a 1,200-word ceiling including nested artifact prose.
 The logical packet's 4,800-word target is guidance only. The whole-work ceiling is

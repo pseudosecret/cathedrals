@@ -439,7 +439,7 @@ format_selection:
   renpy_bootstrap_active: false
 
 generation_budget:
-  calculation_version: 9
+  calculation_version: 10
   primary_scale_input: possible_scene_count
   words_per_token_assumption: 0.75
   max_prepared_context_tokens: 49152
@@ -464,6 +464,11 @@ generation_budget:
   planning_references_per_recovery_batch: 16
   planning_setup_requirements_per_recovery_batch: 4
   planning_context_overflow: pause_with_complete_context_retained
+  semantic_whole_delta_output_ceiling: 8192
+  semantic_page_output_ceiling: 8192
+  semantic_page_record_maximum: 8
+  semantic_single_record_output_ceiling: 15000
+  semantic_page_correction_attempts: 3
   max_creative_step_count: derived_per_run
   max_analysis_step_count: derived_per_run
   max_cumulative_input_tokens: derived_per_run
@@ -486,11 +491,14 @@ generation_budget:
       max(4, ceil(possible_scene_count / 3) + ceil(ending_hard_max / 2) + 2)
       + reference_repair_allowance_per_chunk * (possible_scene_count + ending_hard_max)
       + planning_recovery_allowance
+      + semantic_recovery_allowance
     planning_recovery_allowance: >
       3 * (schema-bounded core field count + plan_batch_count * schema-bounded
       batch field count + 2 * (maximum ending seed/prerequisite placements +
       maximum preserved plan hints)); object arrays use schema maxItems and
       primitive arrays count as one field value
+    semantic_recovery_allowance: >
+      3 * (5 * (possible_scene_count + ending_hard_max) + max_constraint_events)
     constraint_events: "max(1000, possible_scene_count * 45)"
   preflight_rules:
     - "The 4,800-word logical packet target is guidance, not a shared hard ceiling or equal per-chunk allocation."
@@ -498,6 +506,8 @@ generation_budget:
     - "Planning recovery is unused capacity, not an expected call or token count; valid drafts do not spend it on field completion."
     - "Planning first requests a whole draft with context-safe output headroom, then batches pending records and finally isolates failed values."
     - "Planning compacts complete authored context and includes only referenced schema definitions; genuine prompt-capacity shortfalls pause without truncating context."
+    - "Semantic normalization extracts concise supported changes, preserving literary bytes and uncertainty."
+    - "A truncated semantic delta retains complete records and categories, then continues in category pages; page size is a response bound, never a cap on important information."
     - "Record documented context-window and maximum-output limits for each selected model."
     - "Fail before generation if any planned step exceeds its model's context or output limit."
     - "Fail before generation if the derived scope cannot fit cumulative token, constraint-event, or configured cost limits."

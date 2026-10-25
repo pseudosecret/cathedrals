@@ -88,6 +88,17 @@ compaction at saved failing prompt sizes, batch call-count reduction, partial su
 and exact accounting. All provider
 responses are synthetic; the local model is never required by these checks.
 
+The semantic-recovery suite uses metadata-only measurements from the saved 4,096-token
+truncation. Verify the 8,192-token initial allowance, concise extraction instructions,
+and unchanged literary bytes. A cut-off whole response must retain complete categories
+and records; only pending categories are paged. Pages may continue beyond eight total
+records, with stable fact aliases and delayed resolution of locally created motifs.
+Check page-size reduction, expanded single-record headroom, no-progress rejection,
+accurate attempt counts, category-specific canonical correction, interrupted-page
+resume, exact response accounting, and a capacity pause before any oversized request.
+The full 20-scene rehearsal must exercise semantic truncation recovery and retain its
+complete validation, publication, and zero-human-intervention result.
+
 ## 3. Mechanical and Continuity Validation
 
 Run every mechanical check in `engine/canon/acceptance-tests.md`, including protocol,

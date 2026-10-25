@@ -166,6 +166,28 @@ literary units. Checkpoints and field-response evidence accompany immutable comm
 Semantic normalization builds and fully validates the candidate packet before staging
 metadata. Metadata errors consume metadata attempts, never another accepted artistic
 request. A pending normalization response survives an interrupted focused lookup.
+The initial whole-delta allowance is 8,192 output tokens, covering reasoning and JSON.
+Extract concise new supported changes, rather than restating canon or exhaustively
+indexing description. Normalize metadata without changing any accepted literary bytes.
+
+Truncation preserves complete records and closed categories, then switches remaining
+work to pages of at most eight records with an explicit completion flag. Facts precede
+knowledge, followed by new soft obligations, obligation updates, and motifs. Page
+limits bound responses, not important information; continuation must preserve every
+needed change. Accepted fact positions and aliases stay stable. Resolve references
+to locally generated facts/motifs after assembling all categories. A truncated page
+retains its complete prefix and reduces page size; one oversized record may use the
+existing context-safe 15,000-token analysis ceiling. No-progress pages receive three
+corrections per invocation. Interrupted streams preserve progress and pause at once.
+
+Compact JSON, required schema definitions, and complete source context must fit frozen
+limits. Do not clip source content to force a request to fit. Capacity shortfalls
+pause; cumulative token, analysis, and event exhaustion retain hard-limit behavior.
+Internal recovery checkpoints retain category completion and accepted/pending records.
+Canonical correction revisits a selected rejected category while preserving others;
+facts may be appended without renumbering existing aliases. The final candidate still
+passes all existing schema, reference, canonical, and packet checks. Incomplete raw
+envelopes remain diagnostics; recovered metadata uses an explicit assembled envelope.
 Each focused lookup permits three attempts within the frozen analysis, context, and
 cumulative token budgets. Raw responses are immutable; successful and failed lookup
 attempts are ledgered once, and field-level repair history is included in the parent
@@ -175,11 +197,14 @@ New-run budget derivation adds a pooled allowance of three successful reference
 repairs per possible scene/ending chunk to the existing analysis allowance. The
 corresponding cumulative token ceilings freeze with the run; this capacity never
 causes calls when references are already valid.
-Calculation version 9 retains the reserve of three attempts per schema-bounded planning
+Calculation version 10 retains the reserve of three attempts per schema-bounded planning
 field, plus earlier placement and instruction values for ending requirements and
 preserved hints. Object arrays use schema cardinality limits; primitive arrays count
 as one value. These are conservative recovery limits, not expected usage. Per-request
 output and whole-work literary limits remain unchanged.
+It also reserves semantic recovery capacity for three attempts per event and five
+category completions per possible scene/ending. Page responses are charged once and
+the assembled parent metadata contributes no duplicate usage.
 
 Committed chunks collectively own the original plan. If the provider truncates an
 uncommitted single-content chunk, preserve the failed response and retry once with a larger allowance only

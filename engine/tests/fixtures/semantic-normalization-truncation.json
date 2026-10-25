@@ -1,0 +1,19 @@
+{
+  "generation_id": "cathedrals_20261025_141205_e54d19",
+  "scene_slot": "scene_slot_0001",
+  "scene_words": 333,
+  "artifact_words": 87,
+  "total_literary_words": 420,
+  "output_limit_tokens": 4096,
+  "prompt_tokens": 36509,
+  "reasoning_tokens": 327,
+  "response_characters": 11848,
+  "complete_categories": {
+    "canonical_facts": 12,
+    "knowledge_changes": 12,
+    "motif_events": 5
+  },
+  "unfinished_category": "new_soft_obligations",
+  "actual_normalization_attempts": 1,
+  "reported_attempts": 3
+}

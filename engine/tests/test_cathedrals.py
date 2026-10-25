@@ -3011,6 +3011,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(derived["budgets"]["max_total_literary_words"], 30000)
         self.assertEqual(derived["budgets"]["max_creative_step_count"], 30)
         recovery = RUNNER.planning_recovery_allowance(1)
+        recovery += 3 * (5 * 25 + 1000)
         self.assertGreater(recovery, 0)
         self.assertEqual(derived["budgets"]["max_cumulative_output_tokens"],
                          2286000 + recovery * RUNNER.ANALYSIS_OUTPUT_TOKENS)
