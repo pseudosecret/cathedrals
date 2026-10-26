@@ -1896,6 +1896,14 @@ def bounded_context(sections: list[tuple[str, object]], max_tokens: int) -> str:
     return "\n".join(output)
 
 
+def complete_context(sections: list[tuple[str, object]]) -> str:
+    """Required planning inputs are never filtered; the rendered request is budgeted later."""
+    return "\n".join(
+        f"===== {label} =====\n" + (value if isinstance(value, str) else canonical_json(value).decode()) + "\n"
+        for label, value in sections
+    )
+
+
 def parse_structured_content(content: str):
     try:
         return json.loads(content)
@@ -5623,7 +5631,7 @@ def architecture_core_prompt(run_dir: Path) -> tuple[str, str]:
     manifest = read_json(run_dir / "run-manifest.json")
     genesis = committed_record(run_dir, "genesis")
     catalog = genesis_reference_catalog(run_dir)
-    context = bounded_context(
+    context = complete_context(
         [
             ("FROZEN ARCHITECTURE CANON", engine_context(run_dir, ARCHITECTURE_CONTEXT_FILES)),
             ("FROZEN RUN MANIFEST", manifest),
@@ -5633,7 +5641,6 @@ def architecture_core_prompt(run_dir: Path) -> tuple[str, str]:
             )]),
             ("ALLOWED COMMITTED SOURCES", [catalog[item] for item in sorted(_source_index(run_dir))]),
         ],
-        manifest["budgets"]["max_prepared_context_tokens"] - 14000,
     )
     return render_prompt(
         run_dir,
@@ -5646,7 +5653,6 @@ def architecture_core_prompt(run_dir: Path) -> tuple[str, str]:
 
 
 def architecture_plan_prompt(run_dir: Path, specs: list[dict], sequence: int, count: int) -> tuple[str, str]:
-    manifest = read_json(run_dir / "run-manifest.json")
     core = planning_core(run_dir)
     prior_ids = [
         plan["packet_slot_id"]
@@ -5656,14 +5662,13 @@ def architecture_plan_prompt(run_dir: Path, specs: list[dict], sequence: int, co
     ]
     scene_slots = {slot for spec in specs for slot in spec["scene_slot_ids"]}
     geomancy = [item for item in ensure_frozen_geomancy(run_dir)["assignments"] if item["technical_slot_id"] in scene_slots]
-    context = bounded_context(
+    context = complete_context(
         [
             ("IMMUTABLE GENESIS", committed_record(run_dir, "genesis")),
             ("VALIDATED STAGED ARCHITECTURE CORE", core),
             ("PRIOR STAGED PACKET IDS", prior_ids),
             ("THIS BATCH THRESHOLD GEOMANCY", geomancy),
         ],
-        manifest["budgets"]["max_prepared_context_tokens"] - 12000,
     )
     allocation = {
         "record_type": "architecture_plan_batch",
@@ -5680,10 +5685,8 @@ def architecture_plan_prompt(run_dir: Path, specs: list[dict], sequence: int, co
         "generation-architecture-plan-batch.md",
         {
             "ARCHITECTURE_PLAN_CONTEXT": context,
-            "ARCHITECTURE_PLAN_ALLOCATIONS": json.dumps(allocation, ensure_ascii=False, indent=2),
-            "ARCHITECTURE_PLAN_PROTOCOL_DEFINITIONS": json.dumps(
-                architecture_plan_batch_schema(run_dir, specs), ensure_ascii=False, separators=(",", ":")
-            ),
+            "ARCHITECTURE_PLAN_ALLOCATIONS": canonical_json(allocation).decode(),
+            "ARCHITECTURE_PLAN_PROTOCOL_DEFINITIONS": canonical_json(architecture_plan_batch_schema(run_dir, specs)).decode(),
         },
     ), context
 

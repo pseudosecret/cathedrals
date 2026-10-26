@@ -66,6 +66,16 @@ Allocated scene/ending IDs must resolve before assembled Architecture exists; mo
 aliases must match committed event-to-motif identities. Failed `UNRESOLVED` lookups
 must not be cached as success. Usage is counted once for every actual response.
 
+Check initial whole-core and plan-batch prompts as well as recovery prompts. Required
+sections must be complete before the final UTF-8 estimate is checked; builders must
+not silently omit sections or list items using a different character/token ratio.
+The planning-context suite reproduces saved failing input sizes with synthetic data,
+checks all 25 geomancy assignments instead of the previously rendered 13, and verifies
+that genuinely oversized complete requests pause before provider contact. Empty
+collections, Unicode, authored whitespace, and the last required catalog item must
+survive serialization. Prepared-context, model-window, output, and reserve limits
+remain unchanged.
+
 Verify that every ending seed, prerequisite, and retained narrative hint has an earlier
 scene placement and authored setup guidance before any Architecture record commits.
 A pause during this work must leave the core and every batch uncommitted. Resume must

@@ -133,6 +133,13 @@ together. A failed batch preserves independently valid entries and members, then
 splits only the unsuccessful remainder. Isolated values retain three attempts per
 invocation. The engine supplies containers, IDs, and initial active obligation status.
 
+Initial core and plan-batch builders render all required context sections as compact
+complete data before checking the final request. Lists, including empty lists, remain
+whole arrays. Required law, canon, catalogs, allocations, and geomancy may not be
+silently dropped by preliminary packing estimates. The final conservative UTF-8
+estimate remains authoritative under the unchanged input, model, output, and reserve
+limits; a complete request that genuinely cannot fit pauses with saved work retained.
+
 Complete parsed members and array elements survive inside unfinished containers;
 the engine never invents JSON closure or treats a truncated array prefix as its final
 count. Every recovery request carries the complete assembled draft, Genesis, staged

@@ -120,7 +120,12 @@ streams pause before continuing recovery on explicit resume.
 
 Every request retains the whole assembled planning context and Genesis. JSON is
 compact, repeated record bodies are removed, and only referenced schema definitions
-are included. If complete compact context still exceeds the frozen prompt limit or
+are included. Initial whole-core and plan-batch requests also render every required
+section completely: law, canon, reference catalogs, allocations, prior IDs, and frozen
+geomancy. Lists remain whole JSON arrays, including empty lists. Planning builders
+never pack away sections or trailing records to meet an earlier size estimate; the
+complete rendered request is checked by the conservative UTF-8 budget guard.
+If complete compact context still exceeds the frozen prompt limit or
 model capacity, planning enters `PAUSED_GENERATION`, preserving all accepted work.
 The diagnostic reports prompt estimates, schema size, limits, and output/safety
 reserves. No oversized request is sent and no authored context is silently clipped.

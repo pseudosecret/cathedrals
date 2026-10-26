@@ -1493,8 +1493,10 @@ class CathedralsRunnerTests(unittest.TestCase):
             ):
                 prompt, context = RUNNER.architecture_core_prompt(run)
         self.assertEqual(prompt, context)
-        self.assertIn("===== ALLOWED GENESIS CLAIMANTS =====\nclaimant_01\n\nclaimant_02", context)
-        self.assertIn("===== ALLOWED COMMITTED SOURCES =====\nsource_one\n\nsource_two", context)
+        claimants = context.split("===== ALLOWED GENESIS CLAIMANTS =====\n", 1)[1].split("=====", 1)[0]
+        sources = context.split("===== ALLOWED COMMITTED SOURCES =====\n", 1)[1]
+        self.assertEqual(json.loads(claimants), ["claimant_01", "claimant_02"])
+        self.assertEqual(json.loads(sources), ["source_one", "source_two"])
 
     def test_architecture_plan_schema_and_builder_require_exact_frozen_ids(self):
         specs = [

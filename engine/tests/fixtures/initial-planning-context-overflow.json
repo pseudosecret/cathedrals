@@ -1,0 +1,19 @@
+{
+  "generation_id": "cathedrals_20261025_192800_41341e",
+  "possible_scene_count": 25,
+  "model_context_window_tokens": 80384,
+  "max_prepared_context_tokens": 49152,
+  "requested_output_tokens": 21800,
+  "context_safety_reserve_tokens": 4096,
+  "original_prompt_estimate_tokens": 51656,
+  "complete_compact_prompt_estimate_tokens": 42358,
+  "genesis_compact_bytes": 56831,
+  "genesis_pretty_bytes": 67642,
+  "core_compact_bytes": 55875,
+  "core_pretty_bytes": 76181,
+  "required_geomancy_assignments": 25,
+  "previously_rendered_geomancy_assignments": 13,
+  "obligation_count": 48,
+  "arc_count": 10,
+  "attractor_count": 5
+}
