@@ -125,6 +125,26 @@ section completely: law, canon, reference catalogs, allocations, prior IDs, and 
 geomancy. Lists remain whole JSON arrays, including empty lists. Planning builders
 never pack away sections or trailing records to meet an earlier size estimate; the
 complete rendered request is checked by the conservative UTF-8 budget guard.
+Completed setup instructions appear once in packet guidance. Their setup-history
+entries use `instruction_ref` JSON Pointers into that same prompt only when the full
+guidance matches exactly once. Pending, unmatched, or ambiguous instructions stay
+complete; saved checkpoints retain every original instruction and its whitespace.
+
+New runs freeze `max_planning_context_tokens` from the detected model window minus
+the safety reserve and the existing 256-token minimum response allowance. Initial
+Architecture drafts, recovery batches, and isolated planning values use this same
+ceiling. Each request still allocates output within the smaller frozen/loaded model
+window, preserving existing output caps and headroom fitting. For example, an
+80,384-token window can fit a 49,255-token estimated prompt, 15,000 output tokens,
+and the 4,096-token safety reserve. Other phases keep their 49,152 prepared-input
+ceiling. Cumulative input headroom reflects the larger frozen planning allowance;
+actual response usage remains charged exactly once.
+
+Older manifests without the optional planning ceiling use their existing prepared
+limit. Existing run snapshots and frozen manifests are not upgraded; use the updated
+engine for a new generation. Increasing the loaded window alone does not change an
+older run's frozen limits.
+
 If complete compact context still exceeds the frozen prompt limit or
 model capacity, planning enters `PAUSED_GENERATION`, preserving all accepted work.
 The diagnostic reports prompt estimates, schema size, limits, and output/safety

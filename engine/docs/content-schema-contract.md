@@ -82,6 +82,13 @@ and progressively smaller recovery requests. The complete core and all
 batches validate before their first commit. Each commit retains `planning-draft.json`
 and field-response evidence as supplemental provenance.
 
+New run manifests optionally include `budgets.max_planning_context_tokens`, frozen
+from the detected model window minus safety and minimum-response reserves. Older
+manifests remain valid and use `max_prepared_context_tokens`. Other phases retain
+their existing input ceiling. Prompt-only `instruction_ref` JSON Pointers replace
+exact completed-setup duplicates in rendered context; checkpoint and committed
+record schemas keep their full authored instructions and guidance.
+
 Semantic recovery uses `.staging/<step>.semantic-recovery.json` without changing the
 committed packet schema. It retains source-content identity, category completion,
 accepted records, partial candidates, page sizes, corrections, and response provenance.

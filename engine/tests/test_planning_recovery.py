@@ -485,7 +485,7 @@ class PlanningRecoveryTests(unittest.TestCase):
 
     def test_batch_reduces_schema_size_before_pausing_for_context(self):
         state = self.state({"keep": "x" * 125000})
-        choices = [f"choice_{index}_" + "x" * 64 for index in range(100)]
+        choices = [f"choice_{index}_" + "x" * 64 for index in range(200)]
         tasks = [{"path": [f"field_{index}"], "schema": {"type": "string", "enum": choices}, "reason": "Synthetic independent choice."} for index in range(4)]
         transport = mock.Mock(side_effect=lambda method, url, request, **kwargs: planning_response(request, lambda path, node: choices[0]))
         RUNNER.planning_batch(self.run, "architecture_core", state, tasks, transport)

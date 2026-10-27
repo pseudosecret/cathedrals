@@ -1,0 +1,15 @@
+{
+  "generation_id": "cathedrals_20261026_151627_5a2adf",
+  "possible_scene_count": 25,
+  "model_context_window_tokens": 80384,
+  "max_prepared_context_tokens": 49152,
+  "original_prompt_estimate_tokens": 49255,
+  "requested_output_tokens": 15000,
+  "context_safety_reserve_tokens": 4096,
+  "compact_context_bytes": 146674,
+  "genesis_compact_bytes": 53579,
+  "draft_compact_bytes": 51920,
+  "plan_batch_compact_bytes": 23076,
+  "setup_count": 18,
+  "attached_count": 12
+}

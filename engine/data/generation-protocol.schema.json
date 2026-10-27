@@ -203,6 +203,7 @@
           ],
           "properties": {
             "max_prepared_context_tokens": { "type": "integer", "minimum": 1 },
+            "max_planning_context_tokens": { "type": "integer", "minimum": 1 },
             "max_creative_packet_output_tokens": { "type": "integer", "minimum": 1 },
             "max_expanded_output_tokens": { "type": "integer", "minimum": 1 },
             "model_context_window_tokens": { "type": "integer", "minimum": 1 },

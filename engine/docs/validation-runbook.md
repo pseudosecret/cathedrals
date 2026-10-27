@@ -73,8 +73,13 @@ The planning-context suite reproduces saved failing input sizes with synthetic d
 checks all 25 geomancy assignments instead of the previously rendered 13, and verifies
 that genuinely oversized complete requests pause before provider contact. Empty
 collections, Unicode, authored whitespace, and the last required catalog item must
-survive serialization. Prepared-context, model-window, output, and reserve limits
-remain unchanged.
+survive serialization. Verify the new optional model-derived planning ceiling,
+unchanged limits for legacy manifests and other phases, cumulative input headroom,
+and the smaller frozen/loaded window with output and reserve accounted for.
+Replay the saved backward-setup context sizes with synthetic data: attached
+instructions must reference unique exact guidance without changing checkpoints;
+pending, missing, ambiguous, and mismatched copies must remain complete. Remaining
+setups must finish in coherent batches and resume without repeating accepted work.
 
 Verify that every ending seed, prerequisite, and retained narrative hint has an earlier
 scene placement and authored setup guidance before any Architecture record commits.

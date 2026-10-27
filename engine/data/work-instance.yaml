@@ -439,10 +439,12 @@ format_selection:
   renpy_bootstrap_active: false
 
 generation_budget:
-  calculation_version: 10
+  calculation_version: 11
   primary_scale_input: possible_scene_count
   words_per_token_assumption: 0.75
   max_prepared_context_tokens: 49152
+  max_planning_context_tokens: derived_per_run
+  minimum_planning_output_tokens: 256
   max_retrieved_source_tokens: 12288
   literary_packet_word_target: 4800
   max_creative_chunk_literary_words: 1200
@@ -484,6 +486,16 @@ generation_budget:
     context_window: >
       max_prepared_context_tokens + max_creative_packet_output_tokens +
       context_safety_reserve_tokens <= selected_model_context_window_tokens
+    planning_context: >
+      selected_model_context_window_tokens - context_safety_reserve_tokens -
+      minimum_planning_output_tokens
+    planning_request: >
+      estimated_prompt_tokens <= max_planning_context_tokens and
+      estimated_prompt_tokens + allocated_output_tokens + context_safety_reserve_tokens
+      <= min(frozen_model_context_window_tokens, loaded_model_context_window_tokens)
+    cumulative_input: >
+      (2 * max_creative_step_count + max_analysis_step_count) *
+      max(max_prepared_context_tokens, max_planning_context_tokens)
     creative_steps: >
       three Genesis records + one Architecture core + ceil(packet_plan_count / 8)
       plan batches + worst-case one committed chunk per scene or ending
@@ -505,7 +517,9 @@ generation_budget:
     - "Keep existing output-token allowances as conservative headroom for structured output and reasoning."
     - "Planning recovery is unused capacity, not an expected call or token count; valid drafts do not spend it on field completion."
     - "Planning first requests a whole draft with context-safe output headroom, then batches pending records and finally isolates failed values."
-    - "Planning compacts complete authored context and includes only referenced schema definitions; genuine prompt-capacity shortfalls pause without truncating context."
+    - "Planning compacts complete authored context and includes only referenced schema definitions; exact completed-setup duplicates reference guidance in the same prompt without changing saved instructions."
+    - "New runs freeze a model-derived planning input ceiling; every request still fits its output and safety reserve to the smaller frozen/loaded window. Other phases retain their prepared-context ceiling."
+    - "Manifests without max_planning_context_tokens retain their frozen max_prepared_context_tokens limit; genuine prompt-capacity shortfalls pause without truncating context."
     - "Semantic normalization extracts concise supported changes, preserving literary bytes and uncertainty."
     - "A truncated semantic delta retains complete records and categories, then continues in category pages; page size is a response bound, never a cap on important information."
     - "Record documented context-window and maximum-output limits for each selected model."

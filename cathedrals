@@ -43,6 +43,7 @@ PROTOCOL_VERSION = "6.0"
 BASE_OUTPUT_TOKENS = 10900
 EXPANDED_OUTPUT_TOKENS = 21800
 ANALYSIS_OUTPUT_TOKENS = 15000
+MIN_PLANNING_OUTPUT_TOKENS = 256
 REFERENCE_REPAIRS_PER_CHUNK = 3
 GENESIS_CONSTRAINT_TOKENS = 8192
 INITIAL_CLAIMANT_MIN = 5
@@ -999,6 +1000,10 @@ def create_run(
     brief_hash = sha256_bytes(canonical_json(brief))
     derived = derive_scope(frozen.possible_scene_count)
     derived["budgets"]["model_context_window_tokens"] = model_context_window_tokens
+    budgets = derived["budgets"]
+    budgets["max_planning_context_tokens"] = model_context_window_tokens - budgets["context_safety_reserve_tokens"] - MIN_PLANNING_OUTPUT_TOKENS
+    budgets["max_cumulative_input_tokens"] = (2 * budgets["max_creative_step_count"] + budgets["max_analysis_step_count"]) * max(
+        budgets["max_prepared_context_tokens"], budgets["max_planning_context_tokens"])
     manifest = {
         "record_type": "run_manifest",
         "protocol_version": PROTOCOL_VERSION,
@@ -3698,8 +3703,10 @@ def request_architecture_analysis(
             if response is None:
                 budgets = read_json(run_dir / "run-manifest.json")["budgets"]
                 prompt_tokens = math.ceil(len(current_prompt.encode()) / 3)
-                if prompt_tokens > min(budgets.get("max_prepared_context_tokens", float("inf")),
-                                       budgets.get("model_context_window_tokens", float("inf")) - parameters["max_tokens"]
+                window = min(budgets.get("model_context_window_tokens", float("inf")),
+                             load_state(run_dir).get("model_context_window_tokens", float("inf")))
+                if prompt_tokens > min(prepared_context_limit(budgets, planning=planning_mode and context_purpose == "planning"),
+                                       window - parameters["max_tokens"]
                                        - budgets.get("context_safety_reserve_tokens", 4096)):
                     raise CathedralsError(pause_stage, "Repair exceeds the frozen context budget", "budget_exhaustion")
                 if load_state(run_dir).get("analysis_step_count", 0) + successful_structural_repair_count(run_dir) >= budgets.get("max_analysis_step_count", float("inf")):
@@ -5975,8 +5982,28 @@ def planning_context(run_dir: Path, step_id: str, state: dict) -> dict:
         context["assembled_plan_batches"] = [record for record in planning_batches_view(run_dir)
             if step_id != f"architecture_plan_batch_{record['batch_sequence']:04d}"]
     if state.get("setups"):
-        context["backward_setups"] = state["setups"]
+        context["backward_setups"] = [dict(task) for task in state["setups"]]
+        guidance_locations = {}
+        for batch_index, batch in enumerate(context.get("assembled_plan_batches", [])):
+            for plan_index, plan in enumerate(batch["packet_plans"]):
+                for guidance_index, guidance in enumerate(plan["soft_guidance"]):
+                    pointer = f"/assembled_plan_batches/{batch_index}/packet_plans/{plan_index}/soft_guidance/{guidance_index}"
+                    guidance_locations.setdefault(guidance, []).append(pointer)
+        for task in context["backward_setups"]:
+            if not task.get("attached") or "instruction" not in task:
+                continue
+            marker = f"Setup in {task['setup_slot_id']} for {task.get('attractor_id', 'authored hint')}: {task['instruction']}"
+            matches = guidance_locations.get(marker, [])
+            if len(matches) == 1:
+                # Render the instruction once; the saved task retains its original bytes.
+                del task["instruction"]
+                task["instruction_ref"] = matches[0]
     return context
+
+
+def prepared_context_limit(budgets: dict, *, planning=False):
+    limit = budgets.get("max_prepared_context_tokens", float("inf"))
+    return budgets.get("max_planning_context_tokens", limit) if planning else limit
 
 
 def planning_output_limit(run_dir: Path, prompt: str, schema: dict, requested: int, stage: str, *, purpose="planning") -> int:
@@ -5986,11 +6013,12 @@ def planning_output_limit(run_dir: Path, prompt: str, schema: dict, requested: i
     window = min(budgets.get("model_context_window_tokens", float("inf")),
                  load_state(run_dir).get("model_context_window_tokens", float("inf")))
     available = window - prompt_tokens - reserve
-    if prompt_tokens > budgets["max_prepared_context_tokens"] or available < 256:
+    limit = prepared_context_limit(budgets, planning=purpose == "planning")
+    if prompt_tokens > limit or available < MIN_PLANNING_OUTPUT_TOKENS:
         schema_tokens = math.ceil(len(canonical_json(schema)) / 3)
         raise PausedError(stage,
             f"Complete compact {purpose} context cannot fit: estimated prompt {prompt_tokens:,} tokens "
-            f"(response schema {schema_tokens:,}); prepared-context limit {budgets['max_prepared_context_tokens']:,}, "
+            f"(response schema {schema_tokens:,}); prepared-context limit {limit:,}, "
             f"model window {window:,}, requested output {requested:,}, safety reserve {reserve:,}. "
             "All context and accepted work were retained; no oversized request was sent.", "budget_exhaustion")
     return int(min(requested, available))
@@ -6034,6 +6062,7 @@ def planning_value(run_dir: Path, step_id: str, state: dict, path: list, schema:
     prompt = (
         "Repair or complete ONE planning value. The engine assembles the surrounding JSON.\n"
         "Preserve accepted creative decisions. Reason backward from the desired payoff to its earlier setup.\n"
+        "Setup instruction_ref values are JSON Pointers to complete guidance elsewhere in this context.\n"
         f"FIELD PATH\n{reference_path(path)}\n"
         f"PURPOSE\n{reason}\n"
         f"VALUE SCHEMA\n{canonical_json(schema).decode()}\n"
@@ -6261,6 +6290,7 @@ def planning_batch(run_dir: Path, step_id: str, state: dict, tasks: list[dict], 
     context = planning_context(run_dir, step_id, state)
     prompt = ("Complete only the pending planning targets as one coherent batch. Preserve accepted decisions. "
               "Reason backward from payoffs to earlier setups. Keep planning concise and proportionate to the requested scope.\n"
+              "Setup instruction_ref values are JSON Pointers to complete guidance elsewhere in this context.\n"
               "BATCH TARGETS\n" + canonical_json(descriptors).decode() +
               "\nVALUE SCHEMA\n" + canonical_json(schema).decode() +
               "\nFULL ASSEMBLED PLANNING CONTEXT\n" + canonical_json(context).decode() +

@@ -137,15 +137,24 @@ Initial core and plan-batch builders render all required context sections as com
 complete data before checking the final request. Lists, including empty lists, remain
 whole arrays. Required law, canon, catalogs, allocations, and geomancy may not be
 silently dropped by preliminary packing estimates. The final conservative UTF-8
-estimate remains authoritative under the unchanged input, model, output, and reserve
-limits; a complete request that genuinely cannot fit pauses with saved work retained.
+estimate remains authoritative. New manifests freeze a separate model-derived
+planning ceiling, reserving the safety margin and the existing minimum response
+allowance. All planning request paths use it; manifests without it retain their
+existing prepared-input ceiling. Other phases' input limits, output caps, and safety
+reserves remain unchanged. Per-request output fitting always uses the smaller frozen
+and loaded model windows. A complete request that genuinely cannot fit pauses with
+saved work retained.
 
 Complete parsed members and array elements survive inside unfinished containers;
 the engine never invents JSON closure or treats a truncated array prefix as its final
 count. Every recovery request carries the complete assembled draft, Genesis, staged
 core and plan batches, original unassigned annotations, and pending hints. Compact
 JSON and referenced schema definitions reduce overhead without removing authored
-content. If full context still cannot fit frozen prompt/model limits, pause with a
+content. Completed setup instructions are rendered once in packet guidance; setup
+history uses a JSON Pointer to that exact guidance only when it matches uniquely in
+the same prompt. Pending instructions and unmatched copies remain complete, and
+checkpoint bytes are never changed by context rendering. If full context still
+cannot fit frozen prompt/model limits, pause with a
 capacity breakdown and saved progress. Other hard resource exhaustion remains a
 terminal failure. No oversized request is sent and no context is silently clipped.
 Accepted values, including false, zero, and empty collections, persist before further
