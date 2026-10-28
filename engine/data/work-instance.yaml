@@ -521,6 +521,8 @@ generation_budget:
     - "New runs freeze a model-derived planning input ceiling; every request still fits its output and safety reserve to the smaller frozen/loaded window. Other phases retain their prepared-context ceiling."
     - "Manifests without max_planning_context_tokens retain their frozen max_prepared_context_tokens limit; genuine prompt-capacity shortfalls pause without truncating context."
     - "Semantic normalization extracts concise supported changes, preserving literary bytes and uncertainty."
+    - "Packet obligation status updates use canonical resolution outcomes only; ongoing evidence leaves an obligation active without a status update."
+    - "Complete semantic responses rejected by schema, reference, or canonical validation enter focused category recovery, preserving unrelated metadata and cached reference repairs."
     - "A truncated semantic delta retains complete records and categories, then continues in category pages; page size is a response bound, never a cap on important information."
     - "Record documented context-window and maximum-output limits for each selected model."
     - "Fail before generation if any planned step exceeds its model's context or output limit."

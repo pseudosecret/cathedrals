@@ -1293,6 +1293,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             "subject_id": "claimant_01", "relation": "knows",
             "proposition_id": "fact_missing", "action": "establish", "relevance": {},
         }]
+        corrected = invalid | {"knowledge_changes": []}
         records = mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind:
             {"claimants": genesis_foundation_fixture()["claimant_anchors"]} if kind == "genesis" else None)
         records.start()
@@ -1302,16 +1303,12 @@ class CathedralsRunnerTests(unittest.TestCase):
             return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(payload)}}]}
 
         with tempfile.TemporaryDirectory() as temporary:
-            run = Path(temporary) / "generation_test"
-            for name in ("state", "raw", "committed", ".staging"):
-                (run / name).mkdir(parents=True)
-            RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
-            RUNNER.write_json(run / "generation-brief.json", {
-                "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid"
-            })
-            RUNNER.write_json(run / "run-manifest.json", {"budgets": {"max_prepared_context_tokens": 49152}})
+            with mock.patch.object(RUNNER, "RUNTIME_ROOT", Path(temporary) / ".cathedrals"), mock.patch.object(
+                RUNNER, "RUNS_ROOT", Path(temporary) / ".cathedrals/runs"
+            ):
+                run = RUNNER.create_run(RUNNER.FrozenInputs(possible_scene_count=20), "http://offline.invalid", "offline", output_fn=lambda _: None)
             preserved = {}
-            responses = iter((response(artistic), response(invalid), response(corrected)))
+            responses = iter((response(artistic), response(invalid), response({"items": [], "complete": True})))
 
             def transport(*_args, **_kwargs):
                 for path in (run / "raw").glob("*.api.json"):
@@ -1346,11 +1343,11 @@ class CathedralsRunnerTests(unittest.TestCase):
             self.assertIn("Cannot resolve proposition reference fact_missing", correction_prompt)
             self.assertIn("Immutable prose.", correction_prompt)
             self.assertEqual(RUNNER.read_json(run / ".staging/packet_one.semantic.json"), corrected)
-            self.assertTrue((run / "raw/packet_one-semantic-attempt2.api.json").exists())
+            self.assertEqual(len(list((run / "raw").glob("packet_one_semantic_knowledge_changes_*.api.json"))), 1)
             for path, original in preserved.items():
                 self.assertEqual(path.read_bytes(), original)
             self.assertEqual(RUNNER.read_json(run / ".staging/packet_one.artistic.json"), artistic)
-            self.assertEqual(len(RUNNER.ledger_entries(run)), 1)
+            self.assertEqual(len([entry for entry in RUNNER.ledger_entries(run) if entry["step_type"] == "analysis"]), 2)
             self.assertFalse((run / "state/packet_one.semantic-feedback.txt").exists())
 
             with self.assertRaisesRegex(RUNNER.PausedError, "Canonical metadata accepted before commit"):
@@ -1396,30 +1393,31 @@ class CathedralsRunnerTests(unittest.TestCase):
 
     def test_semantic_resume_grants_three_more_corrections_without_overwrites(self):
         with tempfile.TemporaryDirectory() as temporary:
-            run = Path(temporary) / "generation_test"
-            for name in ("state", "raw", ".staging", "committed"):
-                (run / name).mkdir(parents=True)
-            RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
-            RUNNER.write_json(run / "generation-brief.json", {
-                "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid"
-            })
+            with mock.patch.object(RUNNER, "RUNTIME_ROOT", Path(temporary) / ".cathedrals"), mock.patch.object(
+                RUNNER, "RUNS_ROOT", Path(temporary) / ".cathedrals/runs"
+            ):
+                run = RUNNER.create_run(RUNNER.FrozenInputs(possible_scene_count=20), "http://offline.invalid", "offline", output_fn=lambda _: None)
             RUNNER.write_json(run / "raw/packet_one-semantic-attempt10.api.json", {})
-            invalid = {"choices": [{"finish_reason": "stop", "message": {"content": "{}"}}]}
             normalized = genesis_semantic_payload("scene_slot_0001")
-            valid = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(normalized)}}]}
-            transport = mock.Mock(side_effect=[invalid] * 5 + [valid])
+            invalid = copy.deepcopy(normalized)
+            invalid["canonical_facts"][0]["status"] = "invalid"
+            def response(payload):
+                return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(payload)}}]}
+            invalid_page = response({"items": invalid["canonical_facts"], "complete": True})
+            valid_page = response({"items": normalized["canonical_facts"], "complete": True})
+            transport = mock.Mock(side_effect=[response(invalid)] + [invalid_page] * 5 + [valid_page])
             arguments = (run, "packet_one", {"scenes": [{"technical_slot_id": "scene_slot_0001"}], "endings": []}, "context", transport)
-            with self.assertRaisesRegex(RUNNER.PausedError, "exhausted 3 attempts"):
+            with self.assertRaisesRegex(RUNNER.PausedError, "exhausted 3 page correction attempts"):
                 RUNNER.request_semantic_normalization(*arguments)
-            self.assertEqual(transport.call_count, 3)
-            self.assertEqual([entry["attempt"] for entry in RUNNER.ledger_entries(run)], [11, 12, 13])
+            self.assertEqual(transport.call_count, 4)
+            self.assertEqual([entry["attempt"] for entry in RUNNER.ledger_entries(run) if entry["step_type"] == "analysis"], [11, 1, 2, 3])
             self.assertFalse((run / ".staging/packet_one.semantic.json").exists())
             preserved = {path: path.read_bytes() for path in (run / "raw").iterdir()}
 
             self.assertEqual(RUNNER.request_semantic_normalization(*arguments), normalized)
-            self.assertEqual(transport.call_count, 6)
-            self.assertEqual([entry["attempt"] for entry in RUNNER.ledger_entries(run)], [11, 12, 13, 14, 15])
-            self.assertTrue((run / "raw/packet_one-semantic-attempt16.api.json").exists())
+            self.assertEqual(transport.call_count, 7)
+            self.assertEqual([entry["attempt"] for entry in RUNNER.ledger_entries(run) if entry["step_type"] == "analysis"], [11, 1, 2, 3, 4, 5, 6])
+            self.assertEqual(len(list((run / "raw").glob("packet_one-semantic-attempt*.api.json"))), 2)
             for path, original in preserved.items():
                 self.assertEqual(path.read_bytes(), original)
 

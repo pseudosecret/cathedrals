@@ -186,6 +186,12 @@ The initial whole-delta allowance is 8,192 output tokens, covering reasoning and
 Extract concise new supported changes, rather than restating canon or exhaustively
 indexing description. Normalize metadata without changing any accepted literary bytes.
 
+Packet obligation updates offer only the canonical resolution outcomes `satisfied`
+and `intentionally_unresolved`. Active obligations persist without an update; extra
+evidence belongs in facts or knowledge. Deliberate ambiguous resolution is distinct
+from ongoing uncertainty. New soft obligations still begin active. Foreclosure and
+impossibility retain their separate scoped-candidate requirements.
+
 Truncation preserves complete records and closed categories, then switches remaining
 work to pages of at most eight records with an explicit completion flag. Facts precede
 knowledge, followed by new soft obligations, obligation updates, and motifs. Page
@@ -200,7 +206,14 @@ Compact JSON, required schema definitions, and complete source context must fit 
 limits. Do not clip source content to force a request to fit. Capacity shortfalls
 pause; cumulative token, analysis, and event exhaustion retain hard-limit behavior.
 Internal recovery checkpoints retain category completion and accepted/pending records.
-Canonical correction revisits a selected rejected category while preserving others;
+Schema, reference, and canonical errors in complete responses also enter category
+recovery, retaining the current candidate and successful cached reference repairs.
+Structured error paths select affected categories directly, including canonical
+`new_obligations` paths mapped to `new_soft_obligations`. Errors without usable paths
+use the existing bounded category selector. Request, retained-record, and page
+validation share the same specialized schema, including source and empty-category
+restrictions. Rejections and per-category feedback persist across pause/resume.
+Canonical correction revisits rejected categories while preserving others;
 facts may be appended without renumbering existing aliases. The final candidate still
 passes all existing schema, reference, canonical, and packet checks. Incomplete raw
 envelopes remain diagnostics; recovered metadata uses an explicit assembled envelope.

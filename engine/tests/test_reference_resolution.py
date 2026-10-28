@@ -245,6 +245,8 @@ class ReferenceResolutionTests(unittest.TestCase):
                 name = "planningValue"
             if "BATCH TARGETS\n" in prompt:
                 name = "planningBatchValues"
+            if "Choose ONLY the category needing correction" in prompt:
+                name = "semanticCorrectionCategory"
             calls.append(name)
             schema = request.get("response_format", {}).get("json_schema", {}).get("schema", {})
             if name in {"planningValue", "planningBatchValues"}:
@@ -314,9 +316,19 @@ class ReferenceResolutionTests(unittest.TestCase):
                 item["artifacts"] = [copy.deepcopy(template["artifacts"][0]) for _ in range(properties["artifacts"]["minItems"])]
                 item["formal_compositions"] = [copy.deepcopy(template["formal_compositions"][0]) for _ in range(properties["formal_compositions"]["minItems"])]
                 original_prose[slot] = item["prose_mdx"]
+            elif name == "semanticCorrectionCategory":
+                return api_response("obligation_updates", text=True)
             elif name == "semanticCategoryPage":
-                self.assertIn("Continue ONLY motif_events", prompt)
-                value = {"items": [], "complete": True}
+                if "Continue ONLY obligation_updates" in prompt:
+                    source = schema["$defs"]["semanticSource"]["properties"]["technical_slot_id"]["enum"][0]
+                    updates = [{"source": {"technical_slot_id": source}, "obligation_id": key,
+                        "status": "satisfied", "reason": "Synthetic evidence fixture."}
+                        for key, event in RUNNER._read_state_map(self.run, "obligations.json").items()
+                        if source == "scene_slot_0006" and event["data"]["status"] == "active"]
+                    value = {"items": updates, "complete": True}
+                else:
+                    self.assertIn("Continue ONLY motif_events", prompt)
+                    value = {"items": [], "complete": True}
             elif name == "semanticDeltaPayload":
                 source = schema["$defs"]["semanticSource"]["properties"]["technical_slot_id"].get("enum", ["claimant_slot_01"])[0]
                 value = genesis_semantic_payload(source)
@@ -332,9 +344,16 @@ class ReferenceResolutionTests(unittest.TestCase):
                     value["knowledge_changes"] = [{"source": {"technical_slot_id": source}, "subject_id": "claimant_01", "relation": "knows",
                         "proposition_id": identifier, "action": "establish", "relevance": {}}
                         for identifier in ("fact_new_pencil_notation", "fact_new_seal_kit_shortage")]
-                if source == "scene_slot_0006" and normalization_counts[source] > 1:
-                    value["obligation_updates"] = [{"source": {"technical_slot_id": source}, "obligation_id": key,
-                        "status": "satisfied", "reason": "Synthetic evidence fixture."} for key, event in RUNNER._read_state_map(self.run, "obligations.json").items() if event["data"]["status"] == "active"]
+                if source == "scene_slot_0002":
+                    self.assertEqual(schema["$defs"]["semanticObligationUpdate"]["properties"]["status"]["enum"],
+                                     ["satisfied", "intentionally_unresolved"])
+                    # Simulate a provider ignoring its corrected enum to exercise focused recovery.
+                    obligation_id = next(iter(RUNNER._read_state_map(self.run, "obligations.json")))
+                    value["obligation_updates"] = [{"source": {"technical_slot_id": source}, "obligation_id": obligation_id,
+                        "status": "active", "reason": "Additional evidence, without resolution."}]
+                if source == "scene_slot_0003":
+                    self.assertTrue(all(event["data"]["status"] == "active" and "resolution_event" not in event
+                        for event in RUNNER._read_state_map(self.run, "obligations.json").values()))
                 if source == "scene_slot_0001":
                     partial = {key: item for key, item in value.items() if key != "motif_events"}
                     response = api_response(json.dumps(partial)[:-1] + ',"motif_events":[', text=True)
@@ -354,10 +373,12 @@ class ReferenceResolutionTests(unittest.TestCase):
         self.assertGreater(calls.count("planningValue"), 0)
         self.assertGreater(calls.count("planningBatchValues"), 0)
         self.assertEqual(calls.count("architectureRepair"), 0)
-        self.assertEqual(normalization_counts["scene_slot_0006"], 2)
+        self.assertEqual(normalization_counts["scene_slot_0002"], 1)
+        self.assertEqual(normalization_counts["scene_slot_0006"], 1)
         failures = [entry for entry in RUNNER.ledger_entries(self.run) if entry["commit_status"] == "FAILED_BEFORE_COMMIT"]
-        self.assertEqual(len(failures), 3)
-        self.assertEqual(calls.count("semanticCategoryPage"), 1)
+        self.assertEqual(len(failures), 4)
+        self.assertEqual(calls.count("semanticCategoryPage"), 3)
+        self.assertEqual(calls.count("semanticCorrectionCategory"), 1)
         self.assertEqual({item["failure_class"] for item in failures}, {"provider_truncation", "malformed_response"})
         core_commit = next(path for path in RUNNER.committed_directories(self.run) if path.name.endswith("-architecture_core"))
         core_api = RUNNER.read_json(core_commit / "api-response.json")

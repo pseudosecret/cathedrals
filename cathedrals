@@ -111,8 +111,9 @@ class CathedralsError(Exception):
 
 
 class SchemaError(CathedralsError):
-    def __init__(self, reason: str):
+    def __init__(self, reason: str, *, paths=()):
         super().__init__("Structured record validation", reason, "malformed_response")
+        self.paths = tuple(paths)
 
 
 class IntegrityError(CathedralsError):
@@ -370,7 +371,7 @@ def validate_json_schema(value, schema, root=None, path: str = "$") -> None:
     lines = [f"{_validation_subject(value)} failed schema validation with {count} {'problem' if count == 1 else 'problems'}:", ""]
     for index, (error_path, _keyword, expected, received) in enumerate(errors, 1):
         lines.extend((f"{index}. {error_path}", f"   Expected: {expected}", f"   Received: {received}", ""))
-    raise SchemaError("\n".join(lines).rstrip())
+    raise SchemaError("\n".join(lines).rstrip(), paths=[item[0] for item in errors])
 
 
 def _schema_matches(value, schema, root, path: str) -> bool:
@@ -2506,7 +2507,8 @@ def repair_named_references(run_dir: Path, step_id: str, payload: dict, definiti
             if definition == "semanticDeltaPayload" and plan is None:
                 deferred.add(reference_path(issue["path"]))  # Genesis retains its explicit expansion path.
                 continue
-            raise SchemaError(f"Cannot resolve {issue['kind']} reference {issue['invalid']} at {reference_path(issue['path'])}")
+            raise SchemaError(f"Cannot resolve {issue['kind']} reference {issue['invalid']} at {reference_path(issue['path'])}",
+                              paths=[reference_path(issue["path"])])
         cursor = value
         for part in issue["path"][:-1]:
             cursor = cursor[part]
@@ -4710,6 +4712,9 @@ SEMANTIC_INSTRUCTION = (
     "Extract only NEW continuity, evidence, knowledge, obligation, and motif CHANGES supported by the immutable content. "
     "Keep metadata concise; do not restate canon, inventory every descriptive detail, or create knowledge entries automatically for every fact. "
     "Preserve contested evidence and uncertainty. Never invent events, prose, or resolutions. New obligations must be soft. "
+    "Unresolved obligations remain active automatically. Record additional evidence as facts or knowledge, not an active status update. "
+    "For packets, update obligations only when satisfied or intentionally_unresolved by the authored content. "
+    "intentionally_unresolved is a deliberate ambiguous resolution, not ongoing uncertainty. An empty obligation_updates array is valid. "
     "Use an authored content technical_slot_id as every source. fact_01, fact_02, etc. name the accepted facts in their original order. "
     "Include every important supported change, using continuation pages when needed rather than dropping it to fit."
 )
@@ -4765,29 +4770,46 @@ def semantic_output_limit(run_dir: Path, prompt: str, schema: dict, maximum=8192
     return maximum
 
 
-def seed_semantic_recovery(run_dir: Path, step_id: str, artistic: dict, response: dict) -> dict:
-    message = (response.get("choices") or [{}])[0].get("message") or {}
-    content = message.get("content") or ""
-    content = content if isinstance(content, str) else ""
-    try:
-        payload, incomplete = parse_structured_content(content), []
-    except SchemaError:
-        payload, incomplete = parsed_planning_fragment(content)
+def semantic_error_categories(error: SchemaError) -> list[str]:
+    categories = set()
+    for path in error.paths:
+        match = re.match(r"^\$\.(?:constraint_delta\.)?([a-z_]+)(?:\[|\.|$)", path)
+        key = match.group(1) if match else None
+        key = "new_soft_obligations" if key == "new_obligations" else key
+        if key not in SEMANTIC_CATEGORIES:
+            return []
+        categories.add(key)
+    return [key for key in SEMANTIC_CATEGORIES if key in categories]
+
+
+def seed_semantic_recovery(run_dir: Path, step_id: str, artistic: dict, response: dict, *, payload=None, schema=None) -> dict:
+    incomplete = []
+    if payload is None:
+        message = (response.get("choices") or [{}])[0].get("message") or {}
+        content = message.get("content") or ""
+        content = content if isinstance(content, str) else ""
+        try:
+            payload = parse_structured_content(content)
+        except SchemaError:
+            payload, incomplete = parsed_planning_fragment(content)
     payload = payload if isinstance(payload, dict) else {}
-    base = definition_schema("semanticDeltaPayload", load_protocol(run_dir))
+    base = schema or definition_schema("semanticDeltaPayload", load_protocol(run_dir))
     state = {"version": 1, "artistic_hash": sha256_bytes(canonical_json(artistic)),
              "payload": {key: [] for key in SEMANTIC_CATEGORIES}, "complete": {}, "pending": {},
              "page_size": {key: 8 for key in SEMANTIC_CATEGORIES}, "feedback": {}, "revision": {}, "calls": []}
     for key in SEMANTIC_CATEGORIES:
         items = payload.get(key)
         accepted = state["payload"][key]
+        category_schema = base["properties"][key]
         if isinstance(items, list):
             for item in items:
-                if _collect_schema_errors(item, base["properties"][key]["items"], base, "$"):
+                if len(accepted) >= category_schema.get("maxItems", float("inf")) or _collect_schema_errors(item, category_schema.get("items", {}), base, "$"):
                     break
                 accepted.append(item)
             state["pending"][key] = items[len(accepted):]
-        state["complete"][key] = isinstance(items, list) and len(accepted) == len(items) and not any(path and path[0] == key for path in incomplete)
+        state["complete"][key] = (isinstance(items, list) and len(accepted) == len(items)
+            and not _collect_schema_errors(items, category_schema, base, "$")
+            and not any(path and path[0] == key for path in incomplete))
     write_json(run_dir / ".staging" / f"{step_id}.semantic-recovery.json", state)
     return state
 
@@ -4806,25 +4828,29 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
     state = read_json(path)
     if state["artistic_hash"] != sha256_bytes(canonical_json(artistic)):
         raise IntegrityError("Semantic recovery belongs to different immutable artistic content")
-    base = definition_schema("semanticDeltaPayload", load_protocol(run_dir))
     if state.get("rejected"):
         reason = state["rejected"]
-        prompt = semantic_prompt(artistic, context, "Choose ONLY the category needing correction for this validation error: " + reason, state["payload"])
-        selection = {"type": "string", "enum": list(SEMANTIC_CATEGORIES)}
-        revision = sum(state["revision"].values()) + 1
-        query = f"{step_id}_semantic_correction_{revision}"
-        key, response = request_architecture_analysis(run_dir, query, prompt, selection, transport,
-            phase="validation", response_name="semanticCorrectionCategory", system_prompt="Select one metadata category. Return only its exact name.",
-            value_mode=True, planning_mode=True, context_purpose="semantic normalization", pause_stage="Semantic normalization")
-        preserve_planning_result(run_dir, step_id, query, key, response, kind="semantic_correction", phase="validation")
-        state["revision"][key] = state["revision"].get(key, 0) + 1
-        state["feedback"][key] = "Correct this rejected category while preserving unrelated valid entries: " + reason
-        # Facts keep their positions; a correction may add a missing fact for an unresolved knowledge reference.
-        if key != "canonical_facts":
-            state["pending"][key] = state["payload"][key]
-            state["payload"][key] = []
-        state["complete"][key] = False
+        categories = state.get("rejected_categories", [])
+        if not categories:
+            prompt = semantic_prompt(artistic, context, "Choose ONLY the category needing correction for this validation error: " + reason, state["payload"])
+            selection = {"type": "string", "enum": list(SEMANTIC_CATEGORIES)}
+            revision = sum(state["revision"].values()) + 1
+            query = f"{step_id}_semantic_correction_{revision}"
+            key, response = request_architecture_analysis(run_dir, query, prompt, selection, transport,
+                phase="validation", response_name="semanticCorrectionCategory", system_prompt="Select one metadata category. Return only its exact name.",
+                value_mode=True, planning_mode=True, context_purpose="semantic normalization", pause_stage="Semantic normalization")
+            preserve_planning_result(run_dir, step_id, query, key, response, kind="semantic_correction", phase="validation")
+            categories = [key]
+        for key in categories:
+            state["revision"][key] = state["revision"].get(key, 0) + 1
+            state["feedback"][key] = "Correct this rejected category while preserving unrelated valid entries: " + reason
+            # Facts keep their positions; a correction may add a missing fact for an unresolved knowledge reference.
+            if key != "canonical_facts":
+                state["pending"][key] = state["payload"][key] + state["pending"].get(key, [])
+                state["payload"][key] = []
+            state["complete"][key] = False
         state.pop("rejected")
+        state.pop("rejected_categories", None)
         write_json(path, state)
     for key in SEMANTIC_CATEGORIES:
         failures = 0
@@ -4834,10 +4860,12 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
             size = state["page_size"][key]
             offset = len(state["payload"][key])
             query = f"{step_id}_semantic_{key}_{state['revision'].get(key, 0)}_{offset:04d}_{size}"
+            category_schema = schema["properties"][key]
+            page_limit = min(size, max(0, category_schema.get("maxItems", size + offset) - offset))
             page_schema = compact_planning_schema({"type": "object", "additionalProperties": False,
                 "required": ["items", "complete"], "properties": {
-                    "items": schema["properties"][key] | {"maxItems": size}, "complete": {"type": "boolean"}}, "$defs": schema.get("$defs", {})})
-            instruction = (f"Continue ONLY {key} after its {offset} accepted records. Return at most {size} NEW records in items. "
+                    "items": category_schema | {"maxItems": page_limit}, "complete": {"type": "boolean"}}, "$defs": schema.get("$defs", {})})
+            instruction = (f"Continue ONLY {key} after its {offset} accepted records. Return at most {page_limit} NEW records in items. "
                 "Set complete=true only when this category has no remaining important changes; otherwise complete=false. "
                 "Never repeat accepted records or renumber accepted facts. An empty items array is allowed only with complete=true. "
                 "Complete partial candidates in their original order when supported. Partial candidates: " +
@@ -4869,7 +4897,7 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
             consumed = 0
             if isinstance(items, list):
                 for item in items:
-                    if _collect_schema_errors(item, base["properties"][key]["items"], base, "$"):
+                    if len(state["payload"][key]) >= category_schema.get("maxItems", float("inf")) or _collect_schema_errors(item, category_schema.get("items", {}), schema, "$"):
                         complete = False
                         break
                     consumed += 1
@@ -4958,6 +4986,7 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
     if feedback and recovery_path.exists():
         state = read_json(recovery_path)
         state["rejected"] = feedback
+        state.pop("rejected_categories", None)
         write_json(recovery_path, state)
     sent = 0
     for correction in range(3):
@@ -4967,7 +4996,7 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
             attempt = pending["attempt"]
         prompt = semantic_prompt(artistic_payload, context, "Return the complete semantic delta. " + feedback)
         response_path = run_dir / "raw" / f"{step_id}-semantic-attempt{attempt}.api.json"
-        started, response = utc_now(), None
+        started, response, normalized = utc_now(), None, None
         try:
             if cached is not None:
                 normalized, response = cached, cached_response
@@ -4995,7 +5024,7 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
                     append_failed_attempt(run_dir, step_id=f"{step_id}_semantic", attempt=attempt, phase="validation", prompt=prompt,
                         context=context, parameters=parameters, started_at=started, failure_class=error.failure_class, step_type="analysis",
                         output_hash=sha256_file(response_path) if response_path.exists() else None, usage=response.get("usage") or {})
-                    seed_semantic_recovery(run_dir, step_id, artistic_payload, response)
+                    seed_semantic_recovery(run_dir, step_id, artistic_payload, response, schema=schema)
                     response = None
                     if isinstance(error, IncompleteResponseError):
                         raise PausedError("Semantic normalization", error.reason, error.failure_class) from error
@@ -5032,9 +5061,16 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
                     usage=read_json(response_path).get("usage") or {} if response_path.exists() else response.get("usage") or {} if isinstance(response, dict) else {})
             if error.failure_class == "budget_exhaustion" or isinstance(error, IntegrityError):
                 raise
-            if recovery_path.exists() and isinstance(error, SchemaError):
-                state = read_json(recovery_path)
+            if isinstance(error, SchemaError):
+                state = (read_json(recovery_path) if recovery_path.exists() else
+                    seed_semantic_recovery(run_dir, step_id, artistic_payload, response or {}, payload=normalized, schema=schema))
+                if normalized is not None:
+                    # Reference repairs may have succeeded before canonical validation failed.
+                    for key in SEMANTIC_CATEGORIES:
+                        if state["complete"].get(key):
+                            state["payload"][key] = normalized[key]
                 state["rejected"] = error.reason
+                state["rejected_categories"] = semantic_error_categories(error)
                 write_json(recovery_path, state)
             if isinstance(error, SchemaError) and correction < 2:
                 feedback = f" Previous normalization failed: {error.reason}"
@@ -5509,7 +5545,8 @@ def architecture_plan_annotation_schema(
 
 
 def semantic_delta_schema(run_dir: Path, source_slots, *, plan=None) -> dict:
-    schema = copy.deepcopy(definition_schema("semanticDeltaPayload", load_protocol(run_dir)))
+    protocol = load_protocol(run_dir)
+    schema = copy.deepcopy(definition_schema("semanticDeltaPayload", protocol))
     schema["$defs"]["semanticSource"]["properties"]["technical_slot_id"] = {
         "enum": sorted(set(source_slots))
     }
@@ -5522,7 +5559,8 @@ def semantic_delta_schema(run_dir: Path, source_slots, *, plan=None) -> dict:
             schema["properties"]["obligation_updates"] = {"type": "array", "maxItems": 0}
             schema["$defs"]["semanticSoftObligation"]["properties"]["requires"] = {"type": "array", "maxItems": 0}
         schema["$defs"]["semanticObligationUpdate"]["properties"]["status"] = {
-            "enum": ["active", "satisfied", "intentionally_unresolved"]
+            "enum": [status for status in protocol["$defs"]["obligationUpdate"]["properties"]["status"]["enum"]
+                     if status not in {"foreclosed", "impossible"}]
         }
     return schema
 

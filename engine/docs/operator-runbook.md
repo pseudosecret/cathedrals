@@ -188,10 +188,22 @@ content; other hard resource limits remain binding.
 
 Progress lives in `.staging/<step>.semantic-recovery.json`; resume keeps accepted prose
 and metadata and continues pending work. Canonical errors after paging correct only
-the selected rejected category, preserving other categories and fact positions. Full
+the selected rejected category, preserving other categories and fact positions.
+Complete responses with schema, reference, or canonical errors use this same recovery
+path. Known error paths route directly to their categories; an opaque error uses the
+bounded category selector. Correction state survives pause/resume, and successful
+reference lookups remain cached. A failure in one category does not request a new
+whole semantic delta. Full
 schema, reference, and packet validation precedes final metadata staging. Commits
 include the recovery checkpoint and response evidence; incomplete provider envelopes
 are never used as completed metadata responses.
+
+An existing obligation remains `active` until supported content resolves it; no
+status update is needed merely to add evidence. Packet normalization allows only
+`satisfied` and `intentionally_unresolved` updates, derived from the canonical
+contract. The latter is a deliberate ambiguous resolution, not an open question.
+An empty update array is valid. The engine never coerces `active` into a resolution;
+foreclosure safeguards and the initial active state of new obligations remain intact.
 
 Metadata must pass complete packet validation before staging. A paused lookup retains
 the original artistic and pending metadata responses, so resume continues resolution

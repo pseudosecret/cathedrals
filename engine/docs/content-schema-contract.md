@@ -100,6 +100,14 @@ wire shape. A recovered delta uses an assembled metadata envelope; original inco
 provider envelopes remain immutable diagnostics. The recovery checkpoint is copied
 into the artistic commit as supplemental provenance.
 
+Complete responses rejected by schema, reference, or canonical validation use the
+same recovery checkpoint. Optional `rejected_categories` identifies categories from
+structured error paths; older checkpoints without it retain category-selection
+fallback. Per-category feedback and pending candidates survive interruption. Internal
+`SchemaError.paths` is additive; existing error messages and canonical record schemas
+are unchanged. Retention and continuation validation use the same specialized
+response schema as the initial request.
+
 Architecture payload aliases are resolved within each reference field's allowed entity
 kinds before canonical IDs are assigned. An attractor and a topology node may share a
 payload alias without changing an obligation's ending target into a node reference.

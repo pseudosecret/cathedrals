@@ -114,6 +114,15 @@ resume, exact response accounting, and a capacity pause before any oversized req
 The full 20-scene rehearsal must exercise semantic truncation recovery and retain its
 complete validation, publication, and zero-human-intervention result.
 
+Verify packet-plan normalization never offers `active` as an update, while new
+obligations still start active and unchanged obligations retain their state. Inject
+an invalid update despite the corrected enum: repair only that category and preserve
+facts, knowledge, motifs, and prose. Repeat with an unresolved ending target and a
+previously successful reference lookup. Check direct error-path routing, canonical
+category aliases, opaque-error fallback, specialized source/empty-category rules,
+and three-attempt category exhaustion followed by resume. The full rehearsal also
+injects the invalid status and must reach `READY_TO_PLAY` without regenerating prose.
+
 ## 3. Mechanical and Continuity Validation
 
 Run every mechanical check in `engine/canon/acceptance-tests.md`, including protocol,

@@ -31,6 +31,23 @@ class SemanticRecoveryTests(unittest.TestCase):
     def empty(self):
         return {key: [] for key in RUNNER.SEMANTIC_CATEGORIES}
 
+    def evidence(self):
+        return self.empty() | {
+            "canonical_facts": [self.fact()],
+            "knowledge_changes": [{"source": {"technical_slot_id": "scene_slot_0001"}, "subject_id": "claimant_01",
+                "relation": "believes", "proposition_id": "fact_01", "action": "establish", "relevance": {}}],
+            "new_soft_obligations": [{"source": {"technical_slot_id": "scene_slot_0001"}, "kind": "branch_residue",
+                "description": "Synthetic question remains open.", "requires": [], "universality": "local",
+                "resolution_modes": ["revelation"], "range": "local", "termination_targets": [], "relevance": {}}],
+            "motif_events": [{"source": {"technical_slot_id": "scene_slot_0001"}, "motif_id": "motif_fixture",
+                "action": "establish", "current_function": "Synthetic recurrence.", "pressure": "Synthetic pressure.",
+                "overuse_risk": "low", "relevance": {}}],
+        }
+
+    def active_update(self):
+        return {"source": {"technical_slot_id": "scene_slot_0001"}, "obligation_id": "obligation_one",
+                "status": "active", "reason": "Additional evidence leaves the question unresolved."}
+
     def response(self, payload, *, truncated=False, text=False):
         response = fixtures.api_response(payload, text=text)
         if truncated:
@@ -58,6 +75,129 @@ class SemanticRecoveryTests(unittest.TestCase):
         self.assertIn("do not restate canon", request["messages"][1]["content"])
         self.assertEqual(RUNNER.packet_literary_word_count(self.artistic), 420)
         self.assert_prose_unchanged()
+
+    def test_packet_update_schema_only_offers_canonical_resolution_outcomes(self):
+        read_state = RUNNER._read_state_map
+        with mock.patch.object(RUNNER, "_read_state_map", side_effect=lambda run, name:
+                {"obligation_one": {}} if name == "obligations.json" else read_state(run, name)):
+            schema = RUNNER.semantic_delta_schema(self.run, ["scene_slot_0001"], plan={})
+        choices = schema["$defs"]["semanticObligationUpdate"]["properties"]["status"]["enum"]
+        self.assertEqual(choices, ["satisfied", "intentionally_unresolved"])
+        original = self.empty() | {"obligation_updates": [self.active_update()]}
+        for status in ("active", "foreclosed", "impossible"):
+            original["obligation_updates"][0]["status"] = status
+            with self.subTest(status=status), self.assertRaises(RUNNER.SchemaError):
+                RUNNER.validate_json_schema(original, schema)
+        for status in choices:
+            original["obligation_updates"][0]["status"] = status
+            RUNNER.validate_json_schema(original, schema)
+            delta = RUNNER.build_semantic_delta(self.run, self.step, original, {"scene_slot_0001": ("scene", "scene_0001")})
+            RUNNER.validate_json_schema(delta, RUNNER.definition_schema("constraintDelta"))
+
+    def test_complete_invalid_update_repairs_only_updates_and_preserves_evidence(self):
+        original = self.evidence() | {"obligation_updates": [self.active_update()]}
+        def transport(method, url, request, **kwargs):
+            name = request["response_format"]["json_schema"]["name"]
+            if name == "semanticDeltaPayload":
+                return self.response(original)
+            self.assertEqual(name, "semanticCategoryPage")
+            prompt = request["messages"][1]["content"]
+            self.assertIn("Continue ONLY obligation_updates", prompt)
+            self.assertIn("remain active automatically", prompt)
+            accepted = json.loads(prompt.split("ACCEPTED SEMANTIC METADATA\n", 1)[1].split("\nINSTRUCTION", 1)[0])
+            self.assertEqual(accepted, original | {"obligation_updates": []})
+            return self.response({"items": [], "complete": True})
+        transport = mock.Mock(side_effect=transport)
+        result = self.normalize(transport)
+        self.assertEqual(result, original | {"obligation_updates": []})
+        self.assertEqual(transport.call_count, 2)
+        delta = RUNNER.build_semantic_delta(self.run, self.step, result, {"scene_slot_0001": ("scene", "scene_0001")})
+        self.assertEqual(delta["new_obligations"][0]["status"], "active")
+        entries = [item for item in RUNNER.ledger_entries(self.run) if item["step_type"] == "analysis"]
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(sum(item["token_accounting"]["output_tokens"] for item in entries), 14)
+        self.assert_prose_unchanged()
+
+    def test_invalid_category_exhaustion_and_resume_do_not_repeat_valid_metadata(self):
+        original = self.evidence() | {"obligation_updates": [self.active_update()]}
+        def transport(method, url, request, **kwargs):
+            name = request["response_format"]["json_schema"]["name"]
+            return self.response(original if name == "semanticDeltaPayload" else {"items": [self.active_update()], "complete": True})
+        transport = mock.Mock(side_effect=transport)
+        with self.assertRaisesRegex(RUNNER.PausedError, "exhausted 3 page correction attempts"):
+            self.normalize(transport)
+        self.assertEqual(transport.call_count, 4)
+        state = RUNNER.read_json(self.run / f".staging/{self.step}.semantic-recovery.json")
+        self.assertEqual(state["payload"], original | {"obligation_updates": []})
+        self.assertEqual(state["pending"]["obligation_updates"], original["obligation_updates"])
+        self.assertIn("active", state["feedback"]["obligation_updates"])
+        preserved = {path: path.read_bytes() for path in (self.run / "raw").glob("*.api.json")}
+        resume = mock.Mock(return_value=self.response({"items": [], "complete": True}))
+        self.assertEqual(self.normalize(resume), original | {"obligation_updates": []})
+        resume.assert_called_once()
+        self.assertIn("Continue ONLY obligation_updates", resume.call_args.args[2]["messages"][1]["content"])
+        for path, value in preserved.items():
+            self.assertEqual(path.read_bytes(), value)
+        entries = [item for item in RUNNER.ledger_entries(self.run) if item["step_type"] == "analysis"]
+        self.assertEqual(sum(item["token_accounting"]["output_tokens"] for item in entries), 35)
+        self.assert_prose_unchanged()
+
+    def test_unresolved_ending_repairs_only_its_category_and_reuses_reference_cache(self):
+        original = self.evidence()
+        original["knowledge_changes"][0]["proposition_id"] = "fact_descriptive_name"
+        original["new_soft_obligations"][0]["termination_targets"] = ["ending_005"]
+        corrected = copy.deepcopy(original["new_soft_obligations"][0]) | {"termination_targets": []}
+        calls = []
+        def transport(method, url, request, **kwargs):
+            name = request.get("response_format", {}).get("json_schema", {}).get("name", "reference")
+            calls.append(name)
+            if name == "semanticDeltaPayload":
+                return self.response(original)
+            if name == "reference":
+                self.assertIn("fact_descriptive_name", request["messages"][1]["content"])
+                return self.response("fact_01", text=True)
+            self.assertEqual(name, "semanticCategoryPage")
+            self.assertIn("Continue ONLY new_soft_obligations", request["messages"][1]["content"])
+            return self.response({"items": [corrected], "complete": True})
+        result = self.normalize(transport)
+        self.assertEqual(calls, ["semanticDeltaPayload", "reference", "semanticCategoryPage"])
+        expected = copy.deepcopy(original)
+        expected["knowledge_changes"][0]["proposition_id"] = "fact_01"
+        expected["new_soft_obligations"] = [corrected]
+        self.assertEqual(result, expected)
+        self.assert_prose_unchanged()
+
+    def test_error_paths_route_multiple_categories_and_canonical_aliases(self):
+        payload = self.evidence() | {"obligation_updates": [self.active_update()]}
+        payload["motif_events"][0]["overuse_risk"] = "invalid"
+        with self.assertRaises(RUNNER.SchemaError) as raised:
+            RUNNER.validate_json_schema(payload, RUNNER.definition_schema("semanticDeltaPayload"))
+        self.assertEqual(RUNNER.semantic_error_categories(raised.exception), ["obligation_updates", "motif_events"])
+        error = RUNNER.SchemaError("Synthetic canonical failure", paths=["$.constraint_delta.new_obligations[0].range"])
+        self.assertEqual(RUNNER.semantic_error_categories(error), ["new_soft_obligations"])
+        self.assertEqual(str(error), "Synthetic canonical failure")
+        self.assertEqual(RUNNER.semantic_error_categories(RUNNER.SchemaError("Opaque failure")), [])
+
+    def test_recovery_uses_specialized_source_schema_when_retaining_records(self):
+        payload = self.empty() | {"canonical_facts": [self.fact() | {"source": {"technical_slot_id": "scene_slot_9999"}}]}
+        schema = RUNNER.semantic_delta_schema(self.run, ["scene_slot_0001"])
+        state = RUNNER.seed_semantic_recovery(self.run, self.step, self.artistic, self.response(payload), schema=schema)
+        self.assertEqual(state["payload"]["canonical_facts"], [])
+        self.assertEqual(state["pending"]["canonical_facts"], payload["canonical_facts"])
+        transport = mock.Mock(return_value=self.response({"items": payload["canonical_facts"], "complete": True}))
+        with self.assertRaises(RUNNER.PausedError):
+            self.normalize(transport)
+        self.assertEqual(transport.call_count, 3)
+        self.assert_prose_unchanged()
+
+    def test_recovery_page_keeps_forbidden_category_empty(self):
+        payload = self.empty() | {"obligation_updates": [self.active_update()]}
+        schema = RUNNER.semantic_delta_schema(self.run, ["scene_slot_0001"], plan={})
+        RUNNER.seed_semantic_recovery(self.run, self.step, self.artistic, self.response(payload), schema=schema)
+        transport = mock.Mock(return_value=self.response({"items": [], "complete": True}))
+        result, _ = RUNNER.recover_semantic_categories(self.run, self.step, self.artistic, "context", schema, transport)
+        self.assertEqual(result, self.empty())
+        self.assertEqual(transport.call_args.args[2]["response_format"]["json_schema"]["schema"]["properties"]["items"]["maxItems"], 0)
 
     def test_saved_failure_preserves_closed_categories_and_finishes_only_pending(self):
         fixture = RUNNER.read_json(ROOT / "engine/tests/fixtures/semantic-normalization-truncation.json")
