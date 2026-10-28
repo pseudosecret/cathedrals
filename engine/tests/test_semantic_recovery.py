@@ -372,9 +372,13 @@ class SemanticRecoveryTests(unittest.TestCase):
         original["knowledge_changes"] = [knowledge]
         RUNNER.seed_semantic_recovery(self.run, self.step, self.artistic, self.response(original, truncated=True))
         corrected = knowledge | {"relation": "believes"}
+        selections = iter((knowledge, original, {"category": "knowledge_changes"}))
         def transport(method, url, request, **kwargs):
-            if "response_format" not in request:
-                return self.response("knowledge_changes", text=True)
+            if request["response_format"]["json_schema"]["name"] == "semanticCorrectionCategory":
+                self.assertNotIn("Extract only NEW", request["messages"][1]["content"])
+                self.assertEqual(request["max_tokens"], 4096)
+                self.assertTrue(request["response_format"]["json_schema"]["strict"])
+                return self.response(next(selections))
             self.assertIn("Continue ONLY knowledge_changes", request["messages"][1]["content"])
             return self.response({"items": [corrected], "complete": True})
         transport = mock.Mock(side_effect=transport)
@@ -388,7 +392,7 @@ class SemanticRecoveryTests(unittest.TestCase):
         with mock.patch.object(RUNNER, "build_semantic_delta", side_effect=validate):
             result = self.normalize(transport)
         self.assertEqual(result, original | {"knowledge_changes": [corrected]})
-        self.assertEqual(transport.call_count, 2)
+        self.assertEqual(transport.call_count, 4)
         self.assert_prose_unchanged()
 
     def test_compact_context_preserves_all_json_values_and_plain_text(self):

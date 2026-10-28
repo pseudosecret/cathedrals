@@ -210,13 +210,31 @@ Schema, reference, and canonical errors in complete responses also enter categor
 recovery, retaining the current candidate and successful cached reference repairs.
 Structured error paths select affected categories directly, including canonical
 `new_obligations` paths mapped to `new_soft_obligations`. Errors without usable paths
-use the existing bounded category selector. Request, retained-record, and page
+use a dedicated classifier with a strict category object and a 4,096-token output
+ceiling. Classification never receives extraction instructions. Request, retained-record, and page
 validation share the same specialized schema, including source and empty-category
 restrictions. Rejections and per-category feedback persist across pause/resume.
 Canonical correction revisits rejected categories while preserving others;
 facts may be appended without renumbering existing aliases. The final candidate still
 passes all existing schema, reference, canonical, and packet checks. Incomplete raw
 envelopes remain diagnostics; recovered metadata uses an explicit assembled envelope.
+
+Unavailable-knowledge errors carry the scene slot, dependency index, character,
+proposition IDs, and prior negative knowledge evidence. They bypass category
+selection and enter audited dependency recovery. A source-grounded decision may
+replace or remove only flagged declarations on uncommitted scenes, request missing
+knowledge acquisition metadata, or report a genuine unresolved contradiction.
+Corrections require exact excerpts from the same immutable scene or its artifacts;
+subject and proposition IDs must come from existing catalogs. Supported dependencies
+cannot be discarded merely to pass a guard. Genuine acquisition preserves its
+dependency, establishes supported knowledge, and retracts the exact prior negative
+relation through new events. The continuity guard still validates the resulting packet.
+
+Dependency overrides live in a separate artistic-hash-bound checkpoint, leaving the
+original artistic files and all prose intact. Candidate validation and final packet
+construction apply the same overrides. Accepted decisions, before/after declarations,
+and provider responses remain auditable across resume and accompany the immutable
+commit. Committed declarations and prior canon cannot be repaired this way.
 Each focused lookup permits three attempts within the frozen analysis, context, and
 cumulative token budgets. Raw responses are immutable; successful and failed lookup
 attempts are ledgered once, and field-level repair history is included in the parent

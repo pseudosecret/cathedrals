@@ -308,6 +308,9 @@ class ReferenceResolutionTests(unittest.TestCase):
                 template = packet_payload(20, 5)["scenes"][0]
                 if group == "scenes":
                     value = {"scenes": [template | {"technical_slot_id": slot, "arc_id": "missing_arc" if slot == "scene_slot_0002" else "arc_001"}], "endings": []}
+                    if slot == "scene_slot_0003":
+                        hidden = next(iter(RUNNER._read_state_map(self.run, "knowledge-state.json")["claimant_05"]["explicitly_does_not_know"]))
+                        value["scenes"][0]["epistemic_dependencies"] = [{"subject_id": "claimant_05", "proposition_ids": [hidden]}]
                 else:
                     value = {"scenes": [], "endings": [{"technical_slot_id": slot, "title": "Synthetic ending.", "ending_type": "commitment",
                         "claimant_pressure_ids": [], "entry_conditions": [], "state_effects": [], "redirect_destination": None,
@@ -317,7 +320,11 @@ class ReferenceResolutionTests(unittest.TestCase):
                 item["formal_compositions"] = [copy.deepcopy(template["formal_compositions"][0]) for _ in range(properties["formal_compositions"]["minItems"])]
                 original_prose[slot] = item["prose_mdx"]
             elif name == "semanticCorrectionCategory":
-                return api_response("obligation_updates", text=True)
+                return api_response({"category": "obligation_updates"})
+            elif name == "epistemicCorrection":
+                value = {"decisions": [{"scene_slot_id": "scene_slot_0003", "dependency_index": 0,
+                    "action": "repair_declaration", "replacement": [], "reason": "The character is absent from this scene.",
+                    "evidence": [{"source": "scene_slot_0003/prose_mdx", "quote": original_prose["scene_slot_0003"]}]}]}
             elif name == "semanticCategoryPage":
                 if "Continue ONLY obligation_updates" in prompt:
                     source = schema["$defs"]["semanticSource"]["properties"]["technical_slot_id"]["enum"][0]
@@ -337,6 +344,8 @@ class ReferenceResolutionTests(unittest.TestCase):
                     value["motif_events"] = [{"source": {"technical_slot_id": source}, "motif_id": "motif_pencil",
                         "action": "establish", "current_function": "Synthetic notation fixture.", "pressure": "Synthetic pressure.",
                         "overuse_risk": "low", "relevance": {}}]
+                    value["knowledge_changes"] = [{"source": {"technical_slot_id": source}, "subject_id": "claimant_05",
+                        "proposition_id": "fact_01", "relation": "explicitly_does_not_know", "action": "establish", "relevance": {}}]
                 if source.startswith(("scene_slot_", "ending_slot_")):
                     value["canonical_facts"][0].update(subject="receipt", predicate="pencil notation", value="Synthetic notation.")
                     value["canonical_facts"][0]["relevance"]["motif_ids"] = ["motif_pencil"]
@@ -376,9 +385,10 @@ class ReferenceResolutionTests(unittest.TestCase):
         self.assertEqual(normalization_counts["scene_slot_0002"], 1)
         self.assertEqual(normalization_counts["scene_slot_0006"], 1)
         failures = [entry for entry in RUNNER.ledger_entries(self.run) if entry["commit_status"] == "FAILED_BEFORE_COMMIT"]
-        self.assertEqual(len(failures), 4)
+        self.assertEqual(len(failures), 5)
         self.assertEqual(calls.count("semanticCategoryPage"), 3)
         self.assertEqual(calls.count("semanticCorrectionCategory"), 1)
+        self.assertEqual(calls.count("epistemicCorrection"), 1)
         self.assertEqual({item["failure_class"] for item in failures}, {"provider_truncation", "malformed_response"})
         core_commit = next(path for path in RUNNER.committed_directories(self.run) if path.name.endswith("-architecture_core"))
         core_api = RUNNER.read_json(core_commit / "api-response.json")
@@ -395,6 +405,14 @@ class ReferenceResolutionTests(unittest.TestCase):
                 self.assertEqual(item["prose_mdx"], original_prose[item["technical_slot_id"]])
         self.assertTrue(any((path / "named-reference-repair.json").exists() for path in RUNNER.committed_directories(self.run)))
         self.assertTrue(any((path / "semantic-recovery.json").exists() for path in RUNNER.committed_directories(self.run)))
+        corrected_commit = next(path for path in RUNNER.committed_directories(self.run) if (path / "epistemic-repair.json").exists())
+        record = RUNNER.read_json(corrected_commit / "record.json")
+        source = RUNNER.read_json(corrected_commit / "artistic-payload.json")
+        self.assertTrue(source["scenes"][0]["epistemic_dependencies"])
+        self.assertEqual(record["scenes"][0]["epistemic_dependencies"], [])
+        self.assertEqual(record["scenes"][0]["prose_mdx"], source["scenes"][0]["prose_mdx"])
+        meta = RUNNER.read_json(corrected_commit / "commit-meta.json")
+        self.assertEqual(meta["supplemental_hashes"]["epistemic-repair.json"], RUNNER.sha256_file(corrected_commit / "epistemic-repair.json"))
         self.assertEqual(finalization["token_accounting"]["input_tokens"], 11 * len(calls))
         self.assertEqual(finalization["token_accounting"]["output_tokens"], 7 * len(calls))
         self.assertEqual(finalization["human_intervention_count"], 0)

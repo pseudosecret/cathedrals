@@ -125,6 +125,15 @@ injects the invalid status and must reach `READY_TO_PLAY` without regenerating p
 
 ## 3. Mechanical and Continuity Validation
 
+Exercise structured category routing with replies containing a knowledge object and
+a full delta: both must be rejected before accepting a valid category object.
+Dependency recovery tests must cover unsupported declarations, valid replacements,
+exact source excerpts, existing IDs, preserved unaffected declarations and literary
+bytes, genuine acquisition and retirement of prior negative knowledge, unresolved
+contradictions, source-hash mismatch, committed-content rejection, interrupted
+recovery, and cached decisions. The full rehearsal must publish a corrected
+dependency with its original payload, audit checkpoint, and supplemental hash.
+
 Run every mechanical check in `engine/canon/acceptance-tests.md`, including protocol,
 IDs, cross-references, scope/packet bounds, graph reachability, choices, splitting,
 reconvergence, technical-slot destination resolution, redirects, hesitation, state

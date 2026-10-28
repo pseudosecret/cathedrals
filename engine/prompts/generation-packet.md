@@ -27,6 +27,13 @@ belief, suspicion, and claim state. Declare tracked reliance in
 advance or satisfy them only when dramatically earned. Future planning may adapt
 after this packet commits, but this packet may not edit that plan or earlier canon.
 
+Dependency declarations identify positive reliance by a character actually using a
+proposition in this scene. They are not inventories of related facts, absent
+characters, or things someone explicitly does not know. Use committed proposition
+IDs, not knowledge-event IDs. If the scene shows new learning, make that acquisition
+concrete in the text. Source-grounded analysis may audit uncommitted dependency
+declarations while preserving every literary byte.
+
 Do not emit constraint metadata. After this artistic payload passes schema, length,
 and reference validation, a separate temperature-zero normalization pass derives
 minimal facts, knowledge,

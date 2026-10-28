@@ -108,6 +108,15 @@ fallback. Per-category feedback and pending candidates survive interruption. Int
 are unchanged. Retention and continuation validation use the same specialized
 response schema as the initial request.
 
+Epistemic dependency failures expose structured conflicts through an internal
+EpistemicDependencyError. Category classification returns a strict category object.
+Dependency decisions use repair_declaration, repair_knowledge, or unresolved, with
+reasons and source excerpts. An independent .epistemic-repair.json checkpoint binds
+accepted decisions and per-scene overrides to the original artistic hash. It is
+copied and hashed as commit provenance. Canonical packet schemas are unchanged;
+only audited uncommitted dependency metadata can differ from the preserved
+artistic payload.
+
 Architecture payload aliases are resolved within each reference field's allowed entity
 kinds before canonical IDs are assigned. An attractor and a topology node may share a
 payload alias without changing an obligation's ending target into a node reference.

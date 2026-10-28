@@ -191,7 +191,9 @@ and metadata and continues pending work. Canonical errors after paging correct o
 the selected rejected category, preserving other categories and fact positions.
 Complete responses with schema, reference, or canonical errors use this same recovery
 path. Known error paths route directly to their categories; an opaque error uses the
-bounded category selector. Correction state survives pause/resume, and successful
+bounded category selector. It uses a dedicated classification prompt and a strict
+JSON object containing only the selected category, with up to 4,096 output tokens.
+Correction state survives pause/resume, and successful
 reference lookups remain cached. A failure in one category does not request a new
 whole semantic delta. Full
 schema, reference, and packet validation precedes final metadata staging. Commits
@@ -204,6 +206,22 @@ status update is needed merely to add evidence. Packet normalization allows only
 contract. The latter is a deliberate ambiguous resolution, not an open question.
 An empty update array is valid. The engine never coerces `active` into a resolution;
 foreclosure safeguards and the initial active state of new obligations remain intact.
+
+An unavailable-knowledge conflict reports its exact scene, character, proposition,
+and declaration index. It enters dependency recovery directly. Corrections may
+change only flagged technical declarations on uncommitted scenes, with exact source
+excerpts and valid existing IDs. The original scene, artifacts, and literary bytes
+remain preserved. A genuine acquisition instead repairs knowledge metadata for the
+exact subject/proposition and retires the prior negative relation. A genuine
+contradiction pauses; the harness cannot invent learning or change prior canon.
+
+Audited decisions and effective dependency overrides are saved in
+.staging/<step>.epistemic-repair.json, bound to the original artistic hash. The
+packet builder uses them consistently for validation and final construction.
+Resume retains accepted decisions and metadata. The commit includes
+epistemic-repair.json and its supplemental hash alongside the original artistic
+payload. These changes apply to new engine snapshots; existing frozen runs remain
+unchanged.
 
 Metadata must pass complete packet validation before staging. A paused lookup retains
 the original artistic and pending metadata responses, so resume continues resolution

@@ -576,6 +576,7 @@ run_processing:
     - author_forward_literary_packets
     - author_prerequisite_satisfied_ending_packets
   analysis_steps_may:
+    - audit_uncommitted_epistemic_dependency_declarations_against_immutable_source
     - extract_source_grounded_facts
     - classify_constraint_relationships
     - classify_motifs
@@ -602,6 +603,14 @@ validation:
     invalid_uncommitted_schema_attempts_per_resume: 3
     correction_exhaustion_status: PAUSED_GENERATION
     preserve_schema_valid_artistic_payload_during_semantic_correction: true
+    uncommitted_epistemic_declaration_repair:
+      allowed: true
+      requires_exact_source_evidence: true
+      only_flagged_declarations: true
+      original_artistic_payload_retained: true
+      literary_bytes_immutable: true
+      committed_declarations_immutable: true
+      audited_source_hash_bound_checkpoint: true
     failed_generation_may_be_replaced_by_fresh_generation: true
   acceptance_source: engine/canon/acceptance-tests.md
 
