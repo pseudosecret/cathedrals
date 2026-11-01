@@ -57,6 +57,13 @@ including a literary-word overrun, receives bounded correction attempts before p
 preservation and then pauses the run if still invalid.
 Account for the supplied constraints. Do not merely remember or summarize them.
 
+Retrieved material is author working memory. PLANNED INTENTION describes future
+work; it does not establish that an event has occurred. CONSTRAINT HISTORY may be
+superseded or retracted; use the supplied current state for character knowledge and
+active obligations. Search matches do not grant knowledge to characters or readers.
+Each `$context_ref` expands to the exact source metadata object in SHARED SOURCE
+METADATA. Complete literary units retain their original wording and whitespace.
+
 FROZEN AND RETRIEVED CONTEXT BEGINS
 
 {{PACKET_CONTEXT}}

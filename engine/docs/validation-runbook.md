@@ -93,6 +93,44 @@ Offline verification: run `python3 -B -m unittest discover -s engine/tests`, the
 suite includes a synthetic 20-scene run through `READY_TO_PLAY`, exercising real
 validation, commits, projection, baseline build, accounting, and automatic repairs
 with only provider responses replaced. It creates no fiction in the installation.
+
+The SQLite suite exercises real archived commits, incremental/full-replay equality,
+fact supersession, knowledge retraction, obligation resolution, motif history, and
+distant evidence retrieval. It checks automatic initialization, five-digit ledger
+ordering, missing/corrupt/incompatible/foreign/stale indexes, duplicate commits,
+archive tampering and truncation, exact accounting, interruption before ledger
+append, transaction rollback, known partial append recovery, and interrupted
+prospective planning. Ordinary commits must avoid old archive scans and full-ledger
+reads. A valid index is reused after audit; index repair cannot change archived work.
+
+Run `python3 -B engine/tests/benchmark_storage.py --timeout 0` for the offline
+150/1,000/5,000-scene storage rehearsal. The default 60-second per-size cutoff is
+intended for bounded baselines. `--launcher /path/to/saved/launcher` compares a saved
+revision using the current checkout's engine inputs. The benchmark writes temporary
+run directories, calls the real commit/replay functions, compares state before and
+after audit/rebuild, and reports commit/audit/rebuild times, database size, and Python
+archive file opens/bytes during commits. SQLite's internal I/O is excluded from that
+archive metric. Its planning measurement is an empty-plan history scan; it does not
+establish full 5,000-scene scheduling or literary performance. See
+[the recorded storage rehearsal](storage-benchmark.md).
+
+The FTS5 suite uses real temporary archived packets to check Unicode/literal query
+handling, title weighting, unextracted distant prose, complete source bytes,
+structured matches outside the recency window, and selection without full-history
+deserialization. It checks lossless metadata compaction and section roles, whole
+required predecessors, uncapped required proof, optional budget omissions, and pauses
+before provider calls when required material cannot fit. Retraction labels, source
+tampering, damaged postings, schema-version rebuilds, transactional rollback, and
+saved-writing/receipt replay are covered. The 20-scene integration run also verifies
+root/plan/literary/composition/constraint catalog coverage, repeated claimant IDs,
+and hash-checked accepted receipts.
+
+The storage benchmark now also reports old metadata-scan versus indexed selection
+timings and decoded-event counts, prose-only evidence rank, context size/time, and
+fixed-coverage formatting savings. Search after a deleted-index rebuild must retain
+its original ordering. These are synthetic retrieval/storage checks, with no provider
+or actual model-token measurements. See [the FTS5 rehearsal](fts5-retrieval.md).
+
 The provider-streaming suite uses synthetic SSE data and simulated time to check split
 UTF-8, reasoning fields, usage-only events, long active streams, stalled requests,
 malformed events, interrupted attempts, and replay without network access.

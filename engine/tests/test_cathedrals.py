@@ -581,6 +581,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             for name in ("state", "raw", "committed", "constraints", ".staging"):
                 (run / name).mkdir(parents=True)
             RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+            RUNNER.ensure_index(run)
             RUNNER.write_json(run / "generation-brief.json", {
                 "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid",
             })
@@ -611,6 +612,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             for name in ("state", "raw", "committed", "constraints", ".staging"):
                 (run / name).mkdir(parents=True)
             RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+            RUNNER.ensure_index(run)
             RUNNER.write_json(run / "generation-brief.json", {
                 "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid",
             })
@@ -652,6 +654,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             for name in ("state", "raw"):
                 (run / name).mkdir(parents=True)
             RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+            RUNNER.ensure_index(run)
             RUNNER.write_json(run / "generation-brief.json", {
                 "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid",
             })
@@ -1258,6 +1261,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             for name in ("state", "raw", ".staging", "committed"):
                 (run / name).mkdir(parents=True)
             RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+            RUNNER.ensure_index(run)
             RUNNER.write_json(run / "generation-brief.json", {
                 "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid"
             })
@@ -1362,6 +1366,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 for name in ("state", "raw", ".staging", "committed"):
                     (run / name).mkdir(parents=True)
                 RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+                RUNNER.ensure_index(run)
                 RUNNER.write_json(run / "generation-brief.json", {
                     "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid"
                 })
@@ -1726,6 +1731,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 (run / name).mkdir(parents=True)
             RUNNER.write_json(run / "run-manifest.json", RUNNER.derive_scope(15))
             RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "b" * 64, "c" * 64, "offline"))
+            RUNNER.ensure_index(run)
             with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: records[kind]), mock.patch.object(
                 RUNNER, "_source_index", return_value=committed_sources
             ):
@@ -1756,7 +1762,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                     [source["source_locator"] for source in original["obligation_graph"][0]["sources"]],
                 )
                 raw = RUNNER.canonical_json(payload).decode()
-                with mock.patch.object(RUNNER, "reconcile_run"):
+                with mock.patch.object(RUNNER, "reconcile_run"), mock.patch.object(RUNNER, "index_commit"):
                     directory = RUNNER.commit_record(
                         run, record, raw, {}, planned_step_id="architecture_core", attempt=1,
                         step_phase="architecture", prompt="prompt", context="context",
@@ -1971,6 +1977,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                     "generation_test", "a" * 64, "b" * 64, "model"
                 ),
             )
+            RUNNER.ensure_index(run)
             RUNNER.write_json(
                 run / "generation-brief.json",
                 {"lm_studio_base_url": "http://127.0.0.1:1234", "model": "model"},
@@ -2020,6 +2027,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                     "generation_test", "a" * 64, "b" * 64, "model"
                 ),
             )
+            RUNNER.ensure_index(run)
             failed = {
                 "run_status": "FAILED_GENERATION",
                 "completed_at": "2026-01-01T00:00:00Z",
@@ -2241,6 +2249,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                     "generation_test", "a" * 64, "b" * 64, "model"
                 ),
             )
+            RUNNER.ensure_index(run)
             RUNNER.append_deterministic_step(run, "preflight", "preflight", "c" * 64)
             first = (run / "ledger.jsonl").read_bytes()
             RUNNER.append_deterministic_step(run, "preflight", "preflight", "d" * 64)
@@ -2264,10 +2273,8 @@ class CathedralsRunnerTests(unittest.TestCase):
             run = Path(temporary)
             (run / "state").mkdir()
             (run / "constraints").mkdir()
-            RUNNER.write_json(
-                run / "state/source-index.json",
-                {"scene_old": {"commit_id": "commit_source", "hash": "a" * 64}},
-            )
+            self.addCleanup(mock.patch.stopall)
+            mock.patch.object(RUNNER, "_source_index", return_value={"scene_old": {"commit_id": "commit_source", "hash": "a" * 64}}).start()
             record = {
                 "record_type": "fixture",
                 "generation_id": "generation_test",
@@ -2433,14 +2440,12 @@ class CathedralsRunnerTests(unittest.TestCase):
                     },
                 },
             )
-            RUNNER.write_json(
-                run / "state/canonical-facts.json", {"fact_reader_state": reader_fact}
+            RUNNER.write_state_map(run, "canonical-facts.json", {"fact_reader_state": reader_fact}
             )
-            RUNNER.write_json(
-                run / "state/obligations.json", {"obligation_one": satisfied}
+            RUNNER.write_state_map(run, "obligations.json", {"obligation_one": satisfied}
             )
             for name in ("knowledge-state.json", "motifs.json"):
-                RUNNER.write_json(run / f"state/{name}", {})
+                RUNNER.write_state_map(run, name, {})
             with mock.patch.object(
                 RUNNER, "committed_record", return_value={"record_type": "genesis"}
             ), mock.patch.object(
@@ -2488,7 +2493,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             },
         )
         _, knowledge, _, _, _ = RUNNER.project_constraint_state([selected, unrelated])
-        plan = packet_plan(advance_obligation_ids=[], may_satisfy_obligation_ids=[])
+        plan = packet_plan(attractor_ids=[], advance_obligation_ids=[], may_satisfy_obligation_ids=[])
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
             (run / "state").mkdir()
@@ -2511,7 +2516,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 ("obligations.json", {}),
                 ("motifs.json", {}),
             ):
-                RUNNER.write_json(run / f"state/{name}", value)
+                RUNNER.write_state_map(run, name, value)
             with mock.patch.object(
                 RUNNER, "committed_record", return_value={"record_type": "genesis"}
             ), mock.patch.object(
@@ -2552,13 +2557,13 @@ class CathedralsRunnerTests(unittest.TestCase):
             one = constraint_event(1, "obligation", first, "future_obligation")
             two = constraint_event(2, "obligation", second, "future_obligation")
             _, _, obligations, _, _ = RUNNER.project_constraint_state([one, two])
-            RUNNER.write_json(run / "state/obligations.json", obligations)
-            RUNNER.write_json(run / "state/foreclosure-candidates.json", {})
+            RUNNER.write_state_map(run, "obligations.json", obligations)
+            RUNNER.write_state_map(run, "foreclosure-candidates.json", {})
             before = RUNNER.build_prospective_plan(
                 run, architecture, "commit_architecture"
             )
             obligations["obligation_one"]["data"]["status"] = "satisfied"
-            RUNNER.write_json(run / "state/obligations.json", obligations)
+            RUNNER.write_state_map(run, "obligations.json", obligations)
             after = RUNNER.build_prospective_plan(run, architecture, "commit_packet")
             self.assertEqual(RUNNER.load_state(run)["canonical_state_hash"], "b" * 64)
         self.assertNotEqual(
@@ -2715,7 +2720,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             commit = run / "committed/0001-packet"
             commit.mkdir(parents=True)
             RUNNER.write_json(commit / "record.json", packet)
-            retrieved = RUNNER.retrieve_original_sources(run, [event])
+            retrieved = RUNNER.retrieve_original_sources(run, [event], records=[packet])
         self.assertEqual(
             retrieved[0]["immutable_source"]["prose_mdx"], "original passage"
         )
@@ -2811,7 +2816,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             commit = run / "committed/0001-packet"
             commit.mkdir(parents=True)
             RUNNER.write_json(commit / "record.json", packet)
-            retrieved = RUNNER.retrieve_original_sources(run, [event])
+            retrieved = RUNNER.retrieve_original_sources(run, [event], records=[packet])
         self.assertEqual(
             retrieved[0]["immutable_source"]["prose_mdx"], "source wording"
         )
@@ -2843,7 +2848,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         architecture = architecture_fixture()
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary) / "generation_test"
-            for name in ("state", "committed/0001-architecture", "planning"):
+            for name in ("state", "planning"):
                 (run / name).mkdir(parents=True)
             RUNNER.save_state(
                 run,
@@ -2851,14 +2856,15 @@ class CathedralsRunnerTests(unittest.TestCase):
                     "generation_test", "a" * 64, "b" * 64, "model"
                 ),
             )
-            RUNNER.write_json(
-                run / "committed/0001-architecture/record.json", architecture
-            )
+            RUNNER.ensure_index(run)
             debt = constraint_event(1, "obligation", obligation(), "future_obligation")
             _, _, obligations, _, _ = RUNNER.project_constraint_state([debt])
-            RUNNER.write_json(run / "state/obligations.json", obligations)
-            RUNNER.write_json(run / "state/foreclosure-candidates.json", {})
-            RUNNER.recompute_prospective_plan(run, "commit_architecture")
+            RUNNER.write_state_map(run, "obligations.json", obligations)
+            RUNNER.write_state_map(run, "foreclosure-candidates.json", {})
+            with mock.patch.object(RUNNER, "committed_record", return_value=architecture):
+                plan = RUNNER.recompute_prospective_plan(run, "commit_architecture")
+            self.assertEqual(plan["plan_id"], "prospective_plan_0001")
+            self.assertTrue(RUNNER._read_state_map(run, "prospective-plan.json"))
             state = RUNNER.load_state(run)
         self.assertEqual(
             [
@@ -3096,6 +3102,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 for name in ("state", "raw", "committed", ".staging"):
                     (run / name).mkdir(parents=True)
                 RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+                RUNNER.ensure_index(run)
                 RUNNER.write_json(run / "generation-brief.json", {
                     "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid",
                 })
@@ -3290,6 +3297,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             RUNNER.save_state(
                 run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline")
             )
+            RUNNER.ensure_index(run)
             RUNNER.write_json(
                 run / "generation-brief.json",
                 {
@@ -3335,6 +3343,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             for name in ("state", "raw", "committed", "constraints", ".staging"):
                 (run / name).mkdir(parents=True)
             RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+            RUNNER.ensure_index(run)
             RUNNER.write_json(run / "generation-brief.json", {"generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid"})
             RUNNER.write_json(run / "run-manifest.json", {"budgets": {"max_prepared_context_tokens": 49152}})
             calls = []
@@ -3362,6 +3371,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             for name in ("state", "raw", "committed", "constraints", ".staging"):
                 (run / name).mkdir(parents=True)
             RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
+            RUNNER.ensure_index(run)
             RUNNER.write_json(run / "generation-brief.json", {"generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid"})
             RUNNER.write_json(run / "run-manifest.json", {"budgets": {"max_prepared_context_tokens": 49152}})
             response = {"choices": [{"finish_reason": "stop", "message": {"content": '{"name":"Anchor","incident_role":"Witness"}'}}]}

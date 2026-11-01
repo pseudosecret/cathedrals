@@ -375,6 +375,22 @@ class ReferenceResolutionTests(unittest.TestCase):
         with mock.patch.object(RUNNER, "ROOT", self.root):
             build_path, counts, _brief = RUNNER.execute_run(self.run, output_fn=lambda _: None, transport=transport)
         self.assertEqual(counts["scenes"], 20)
+        with RUNNER.index_connection(self.run) as db:
+            kinds = {row[0] for row in db.execute("SELECT DISTINCT kind FROM search_documents")}
+            profiles = db.execute("SELECT commit_id,pointer FROM search_documents WHERE source_id='claimant_01' AND kind='root'").fetchall()
+        self.assertTrue({"root", "plan", "literary", "composition", "constraint"}.issubset(kinds))
+        self.assertGreaterEqual(len(profiles), 2)
+        self.assertEqual(len(profiles), len(set(profiles)))
+        plan_hits = RUNNER.search_history(self.run, RUNNER.search_query({"relevance": {"keywords": ["documented"]}}))
+        self.assertTrue(any(hit["kind"] == "plan" for hit in plan_hits))
+        for directory in RUNNER.committed_directories(self.run):
+            record = RUNNER.read_json(directory / "record.json")
+            if record["record_type"] == "creative_packet":
+                meta = RUNNER.read_json(directory / "commit-meta.json")
+                receipt = RUNNER.read_json(directory / "retrieval-receipt.json")
+                self.assertEqual(meta["supplemental_hashes"]["retrieval-receipt.json"], RUNNER.sha256_file(directory / "retrieval-receipt.json"))
+                self.assertEqual(receipt["context_hash"], meta["ledger_entry"]["context_hash"])
+                self.assertEqual(receipt["attempt"], meta["ledger_entry"]["attempt"])
         self.assertEqual(counts["endings"], 5)
         self.assertEqual(len(authored_slots), len(set(authored_slots)))
         self.assertEqual(calls.count("reference"), 52)

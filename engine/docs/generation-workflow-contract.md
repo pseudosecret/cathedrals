@@ -299,6 +299,27 @@ The immutable creative records are source evidence. `constraint-events.jsonl` is
 append-only, source-hashed index of minimal past facts, tracked epistemic state, typed
 future debt, motif pressure, and foreclosure evidence. Source truth always wins.
 
+Each new generation automatically initializes `state/index.sqlite3`. SQLite supplies
+the operational projections, generated-ID and committed-record catalogs, ledger
+lookups and accounting, and latest prospective plan. JSON remains the model and
+immutable archive format; the run-status checkpoint and unfinished recovery drafts
+remain files. Core state reads do not consult the former JSON state-map files.
+
+After preserving a creative commit, append its ledger and constraint bytes, then
+apply its records, IDs, events, affected projections, and indexing checkpoint in one
+SQLite transaction. Noncreative ledger entries use the same transactional indexing
+path. Prospective-plan history precedes its ledger/index update. The checkpoint
+records ledger sequence/hash, canonical-state hash, constraint sequence, and usage
+totals. No index checkpoint may advance beyond its durable archived input.
+
+Ordinary commits apply only their new events. Startup/resume and complete-work
+validation/publication audit the archives and compare the projection with full
+replay. Missing, incompatible, foreign, corrupt, or stale databases are replaced
+from verified history. Recovery can finish exact known partial appends, complete an
+orphaned creative commit's ledger entry, and restore a missing prospective plan;
+it never regenerates committed fiction. Unverifiable archive changes fail integrity
+checks. Archive replay orders commit directories by numeric ledger sequence.
+
 Architecture plans backward with the same recursive grammar used forward:
 
 ```text
@@ -308,16 +329,58 @@ desired residue ← consequence ← choice/deferment ← pressure ← interpreta
 This produces prerequisite obligations, never reverse-authored prose. Literary
 authorship still commits forward only.
 
-For each packet, deterministic weighted retrieval scores hard obligation/direct
-dependency matches at 12, branch at 10, knowledge at 9, claimant/causal debt/attractor
-prerequisite at 8, object/location at 6, motif at 5, lexical overlap variably, and
-recency at no more than 2. It then retrieves original immutable source records and
-locators. Thus Scene 130 may retrieve Scene 12 when Scene 12 constrains it.
+SQLite schema version 2 adds an external-content FTS5 index over a deterministic
+document catalog. Scenes, artifacts, endings, choices, compositions, constraint
+descriptions, Genesis, and Architecture units are keyed by owning commit and JSON
+Pointer. Repeated entity IDs in root-canon records do not replace earlier units.
+Catalog, postings, relevance tags, and the ordinary state checkpoint advance in the
+same transaction. Startup/recovery compares the catalog with archived records and
+checks FTS postings against catalog content; a mismatch rebuilds the derived database.
 
-Whole records are packed in this priority: engine law, brief, packet plan, hard past
-constraints, hard future obligations, direct source evidence, relevant knowledge,
-attractor prerequisites, original evidence, motif/branch residue, local recent prose,
-soft pressure. A lower-priority section is omitted before a hard record is sliced.
+Before each scene/ending request, automatic search takes up to 32 unique literal
+terms or phrases from packet keywords, resolved entity names, and guidance words.
+Terms are quoted and passed as a bound SQL parameter. Unicode61 supplies
+case-insensitive word matching without stemming, prefix expansion, or synonyms.
+Search spans the whole work, including planned intentions; it never needs another
+model call. BM25 weights titles twice as much as bodies, with relevance-tag locality
+breaking ties before stable sequence/commit/pointer ordering.
+
+Constraint selection combines at most 192 FTS hits, 192 indexed structural matches,
+and 96 recent events, then selects at most 96 optional constraints. Existing weights
+remain: hard obligation/direct dependency 12, arc/branch 10, knowledge 9,
+claimant/causal debt/attractor prerequisite 8, object/location 6, motif 5, and recency
+no more than 2. FTS rank replaces metadata word-overlap scoring with a bounded
+`5 / (1 + rank)` bonus. Ordinary selection does not deserialize the whole event
+history. Thus Scene 130 may retrieve Scene 12 even when its relevant detail was
+never extracted into a constraint.
+
+Required inputs include engine law, brief, full generated root canon, the local
+packet plan, whole predecessor packets, assigned obligations and their recursive
+prerequisites, cited proof, and the selected current facts/knowledge tied to that
+evidence. These bypass optional retrieval limits. Ending-specific prerequisite,
+reader-state, and residue roles remain explicit. If required context cannot fit,
+the engine pauses before calling the provider and records component sizes.
+
+Optional discovery admits at most 24 whole source units within the existing frozen
+retrieval allowance (12,288 estimated tokens for new runs). Each unit is read from
+its checksum-verified archive, with commit/hash/pointer provenance. Required source
+coverage is deduplicated; optional constraints, knowledge, historical state, motifs,
+recent prose, and soft pressure fill remaining prepared-context space. No unit is
+clipped. JSON uses compact separators and repeated source-reference metadata can
+use exact `$context_ref` objects; authored strings and literary units stay complete.
+The local plan appears once. Context estimates retain the engine's characters/4 rule.
+
+Plans, committed literary material, composition metadata, root canon, and historical
+constraints carry distinct authority labels. Superseded facts and retracted knowledge
+are history, not current state. Search does not establish branch applicability or
+convert an intention into an event. Required dependencies remain direct lookups,
+independent of FTS rank.
+
+Each writing attempt preserves a compact retrieval receipt containing query terms,
+candidate counts, selected constraint ranks/scores, source IDs/hashes/pointers,
+omissions, state/context/prompt hashes, and size estimates. Receipts contain no prose.
+Saved writing reuses its original attempt receipt; the accepted receipt is hashed
+supplemental commit provenance. See [implementation and rehearsal](fts5-retrieval.md).
 
 Each artistic packet is followed by a temperature-zero, source-grounded metadata
 normalization call. Focused reference calls run only when invalid references remain.

@@ -26,12 +26,6 @@ generated-work/<generation-id>/
       constraint-events.jsonl
     planning/
       prospective-plans.jsonl
-    state/
-      canonical-facts.json
-      knowledge-state.json
-      obligations.json
-      motifs.json
-      prospective-plan.json
     validation/
       mechanical.json
       artistic.json
@@ -45,6 +39,30 @@ generated-work/<generation-id>/
 ```
 
 No generated work becomes canonical content of `main`.
+
+Operational state lives only under `.cathedrals/runs/<generation-id>/state/`:
+`index.sqlite3` contains rebuildable core projections and indexes, while
+`run-state.json` retains the small run-status checkpoint. Incomplete recovery drafts
+remain in their existing staging files. The SQLite schema has its own local version;
+it does not change the creative record protocol. Archived commits, ledger,
+constraints, and planning history suffice to rebuild core state. SQLite and its
+journal are not part of the published reader or provenance tree.
+
+SQLite schema version 2 includes `search_documents`, relevance tags, and the
+external-content `search_fts` FTS5 table. The catalog identity is owning commit plus
+JSON Pointer; generated entity IDs are searchable provenance rather than unique
+document keys. Original committed JSON remains authoritative and rebuilds the index.
+No creative record schema or frozen run budget changes for FTS5.
+
+Writing retrieval uses internal `.staging/<step>.retrieval.json` and immutable
+`raw/<step>-attempt<N>.retrieval.json` receipts. They retain query terms, index/state
+checkpoints, constraint ranks/scores, selected source IDs/commit hashes/pointers,
+omissions, prompt/context hashes, and byte/token estimates. The accepted commit
+archives `retrieval-receipt.json` through the existing supplemental-file hash map;
+replay and publication preserve it. A capacity-failure staging receipt can exist
+without a writing attempt. Prompt-only `$context_ref` objects share exact repeated
+source-reference metadata; they do not change the underlying record protocol or
+literary source strings.
 
 ## Record Protocol
 

@@ -33,6 +33,12 @@ executable MDX. Return complete safe Markdown source.
 Valid weakness commits. Invalid output, including a literary-word overrun, receives
 bounded correction attempts before prose preservation and then pauses if still invalid.
 
+Retrieved PLANNED INTENTION guides future writing without establishing fictional
+events. CONSTRAINT HISTORY may be superseded or retracted; respect current state.
+Search matches do not establish character or reader knowledge. Each `$context_ref`
+expands to the exact source metadata object in SHARED SOURCE METADATA. Literary
+source units retain their original wording and whitespace.
+
 FROZEN AND RETRIEVED ENDING CONTEXT BEGINS
 
 {{ENDING_PACKET_CONTEXT}}

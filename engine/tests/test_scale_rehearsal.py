@@ -328,7 +328,12 @@ class ScaleRehearsalTests(unittest.TestCase):
             run = Path(temporary) / "synthetic_scale"
             for name in ("constraints", "state", "planning"):
                 (run / name).mkdir(parents=True)
-            (run / "constraints/constraint-events.jsonl").write_bytes(b"".join(RUNNER.canonical_json(item) for item in events))
+            RUNNER.save_state(run, RUNNER.initial_run_state("synthetic_scale", "a" * 64, "b" * 64, "offline"))
+            RUNNER.ensure_index(run)
+            with RUNNER.index_connection(run) as db:
+                db.executemany("INSERT INTO events VALUES (?,?,?,?)", [(item["constraint_event_sequence"], item["constraint_id"], item["constraint_kind"], RUNNER.canonical_json(item).decode()) for item in events])
+                db.executemany("INSERT INTO event_relevance VALUES (?,?,?)", [(item["constraint_event_sequence"], key, value) for item in events for key, values in RUNNER.event_relevance_tags(item).items() for value in set(values)])
+                db.execute("UPDATE checkpoint SET event_sequence=? WHERE id=1", (len(events),))
             selected = RUNNER.select_relevant_constraints(run, architecture, plan, records=records)
             selected_ids = {item["constraint_id"] for item in selected}
             self.assertIn("fact_scene_0012", selected_ids)
@@ -341,8 +346,8 @@ class ScaleRehearsalTests(unittest.TestCase):
             self.assertEqual(len(motifs), 12)
 
             RUNNER.save_state(run, RUNNER.initial_run_state("synthetic_scale", "a" * 64, "b" * 64, "offline"))
-            RUNNER.write_json(run / "state/obligations.json", obligations)
-            RUNNER.write_json(run / "state/foreclosure-candidates.json", {})
+            RUNNER.write_state_map(run, "obligations.json", obligations)
+            RUNNER.write_state_map(run, "foreclosure-candidates.json", {})
             committed = []
             original_sources = [RUNNER.canonical_json(record) for record in records]
             started = time.perf_counter()
@@ -352,12 +357,12 @@ class ScaleRehearsalTests(unittest.TestCase):
                 for number, record in enumerate(records, 1):
                     committed.append(record)
                     RUNNER.recompute_prospective_plan(run, f"commit_scale_{number:03d}")
-                blocked = RUNNER.read_json(run / "state/prospective-plan.json")
+                blocked = RUNNER._read_state_map(run, "prospective-plan.json")
                 self.assertFalse(any(item["packet_slot_id"].startswith("packet_slot_ending") for item in blocked["packet_order"]))
                 obligations["obligation_001"] = copy.deepcopy(obligations["obligation_001"])
                 obligations["obligation_001"]["data"]["status"] = "satisfied"
                 obligations["obligation_001"]["resolution_event"] = {"sources": [source(150)]}
-                RUNNER.write_json(run / "state/obligations.json", obligations)
+                RUNNER.write_state_map(run, "obligations.json", obligations)
                 eligible = RUNNER.recompute_prospective_plan(run, "commit_satisfaction")
             elapsed = time.perf_counter() - started
             self.assertIn("packet_slot_ending_01", {item["packet_slot_id"] for item in eligible["packet_order"]})
@@ -388,7 +393,11 @@ class ScaleRehearsalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
             (run / "constraints").mkdir()
-            (run / "constraints/constraint-events.jsonl").write_bytes(b"".join(RUNNER.canonical_json(item) for item in events))
+            RUNNER.ensure_index(run)
+            with RUNNER.index_connection(run) as db:
+                db.executemany("INSERT INTO events VALUES (?,?,?,?)", [(item["constraint_event_sequence"], item["constraint_id"], item["constraint_kind"], RUNNER.canonical_json(item).decode()) for item in events])
+                db.executemany("INSERT INTO event_relevance VALUES (?,?,?)", [(item["constraint_event_sequence"], key, value) for item in events for key, values in RUNNER.event_relevance_tags(item).items() for value in set(values)])
+                db.execute("UPDATE checkpoint SET event_sequence=? WHERE id=1", (len(events),))
             selected = RUNNER.select_relevant_constraints(run, architecture, plan, records=records)
             positive = [item for item in events if RUNNER.relevance_score(item, plan, architecture, set(), len(events)) > 0]
             retrieved = RUNNER.retrieve_original_sources(run, selected, records=records)
@@ -452,8 +461,8 @@ class ScaleRehearsalTests(unittest.TestCase):
             (run / "state").mkdir(parents=True)
             (run / "planning").mkdir()
             RUNNER.save_state(run, RUNNER.initial_run_state("synthetic_resume", "a" * 64, "b" * 64, "offline"))
-            RUNNER.write_json(run / "state/obligations.json", obligations)
-            RUNNER.write_json(run / "state/foreclosure-candidates.json", {})
+            RUNNER.write_state_map(run, "obligations.json", obligations)
+            RUNNER.write_state_map(run, "foreclosure-candidates.json", {})
             for checkpoint in checkpoints:
                 prefix = record_bytes[:checkpoint]
                 ledger = b"".join(RUNNER.canonical_json({"sequence": number + 1, "record_hash": RUNNER.sha256_bytes(value)}) for number, value in enumerate(prefix))

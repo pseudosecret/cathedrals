@@ -59,6 +59,59 @@ agent framework. Interrupted runs are detected under `.cathedrals/runs/`; resumi
 reuses the run-local engine snapshot, frozen model, prompt hashes, seeds, ledger, and
 committed records.
 
+## SQLite State
+
+New generations initialize `.cathedrals/runs/<generation-id>/state/index.sqlite3`
+automatically using Python's standard library. Resume reopens that generation's
+database. There is no database server, installation step, or maintenance command.
+Use one coordinator per generation. SQLite uses its rollback journal and durable
+transactions; keep the run directory on a local filesystem.
+
+The database maintains core facts, character knowledge, obligations, motifs,
+foreclosure candidates, ID/source provenance, committed-record and ledger indexes,
+usage totals, and the latest prospective plan. Archived JSON/JSONL and raw responses
+remain the recovery source. `state/run-state.json` and incomplete planning/semantic
+recovery drafts retain their existing file formats. Old frozen engine snapshots
+retain their original storage implementation.
+
+Startup/resume verifies archived bytes and compares SQLite with full replay. A
+missing, corrupt, incompatible, foreign, or stale index is rebuilt into a temporary
+database and replaced only after reconstruction succeeds. Repeated resume applies
+each archived step once. Database write errors pause the run with durable progress
+preserved. Archive integrity failures retain their existing failure behavior.
+Incomplete ledger bytes are completed only when exact immutable commit metadata
+justifies the suffix; unknown partial records are integrity failures.
+
+Core projections are queried from SQLite. The former `state/canonical-facts.json`,
+`knowledge-state.json`, `obligations.json`, `motifs.json`, `source-index.json`,
+`foreclosure-candidates.json`, and `prospective-plan.json` files are no longer
+operational inputs. Editing or seeding those files does not change live state.
+Evidence retrieval resolves IDs through SQLite and checks the referenced original
+record's hash before returning its passage. The database is omitted from static
+publication; the reader remains entirely static.
+
+Schema version 2 also maintains FTS5 full-text search automatically. Scene and ending
+requests search committed literary units, constraint descriptions, and generated
+Genesis/Architecture descriptions and plans. Search uses packet keywords, resolved
+entity names, and guidance; there is no search CLI or extra model request. Python's
+SQLite build must include FTS5. A missing FTS5 module pauses database initialization
+with the SQLite error rather than silently disabling retrieval.
+
+Required predecessor packets, assigned obligations, prerequisite chains, and their
+proof cannot be omitted for search limits. If their complete compact context is too
+large, the run pauses before a writing request, reporting required component sizes.
+Optional search uses the frozen retrieval/prepared-context budgets and returns whole
+units. Plans and historical constraints are labelled separately from committed events.
+
+Inspect `.staging/<step>.retrieval.json` for the current selection or a capacity
+failure. Actual attempts preserve `raw/<step>-attempt<N>.retrieval.json`; an accepted
+packet archives `retrieval-receipt.json` with the other hashed supplemental files.
+These contain selection metadata and hashes, not duplicate prose. Resume with saved
+writing preserves its original receipt. Missing/incompatible/corrupt search indexes
+follow the same verified-archive rebuild path as core state. Frozen snapshots retain
+their own implementation. Details and measured limits are in
+[FTS5 retrieval](fts5-retrieval.md).
+
 ## Provenance and Counters
 
 Every attempted step records generation ID, ledger sequence, planned step and attempt,

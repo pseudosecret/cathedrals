@@ -18,6 +18,7 @@ import os
 import platform
 import re
 import secrets
+import sqlite3
 import shutil
 import stat
 import subprocess
@@ -28,6 +29,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 
@@ -840,7 +842,542 @@ def save_state(run_dir: Path, state: dict) -> None:
     write_json(state_path(run_dir), state)
 
 
+INDEX_VERSION = 2
+STATE_MAPS = ("canonical-facts.json", "knowledge-state.json", "obligations.json", "motifs.json", "foreclosure-candidates.json")
+_REPLAYING = set()
+
+
+def index_path(run_dir: Path) -> Path:
+    return run_dir / "state/index.sqlite3"
+
+
+@contextmanager
+def index_connection(run_dir: Path):
+    connection = None
+    try:
+        index_path(run_dir).parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(index_path(run_dir), timeout=5)
+        connection.execute("PRAGMA foreign_keys=ON")
+        with connection:
+            yield connection
+    except sqlite3.Error as error:
+        raise PausedError("SQLite state", f"Database access failed; durable progress was preserved. Resume to verify and recover: {error}") from error
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def create_index_schema(db, state):
+    db.executescript("""
+        PRAGMA user_version=2;
+        CREATE TABLE identity (generation_id TEXT NOT NULL, manifest_hash TEXT NOT NULL);
+        CREATE TABLE checkpoint (
+            id INTEGER PRIMARY KEY CHECK(id=1), ledger_sequence INTEGER NOT NULL DEFAULT 0,
+            ledger_hash TEXT, canonical_hash TEXT NOT NULL, event_sequence INTEGER NOT NULL DEFAULT 0,
+            creative_count INTEGER NOT NULL DEFAULT 0, analysis_count INTEGER NOT NULL DEFAULT 0,
+            input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE ledger (sequence INTEGER PRIMARY KEY, step_id TEXT NOT NULL, attempt INTEGER NOT NULL,
+            step_type TEXT NOT NULL, status TEXT NOT NULL, failure_class TEXT NOT NULL,
+            entry_hash TEXT NOT NULL UNIQUE, payload TEXT NOT NULL);
+        CREATE INDEX ledger_step ON ledger(step_id, attempt);
+        CREATE UNIQUE INDEX committed_step ON ledger(step_id) WHERE status='COMMITTED';
+        CREATE TABLE records (commit_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL UNIQUE REFERENCES ledger(sequence),
+            step_id TEXT NOT NULL UNIQUE, record_type TEXT NOT NULL, packet_slot_id TEXT,
+            path TEXT NOT NULL, record_hash TEXT NOT NULL, payload TEXT NOT NULL);
+        CREATE INDEX records_kind ON records(record_type, packet_slot_id, sequence);
+        CREATE TABLE sources (id TEXT PRIMARY KEY, commit_id TEXT NOT NULL REFERENCES records(commit_id), hash TEXT NOT NULL);
+        CREATE TABLE events (sequence INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, payload TEXT NOT NULL);
+        CREATE INDEX events_kind ON events(kind, sequence);
+        CREATE TABLE event_sources (event_sequence INTEGER NOT NULL REFERENCES events(sequence),
+            source_id TEXT NOT NULL REFERENCES sources(id), commit_id TEXT NOT NULL, hash TEXT NOT NULL);
+        CREATE INDEX event_source_id ON event_sources(source_id);
+        CREATE TABLE projection (map TEXT NOT NULL, key TEXT NOT NULL, payload TEXT NOT NULL,
+            position INTEGER NOT NULL, PRIMARY KEY(map, key));
+        CREATE TABLE subjects (id TEXT PRIMARY KEY, position INTEGER NOT NULL);
+        CREATE TABLE knowledge (subject TEXT NOT NULL REFERENCES subjects(id), relation TEXT NOT NULL,
+            proposition TEXT NOT NULL, payload TEXT NOT NULL, position INTEGER NOT NULL, event_sequence INTEGER NOT NULL,
+            PRIMARY KEY(subject, relation, proposition));
+        CREATE INDEX knowledge_event ON knowledge(event_sequence);
+        CREATE INDEX knowledge_proposition ON knowledge(proposition,subject);
+        CREATE TABLE motif_history (sequence INTEGER PRIMARY KEY REFERENCES events(sequence),
+            motif_id TEXT NOT NULL, event_id TEXT NOT NULL, sources TEXT NOT NULL);
+        CREATE INDEX motif_lookup ON motif_history(motif_id,sequence);
+        CREATE TABLE plans (sequence INTEGER PRIMARY KEY, plan_id TEXT NOT NULL UNIQUE,
+            commit_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL);
+        CREATE INDEX sources_commit ON sources(commit_id);
+        CREATE TABLE event_relevance (event_sequence INTEGER NOT NULL REFERENCES events(sequence), key TEXT NOT NULL,
+            value TEXT NOT NULL, PRIMARY KEY(event_sequence,key,value));
+        CREATE INDEX relevance_lookup ON event_relevance(key,value,event_sequence);
+        CREATE TABLE search_documents (id INTEGER PRIMARY KEY, commit_id TEXT NOT NULL REFERENCES records(commit_id),
+            pointer TEXT NOT NULL, source_id TEXT NOT NULL, kind TEXT NOT NULL, sequence INTEGER NOT NULL,
+            title TEXT NOT NULL, body TEXT NOT NULL, event_sequence INTEGER REFERENCES events(sequence), UNIQUE(commit_id,pointer));
+        CREATE INDEX search_source ON search_documents(source_id,kind);
+        CREATE INDEX search_event ON search_documents(event_sequence);
+        CREATE TABLE search_tags (document_id INTEGER NOT NULL REFERENCES search_documents(id), key TEXT NOT NULL,
+            value TEXT NOT NULL, PRIMARY KEY(document_id,key,value));
+        CREATE INDEX search_tag_lookup ON search_tags(key,value,document_id);
+        CREATE VIRTUAL TABLE search_fts USING fts5(title,body,content='search_documents',content_rowid='id',tokenize='unicode61');
+    """)
+    db.execute("INSERT INTO identity VALUES (?, ?)", (state["generation_id"], state["manifest_hash"]))
+    db.execute("INSERT INTO checkpoint(id, canonical_hash) VALUES (1, ?)", (state["manifest_hash"],))
+
+
+def ensure_index(run_dir: Path) -> None:
+    if index_path(run_dir).exists():
+        return
+    if (run_dir / "run-manifest.json").exists() and (run_dir / "generation-brief.json").exists():
+        reconcile_run(run_dir)
+    else:
+        # Small offline fixtures can initialize the same store without a generated-work archive.
+        state = load_state(run_dir) if state_path(run_dir).exists() else {"generation_id": run_dir.name, "manifest_hash": ""}
+        with index_connection(run_dir) as db:
+            create_index_schema(db, state)
+
+
+def index_checkpoint(run_dir: Path) -> dict:
+    ensure_index(run_dir)
+    with index_connection(run_dir) as db:
+        db.row_factory = sqlite3.Row
+        return dict(db.execute("SELECT * FROM checkpoint WHERE id=1").fetchone())
+
+
+def indexed_ledger(run_dir: Path, *, step_id=None, after=0) -> list[dict]:
+    ensure_index(run_dir)
+    query = "SELECT payload FROM ledger WHERE sequence>?"
+    parameters = [after]
+    if step_id is not None:
+        query += " AND step_id=?"
+        parameters.append(step_id)
+    with index_connection(run_dir) as db:
+        return [json.loads(row[0]) for row in db.execute(query + " ORDER BY sequence", parameters)]
+
+
+def step_entries(run_dir: Path, step_id: str) -> list[dict]:
+    if run_dir in _REPLAYING or not index_path(run_dir).exists():
+        return [entry for entry in ledger_entries(run_dir) if entry["planned_step_id"] == step_id]
+    return indexed_ledger(run_dir, step_id=step_id)
+
+
+def refresh_run_counters(run_dir: Path, state=None) -> None:
+    checkpoint = index_checkpoint(run_dir)
+    state = load_state(run_dir) if state is None else state
+    for target, source in (("ledger_sequence", "ledger_sequence"), ("canonical_state_hash", "canonical_hash"),
+                           ("creative_step_count", "creative_count"), ("analysis_step_count", "analysis_count"),
+                           ("input_tokens", "input_tokens"), ("output_tokens", "output_tokens")):
+        state[target] = checkpoint[source]
+    save_state(run_dir, state)
+
+
+def put_projection(db, name, key, value, sequence):
+    db.execute("INSERT INTO projection VALUES (?, ?, ?, ?) ON CONFLICT(map,key) DO UPDATE SET payload=excluded.payload",
+               (name, key, canonical_json(value).decode(), sequence))
+
+
+def read_projection(db, name):
+    if name == "knowledge-state.json":
+        result = {row[0]: {relation: {} for relation in ("believes", "claims", "explicitly_does_not_know", "knows", "suspects")}
+                  for row in db.execute("SELECT id FROM subjects ORDER BY id")}
+        for subject, relation, proposition, payload in db.execute("SELECT subject,relation,proposition,payload FROM knowledge ORDER BY subject,relation,proposition"):
+            result[subject][relation][proposition] = json.loads(payload)
+        return result
+    result = {key: json.loads(payload) for key, payload in db.execute(
+        "SELECT key,payload FROM projection WHERE map=? ORDER BY key", (name,))}
+    if name == "motifs.json":
+        for motif_id, event_id, sources in db.execute("SELECT motif_id,event_id,sources FROM motif_history ORDER BY sequence"):
+            result[motif_id]["appearances"].extend(json.loads(sources))
+            result[motif_id]["provenance"].append(event_id)
+    return result.get("latest", {}) if name == "prospective-plan.json" else result
+
+
+def write_state_map(run_dir: Path, name: str, value: dict) -> None:
+    """Replace a fixture projection; runtime commits apply individual events instead."""
+    ensure_index(run_dir)
+    with index_connection(run_dir) as db:
+        db.execute("DELETE FROM projection WHERE map=?", (name,))
+        if name == "knowledge-state.json":
+            db.execute("DELETE FROM knowledge")
+            db.execute("DELETE FROM subjects")
+            for position, (subject, relations) in enumerate(value.items()):
+                db.execute("INSERT INTO subjects VALUES (?,?)", (subject, position))
+                for relation, propositions in relations.items():
+                    for number, (proposition, event) in enumerate(propositions.items()):
+                        db.execute("INSERT INTO knowledge VALUES (?,?,?,?,?,?)", (subject, relation, proposition, canonical_json(event).decode(), number, event["constraint_event_sequence"]))
+        else:
+            if name == "motifs.json":
+                db.execute("DELETE FROM motif_history")
+            items = {"latest": value} if name == "prospective-plan.json" else value
+            for position, (key, item) in enumerate(items.items()):
+                put_projection(db, name, key, item, position)
+
+
+SEARCH_CANDIDATES = 192
+SEARCH_TERMS = 32
+SEARCH_SOURCE_LIMIT = 24
+
+
+def readable_search_text(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(readable_search_text(item) for item in value)
+    if isinstance(value, dict):
+        excluded = {"record_type", "protocol_version", "story_format", "web_art_direction", "web_composition",
+                    "threshold_figure", "threshold_resultant", "source_locator", "source_hash", "sources", "evidence_sources"}
+        return "\n".join(readable_search_text(item) for key, item in sorted(value.items())
+                         if key not in excluded and not key.endswith(("_id", "_ids", "_hash"))
+                         and not (key == "subject" and isinstance(item, str) and re.fullmatch(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+", item)))
+    return "" if value is None else json.dumps(value, ensure_ascii=False)
+
+
+def search_documents_for(record, meta, inherited_tags=None):
+    documents = []
+    event_by_id = {event["constraint_id"]: event for event in meta["constraint_events"]}
+
+    def add(pointer, unit, kind, source_id=None):
+        identifier = source_id or (unit["anchor"].get("claimant_id") if isinstance(unit, dict) and isinstance(unit.get("anchor"), dict) else None) or next((unit[key] for key in ("scene_id", "artifact_id", "ending_id", "composition_id", "edge_id",
+            "arc_id", "node_id", "attractor_id", "packet_slot_id", "claimant_id", "character_id") if isinstance(unit, dict) and key in unit), record["commit_id"])
+        event = event_by_id.get(identifier)
+        tags = {key: list(values) for key, values in (inherited_tags or {}).items()}
+        if isinstance(unit, dict):
+            for key, values in unit.get("relevance", {}).items():
+                tags.setdefault(key, []).extend(values)
+            for field, key in (("arc_id", "arc_ids"), ("claimant_id", "claimant_ids"), ("character_id", "character_ids"),
+                               ("technical_slot_id", "technical_slot_ids"), ("subject_id", "character_ids"), ("motif_id", "motif_ids")):
+                if unit.get(field):
+                    tags.setdefault(key, []).append(unit[field])
+            tags.setdefault("claimant_ids", []).extend(unit.get("claimant_focus_ids", []))
+            if isinstance(unit.get("anchor"), dict) and unit["anchor"].get("claimant_id"):
+                tags.setdefault("claimant_ids", []).append(unit["anchor"]["claimant_id"])
+        title = unit.get("title", unit.get("name", "")) if isinstance(unit, dict) else ""
+        documents.append({"commit_id": record["commit_id"], "pointer": pointer, "source_id": identifier, "kind": kind,
+            "sequence": meta["ledger_entry"]["ledger_sequence"], "title": title, "body": readable_search_text(unit),
+            "event_sequence": event["constraint_event_sequence"] if event else None,
+            "tags": {key: sorted(set(values)) for key, values in tags.items() if values}})
+
+    def group(field, kind, parent=record, prefix=""):
+        for index, unit in enumerate(parent.get(field, [])):
+            add(f"{prefix}/{field}/{index}", unit, kind)
+
+    kind = record["record_type"]
+    if kind == "genesis_foundation":
+        add("/work_canon", record["work_canon"], "root", record["work_canon"]["work_id"])
+        add("/format_composition_law", record["format_composition_law"], "root")
+        group("claimant_anchors", "root")
+    elif kind == "genesis_cast":
+        group("claimants", "root")
+        group("characters", "root")
+    elif kind == "genesis_constraints":
+        group("claimant_extensions", "root")
+    elif kind == "architecture_core":
+        for field in ("arcs", "attractors"):
+            group(field, "plan")
+        for field in ("nodes", "edges"):
+            group(field, "plan", record["topology"], "/topology")
+    elif kind == "architecture_plan_batch":
+        group("packet_plans", "plan")
+    elif kind == "creative_packet":
+        for field in ("scenes", "artifacts", "endings", "decision_edges"):
+            group(field, "literary")
+        group("formal_compositions", "composition")
+    groups = [("/constraint_delta", record.get("constraint_delta", {}))]
+    if kind == "architecture_core":
+        groups.append(("", {"obligation_graph": record["obligation_graph"]}))
+    for prefix, delta in groups:
+        for field, units in delta.items():
+            for index, unit in enumerate(units):
+                identifier = next((unit[key] for key in ("fact_id", "knowledge_id", "update_id", "obligation_id", "motif_event_id", "foreclosure_id") if key in unit), None)
+                add(f"{prefix}/{field}/{index}", unit, "constraint", identifier)
+    return documents
+
+
+def insert_search_document(db, document):
+    fields = ("commit_id", "pointer", "source_id", "kind", "sequence", "title", "body", "event_sequence")
+    cursor = db.execute("INSERT INTO search_documents(commit_id,pointer,source_id,kind,sequence,title,body,event_sequence) VALUES (?,?,?,?,?,?,?,?)",
+                        tuple(document[key] for key in fields))
+    identifier = cursor.lastrowid
+    db.execute("INSERT INTO search_fts(rowid,title,body) VALUES (?,?,?)", (identifier, document["title"], document["body"]))
+    db.executemany("INSERT INTO search_tags VALUES (?,?,?)", [(identifier, key, value) for key, values in document["tags"].items() for value in values])
+
+
+def index_search_documents(db, record, meta):
+    tags = {}
+    if record.get("packet_slot_id"):
+        for key, value in db.execute("SELECT t.key,t.value FROM search_tags t JOIN search_documents d ON d.id=t.document_id WHERE d.kind='plan' AND d.source_id=?", (record["packet_slot_id"],)):
+            tags.setdefault(key, []).append(value)
+    for document in search_documents_for(record, meta, tags):
+        insert_search_document(db, document)
+
+
+def search_index_matches(db, commits):
+    expected, expected_tags, plan_tags = [], [], {}
+    fields = ("commit_id", "pointer", "source_id", "kind", "sequence", "title", "body", "event_sequence")
+    for _directory, meta, record in commits:
+        if record["record_type"] == "architecture_plan_batch":
+            for plan in record["packet_plans"]:
+                plan_tags[plan["packet_slot_id"]] = plan.get("relevance", {})
+        for document in search_documents_for(record, meta, plan_tags.get(record.get("packet_slot_id"))):
+            expected.append(tuple(document[key] for key in fields))
+            expected_tags.extend((document["commit_id"], document["pointer"], key, value) for key, values in document["tags"].items() for value in values)
+    actual = db.execute("SELECT commit_id,pointer,source_id,kind,sequence,title,body,event_sequence FROM search_documents ORDER BY sequence,pointer").fetchall()
+    tags = db.execute("SELECT d.commit_id,d.pointer,t.key,t.value FROM search_tags t JOIN search_documents d ON d.id=t.document_id ORDER BY d.commit_id,d.pointer,t.key,t.value").fetchall()
+    if actual != sorted(expected, key=lambda row: (row[4], row[1])) or tags != sorted(expected_tags):
+        return False
+    db.execute("INSERT INTO search_fts(search_fts,rank) VALUES('integrity-check',1)")
+    return True
+
+
+def search_query(plan, genesis=None):
+    terms, seen = [], set()
+
+    def add(term):
+        term = " ".join(term.replace("\x00", " ").split()).strip()
+        if re.search(r"[^\W_]", term, re.UNICODE) and term.casefold() not in seen and len(terms) < SEARCH_TERMS:
+            terms.append(term)
+            seen.add(term.casefold())
+
+    tags = plan.get("relevance", {})
+    for term in tags.get("keywords", []):
+        add(term)
+    entity_ids = {identifier for key, values in tags.items() if key.endswith("_ids") for identifier in values}
+    for entity in (genesis or {}).get("claimants", []) + (genesis or {}).get("characters", []):
+        if entity.get("claimant_id", entity.get("character_id")) in entity_ids and entity.get("name"):
+            add(entity["name"])
+    guidance = re.sub(r"\b[^\W_]+(?:_[^\W_]+)+\b", " ", " ".join(plan.get("soft_guidance", [])))
+    for word in re.findall(r"[^\W_]+", guidance, re.UNICODE):
+        if len(word) >= 3 and not word.isdecimal():
+            add(word)
+    return {"terms": terms, "expression": " OR ".join('"' + term.replace('"', '""') + '"' for term in terms)}
+
+
+def search_history(run_dir, query, *, constraints=False, plan=None, limit=SEARCH_CANDIDATES):
+    if not query["expression"]:
+        return []
+    ensure_index(run_dir)
+    with index_connection(run_dir) as db:
+        rows = db.execute("""SELECT d.id,d.commit_id,d.pointer,d.source_id,d.kind,d.sequence,d.event_sequence,bm25(search_fts,2.0,1.0)
+            FROM search_fts JOIN search_documents d ON d.id=search_fts.rowid
+            WHERE search_fts MATCH ? AND (d.kind='constraint')=?
+            ORDER BY bm25(search_fts,2.0,1.0),d.sequence,d.commit_id,d.pointer LIMIT ?""", (query["expression"], int(constraints), limit)).fetchall()
+        hits = []
+        tags_by_id = {row[0]: {} for row in rows}
+        if rows:
+            identifiers = list(tags_by_id)
+            for identifier,key,value in db.execute("SELECT document_id,key,value FROM search_tags WHERE document_id IN (" + ",".join("?" for _ in identifiers) + ") ORDER BY document_id,key,value", identifiers):
+                tags_by_id[identifier].setdefault(key, []).append(value)
+        for row in rows:
+            hit = dict(zip(("document_id", "commit_id", "pointer", "source_id", "kind", "sequence", "event_sequence", "bm25"), row))
+            hit["tags"] = tags_by_id[row[0]]
+            hit["locality"] = sum(bool(set(values) & set((plan or {}).get("relevance", {}).get(key, []))) for key, values in hit["tags"].items())
+            hits.append(hit)
+        return sorted(hits, key=lambda hit: (hit["bm25"], -hit["locality"], hit["sequence"], hit["commit_id"], hit["pointer"]))
+
+
+def read_search_source(run_dir, hit, cache=None):
+    cache = {} if cache is None else cache
+    if hit["commit_id"] not in cache:
+        with index_connection(run_dir) as db:
+            row = db.execute("SELECT path,record_hash FROM records WHERE commit_id=?", (hit["commit_id"],)).fetchone()
+        if row is None:
+            raise IntegrityError(f"Search source disappeared: {hit['commit_id']}")
+        path = run_dir / row[0] / "record.json"
+        verify_immutable_file(path, row[1])
+        cache[hit["commit_id"]] = (read_json(path), row[1])
+    record, digest = cache[hit["commit_id"]]
+    value = record
+    for part in hit["pointer"].lstrip("/").split("/") if hit["pointer"] else []:
+        part = part.replace("~1", "/").replace("~0", "~")
+        value = value[int(part)] if isinstance(value, list) else value[part]
+    return {"source_id": hit["source_id"], "source_commit_id": hit["commit_id"], "source_hash": digest,
+            "record_pointer": hit["pointer"], "authority": {"plan": "PLANNED INTENTION", "root": "GENERATED ROOT CANON",
+                "literary": "COMMITTED LITERARY MATERIAL", "composition": "COMMITTED COMPOSITION METADATA", "constraint": "CONSTRAINT HISTORY"}[hit["kind"]],
+            "immutable_source": value}
+
+
+def event_relevance_tags(event):
+    data = event["data"]
+    tags = {key: list(values) for key, values in data.get("relevance", {}).items()}
+    if data.get("obligation_id"):
+        tags["_obligation"] = [data["obligation_id"]]
+    if event["constraint_kind"] == "knowledge_state":
+        tags["_knowledge_character"] = list(set(tags.get("character_ids", [])) | {data["subject_id"]})
+    return tags
+
+
+def index_event(db, event):
+    sequence, kind, data = event["constraint_event_sequence"], event["constraint_kind"], event["data"]
+    expected = db.execute("SELECT event_sequence+1 FROM checkpoint WHERE id=1").fetchone()[0]
+    if sequence != expected:
+        raise IntegrityError("Constraint event sequence is invalid")
+    db.execute("INSERT INTO events VALUES (?,?,?,?)", (sequence, event["constraint_id"], kind, canonical_json(event).decode()))
+    db.executemany("INSERT INTO event_relevance VALUES (?,?,?)", [(sequence,key,value) for key, values in event_relevance_tags(event).items() for value in sorted(set(values))])
+    for source in event["sources"]:
+        resolved = db.execute("SELECT commit_id,hash FROM sources WHERE id=?", (source["artifact_id"],)).fetchone()
+        if resolved != (source["source_commit_id"], source["source_hash"]):
+            raise IntegrityError(f"Constraint source provenance changed: {source['artifact_id']}")
+        db.execute("INSERT INTO event_sources VALUES (?,?,?,?)", (sequence, source["artifact_id"], *resolved))
+    if kind == "canonical_fact":
+        if data.get("supersedes_fact_id"):
+            db.execute("DELETE FROM projection WHERE map='canonical-facts.json' AND key=?", (data["supersedes_fact_id"],))
+        put_projection(db, "canonical-facts.json", data["fact_id"], event, sequence)
+    elif kind == "knowledge_state":
+        db.execute("INSERT OR IGNORE INTO subjects VALUES (?,?)", (data["subject_id"], sequence))
+        keys = (data["subject_id"], data["relation"], data["proposition_id"])
+        if data["action"] == "retract":
+            db.execute("DELETE FROM knowledge WHERE subject=? AND relation=? AND proposition=?", keys)
+        else:
+            db.execute("INSERT INTO knowledge VALUES (?,?,?,?,?,?) ON CONFLICT(subject,relation,proposition) DO UPDATE SET payload=excluded.payload,event_sequence=excluded.event_sequence",
+                       (*keys, canonical_json(event).decode(), sequence, sequence))
+    elif kind == "obligation":
+        put_projection(db, "obligations.json", data["obligation_id"], event, sequence)
+    elif kind == "obligation_update":
+        row = db.execute("SELECT payload FROM projection WHERE map='obligations.json' AND key=?", (data["obligation_id"],)).fetchone()
+        if row is None:
+            raise IntegrityError(f"Obligation update references unknown obligation: {data['obligation_id']}")
+        obligation = json.loads(row[0])
+        obligation["data"]["status"] = data["status"]
+        obligation["resolution_event"] = event
+        put_projection(db, "obligations.json", data["obligation_id"], obligation, sequence)
+    elif kind == "motif_state":
+        motif = {"motif_id": data["motif_id"], "appearances": [], "provenance": [],
+                 **{key: data[key] for key in ("current_function", "pressure", "overuse_risk")}}
+        put_projection(db, "motifs.json", data["motif_id"], motif, sequence)
+        db.execute("INSERT INTO motif_history VALUES (?,?,?,?)", (sequence, data["motif_id"], event["constraint_id"],
+                   canonical_json([source["artifact_id"] for source in event["sources"]]).decode()))
+    elif kind == "foreclosure_candidate":
+        put_projection(db, "foreclosure-candidates.json", event["constraint_id"], event, sequence)
+    db.execute("UPDATE checkpoint SET event_sequence=? WHERE id=1", (sequence,))
+
+
+def index_entry(db, entry):
+    sequence = entry["ledger_sequence"]
+    previous, head = db.execute("SELECT ledger_sequence,ledger_hash FROM checkpoint WHERE id=1").fetchone()
+    if sequence != previous + 1 or entry["previous_entry_hash"] != head:
+        raise IntegrityError("SQLite ledger checkpoint disagrees with the durable step")
+    db.execute("INSERT INTO ledger VALUES (?,?,?,?,?,?,?,?)", (sequence, entry["planned_step_id"], entry["attempt"],
+        entry["step_type"], entry["commit_status"], entry["failure_class"], entry["entry_hash"], canonical_json(entry).decode()))
+    committed = entry["commit_status"] == "COMMITTED"
+    usage = entry["token_accounting"]
+    db.execute("UPDATE checkpoint SET ledger_sequence=?,ledger_hash=?,canonical_hash=?,creative_count=creative_count+?,analysis_count=analysis_count+?,input_tokens=input_tokens+?,output_tokens=output_tokens+? WHERE id=1",
+               (sequence, entry["entry_hash"], entry["canonical_state_hash_after"], int(committed and entry["step_type"] == "creative"),
+                int(committed and entry["step_type"] == "analysis"), usage["input_tokens"] or 0, usage["output_tokens"] or 0))
+
+
+def index_commit(db, directory, meta, record):
+    db.execute("INSERT INTO records VALUES (?,?,?,?,?,?,?,?)", (record["commit_id"], meta["ledger_entry"]["ledger_sequence"],
+        meta["ledger_entry"]["planned_step_id"], record["record_type"], record.get("packet_slot_id"), directory,
+        meta["record_hash"], canonical_json(record).decode()))
+    for identifier in generated_ids(record):
+        db.execute("INSERT INTO sources VALUES (?,?,?)", (identifier, record["commit_id"], meta["record_hash"]))
+    for event in meta["constraint_events"]:
+        index_event(db, event)
+    index_search_documents(db, record, meta)
+
+
+def index_plan(db, plan):
+    sequence = int(plan["plan_id"].rsplit("_", 1)[1])
+    db.execute("INSERT INTO plans VALUES (?,?,?,?)", (sequence, plan["plan_id"], plan["recomputed_after_commit_id"], canonical_json(plan).decode()))
+    put_projection(db, "prospective-plan.json", "latest", plan, sequence)
+
+
+def rebuild_index(run_dir, entries, commits, plans):
+    destination = index_path(run_dir)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix="index-", suffix=".sqlite3", dir=destination.parent)
+    os.close(descriptor)
+    try:
+        db = sqlite3.connect(temporary)
+        try:
+            db.execute("PRAGMA foreign_keys=ON")
+            create_index_schema(db, load_state(run_dir))
+            by_sequence = {meta["ledger_entry"]["ledger_sequence"]: (directory, meta, record) for directory, meta, record in commits}
+            with db:
+                for entry in entries:
+                    index_entry(db, entry)
+                    if entry["ledger_sequence"] in by_sequence:
+                        index_commit(db, *by_sequence[entry["ledger_sequence"]])
+                for plan in plans:
+                    index_plan(db, plan)
+        finally:
+            db.close()
+        os.replace(temporary, destination)
+    except sqlite3.Error as error:
+        raise PausedError("SQLite recovery", f"Could not rebuild the index; archives were preserved: {error}") from error
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def index_matches(run_dir, entries, commits, plans, expected_maps, sources, events):
+    if not index_path(run_dir).exists():
+        return False
+    try:
+        with closing(sqlite3.connect(index_path(run_dir))) as db:
+            state = load_state(run_dir)
+            if db.execute("PRAGMA user_version").fetchone()[0] != INDEX_VERSION or db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                return False
+            if db.execute("SELECT * FROM identity").fetchall() != [(state["generation_id"], state["manifest_hash"])]:
+                return False
+            expected_ledger = [(item["ledger_sequence"], item["planned_step_id"], item["attempt"], item["step_type"],
+                item["commit_status"], item["failure_class"], item["entry_hash"], canonical_json(item).decode()) for item in entries]
+            if db.execute("SELECT * FROM ledger ORDER BY sequence").fetchall() != expected_ledger:
+                return False
+            expected_records = [(record["commit_id"], meta["ledger_entry"]["ledger_sequence"], meta["ledger_entry"]["planned_step_id"],
+                record["record_type"], record.get("packet_slot_id"), directory, meta["record_hash"], canonical_json(record).decode()) for directory, meta, record in commits]
+            if db.execute("SELECT * FROM records ORDER BY sequence").fetchall() != expected_records:
+                return False
+            actual_sources = {identifier: {"commit_id": commit_id, "hash": digest} for identifier, commit_id, digest in db.execute("SELECT * FROM sources ORDER BY rowid")}
+            expected_events = [(item["constraint_event_sequence"], item["constraint_id"], item["constraint_kind"], canonical_json(item).decode()) for item in events]
+            if actual_sources != sources or db.execute("SELECT * FROM events ORDER BY sequence").fetchall() != expected_events:
+                return False
+            expected_sources = [(item["constraint_event_sequence"], source["artifact_id"], source["source_commit_id"], source["source_hash"])
+                                for item in events for source in item["sources"]]
+            if db.execute("SELECT * FROM event_sources ORDER BY rowid").fetchall() != expected_sources or db.execute("PRAGMA foreign_key_check").fetchall():
+                return False
+            if any(read_projection(db, name) != value for name, value in zip(STATE_MAPS, expected_maps)):
+                return False
+            if [json.loads(row[0]) for row in db.execute("SELECT payload FROM plans ORDER BY sequence")] != plans:
+                return False
+            if read_projection(db, "prospective-plan.json") != (plans[-1] if plans else {}):
+                return False
+            if not search_index_matches(db, commits):
+                return False
+            expected_relevance = []
+            for event in events:
+                tags = event_relevance_tags(event)
+                expected_relevance.extend((event["constraint_event_sequence"],key,value) for key, values in tags.items() for value in set(values))
+            if db.execute("SELECT * FROM event_relevance ORDER BY event_sequence,key,value").fetchall() != sorted(expected_relevance):
+                return False
+            head = entries[-1] if entries else None
+            expected = (1, len(entries), head["entry_hash"] if head else None,
+                head["canonical_state_hash_after"] if head else state["manifest_hash"], len(events),
+                sum(item["step_type"] == "creative" and item["commit_status"] == "COMMITTED" for item in entries),
+                sum(item["step_type"] == "analysis" and item["commit_status"] == "COMMITTED" for item in entries),
+                sum(item["token_accounting"]["input_tokens"] or 0 for item in entries),
+                sum(item["token_accounting"]["output_tokens"] or 0 for item in entries))
+            return db.execute("SELECT * FROM checkpoint").fetchall() == [expected]
+    except (sqlite3.Error, ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
+def indexed_records(run_dir, record_type=None, packet_slot_id=None):
+    ensure_index(run_dir)
+    query, parameters = "SELECT payload FROM records WHERE 1=1", []
+    for key, value in (("record_type", record_type), ("packet_slot_id", packet_slot_id)):
+        if value is not None:
+            query += f" AND {key}=?"
+            parameters.append(value)
+    with index_connection(run_dir) as db:
+        return [json.loads(row[0]) for row in db.execute(query + " ORDER BY sequence", parameters)]
+
+
+def constraint_events(run_dir):
+    ensure_index(run_dir)
+    with index_connection(run_dir) as db:
+        return [json.loads(row[0]) for row in db.execute("SELECT payload FROM events ORDER BY sequence")]
+
+
 def ledger_entries(run_dir: Path) -> list[dict]:
+    if run_dir not in _REPLAYING and index_path(run_dir).exists():
+        return indexed_ledger(run_dir)
     path = run_dir / "ledger.jsonl"
     if not path.exists():
         return []
@@ -853,12 +1390,17 @@ def compute_entry_hash(entry: dict) -> str:
     return sha256_bytes(canonical_json(payload))
 
 
-def append_ledger_entry(run_dir: Path, entry: dict) -> None:
+def append_ledger_entry(run_dir: Path, entry: dict, *, commit=None, plan=None) -> None:
     protocol = load_protocol(run_dir)
     validate_json_schema(entry, protocol["$defs"]["ledgerEntry"], protocol)
-    entries = ledger_entries(run_dir)
-    expected_sequence = len(entries) + 1
-    expected_previous = entries[-1]["entry_hash"] if entries else None
+    if run_dir in _REPLAYING:
+        entries = ledger_entries(run_dir)
+        expected_sequence = len(entries) + 1
+        expected_previous = entries[-1]["entry_hash"] if entries else None
+    else:
+        checkpoint = index_checkpoint(run_dir)
+        expected_sequence = checkpoint["ledger_sequence"] + 1
+        expected_previous = checkpoint["ledger_hash"]
     if entry["ledger_sequence"] != expected_sequence or entry["previous_entry_hash"] != expected_previous:
         raise IntegrityError("Ledger sequence or previous-entry hash is invalid")
     if compute_entry_hash(entry) != entry["entry_hash"]:
@@ -869,6 +1411,22 @@ def append_ledger_entry(run_dir: Path, entry: dict) -> None:
         handle.write(canonical_json(entry))
         handle.flush()
         os.fsync(handle.fileno())
+    if run_dir not in _REPLAYING:
+        if commit is not None:
+            directory, meta, record = commit
+            constraint_path = run_dir / "constraints/constraint-events.jsonl"
+            constraint_path.parent.mkdir(parents=True, exist_ok=True)
+            with constraint_path.open("ab") as handle:
+                handle.write(b"".join(canonical_json(event) for event in meta["constraint_events"]))
+                handle.flush()
+                os.fsync(handle.fileno())
+        with index_connection(run_dir) as db:
+            index_entry(db, entry)
+            if commit is not None:
+                index_commit(db, str(directory.relative_to(run_dir)), meta, record)
+            if plan is not None:
+                index_plan(db, plan)
+        refresh_run_counters(run_dir)
 
 
 def new_ledger_entry(
@@ -898,18 +1456,23 @@ def new_ledger_entry(
     failure_class: str,
     usage: dict | None = None,
 ) -> dict:
-    entries = ledger_entries(run_dir)
+    if run_dir in _REPLAYING:
+        entries = ledger_entries(run_dir)
+        sequence, previous = len(entries), entries[-1]["entry_hash"] if entries else None
+    else:
+        checkpoint = index_checkpoint(run_dir)
+        sequence, previous = checkpoint["ledger_sequence"], checkpoint["ledger_hash"]
     usage = usage or {}
     entry = {
         "record_type": "ledger_entry",
         "protocol_version": PROTOCOL_VERSION,
         "generation_id": load_state(run_dir)["generation_id"],
-        "ledger_sequence": len(entries) + 1,
+        "ledger_sequence": sequence + 1,
         "planned_step_id": planned_step_id,
         "attempt": attempt,
         "step_type": step_type,
         "step_phase": step_phase,
-        "previous_entry_hash": entries[-1]["entry_hash"] if entries else None,
+        "previous_entry_hash": previous,
         "entry_hash": "0" * 64,
         "parent_canonical_state_hash": parent_state_hash,
         "prompt_hash": prompt_hash,
@@ -948,6 +1511,7 @@ def append_deterministic_step(
     output_hash: str,
     *,
     prospective_plan_hash: str | None = None,
+    plan: dict | None = None,
 ) -> None:
     if step_is_committed(run_dir, step_id):
         return
@@ -977,7 +1541,7 @@ def append_deterministic_step(
         state_hash_after=state["canonical_state_hash"],
         failure_class="none",
     )
-    append_ledger_entry(run_dir, entry)
+    append_ledger_entry(run_dir, entry, plan=plan)
     state["ledger_sequence"] = entry["ledger_sequence"]
     save_state(run_dir, state)
 
@@ -1145,7 +1709,7 @@ def generated_ids(record: dict) -> list[str]:
 
 
 def reused_generated_ids(run_dir: Path, record: dict) -> set[str]:
-    return set(generated_ids(record)) & set(_source_index(run_dir))
+    return set(generated_ids(record)) & set(_source_index(run_dir, generated_ids(record)))
 
 
 def constraint_deltas(record: dict) -> tuple[dict, list[str], list[str], list[str]]:
@@ -1169,18 +1733,28 @@ def constraint_deltas(record: dict) -> tuple[dict, list[str], list[str], list[st
     return groups, past, future, motifs
 
 
-def _source_index(run_dir: Path) -> dict:
-    path = run_dir / "state/source-index.json"
-    return read_json(path) if path.exists() else {}
+def _source_index(run_dir: Path, identifiers=None) -> dict:
+    ensure_index(run_dir)
+    with index_connection(run_dir) as db:
+        if identifiers is None:
+            rows = db.execute("SELECT id,commit_id,hash FROM sources ORDER BY id").fetchall()
+        else:
+            rows = []
+            identifiers = sorted(set(identifiers))
+            for offset in range(0, len(identifiers), 500):
+                batch = identifiers[offset:offset + 500]
+                rows.extend(db.execute("SELECT id,commit_id,hash FROM sources WHERE id IN (" + ",".join("?" for _ in batch) + ")", batch))
+        return {identifier: {"commit_id": commit_id, "hash": digest} for identifier, commit_id, digest in rows}
 
 
 def make_constraint_events(run_dir: Path, record: dict, commit_id: str, record_hash: str, step_id: str) -> list[dict]:
     groups, _, _, _ = constraint_deltas(record)
-    source_index = _source_index(run_dir)
+    source_ids = {source["artifact_id"] for items in groups.values() for item in items
+                  for source in item.get("sources", item.get("evidence_sources", []))}
+    source_index = _source_index(run_dir, source_ids)
     for identifier in generated_ids(record):
         source_index[identifier] = {"commit_id": commit_id, "hash": record_hash}
-    current_events = run_dir / "constraints/constraint-events.jsonl"
-    sequence = len(current_events.read_text(encoding="utf-8").splitlines()) if current_events.exists() else 0
+    sequence = index_checkpoint(run_dir)["event_sequence"]
     protocol = load_protocol(run_dir)
     events = []
     definitions = (
@@ -1276,7 +1850,8 @@ def project_constraint_state(events: list[dict]) -> tuple[dict, dict, dict, dict
 
 
 def committed_directories(run_dir: Path) -> list[Path]:
-    return sorted(path for path in (run_dir / "committed").iterdir() if path.is_dir())
+    root = run_dir / "committed"
+    return sorted((path for path in root.iterdir() if path.is_dir()), key=lambda path: int(path.name.split("-", 1)[0])) if root.exists() else []
 
 
 def verify_immutable_file(path: Path, expected_hash: str) -> None:
@@ -1285,22 +1860,69 @@ def verify_immutable_file(path: Path, expected_hash: str) -> None:
 
 
 def reconcile_run(run_dir: Path) -> None:
+    _REPLAYING.add(run_dir)
+    try:
+        _reconcile_archive(run_dir)
+    except (ValueError, KeyError) as error:
+        raise IntegrityError(f"Malformed archived history: {error}") from error
+    finally:
+        _REPLAYING.discard(run_dir)
+    # A crash may preserve a creative commit before its prospective plan is recorded.
+    records = indexed_records(run_dir)
+    if records and records[-1]["record_type"] in {"creative_packet", "architecture_plan_batch"}:
+        recompute_prospective_plan(run_dir, records[-1]["commit_id"])
+
+
+def recover_ledger_tail(run_dir: Path) -> None:
+    path = run_dir / "ledger.jsonl"
+    data = path.read_bytes() if path.exists() else b""
+    if not data or data.endswith(b"\n"):
+        return
+    prefix, _, tail = data.rpartition(b"\n")
+    entries = [json.loads(line) for line in prefix.splitlines() if line.strip()]
+    previous = entries[-1] if entries else None
+    candidates = []
+    for directory in committed_directories(run_dir):
+        meta = read_json(directory / "commit-meta.json")
+        entry = meta["ledger_entry"]
+        if entry["ledger_sequence"] == len(entries) + 1 and entry["previous_entry_hash"] == (previous["entry_hash"] if previous else None):
+            if canonical_json(entry).startswith(tail) and compute_entry_hash(entry) == entry["entry_hash"]:
+                candidates.append((directory, meta))
+    if len(candidates) != 1:
+        raise IntegrityError("Incomplete ledger tail has no exact immutable commit metadata")
+    directory, meta = candidates[0]
+    for name, digest in (("record.json", meta["record_hash"]), ("raw-response.txt", meta["raw_response_hash"]),
+                         ("api-response.json", meta["api_response_hash"]), *meta.get("supplemental_hashes", {}).items()):
+        verify_immutable_file(directory / name, digest)
+    with path.open("ab") as handle:
+        handle.write(canonical_json(meta["ledger_entry"])[len(tail):])
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _reconcile_archive(run_dir: Path) -> None:
     state = load_state(run_dir)
     verify_engine_snapshot(run_dir)
     verify_immutable_file(run_dir / "generation-brief.json", state["brief_hash"])
     verify_immutable_file(run_dir / "run-manifest.json", state["manifest_hash"])
+    recover_ledger_tail(run_dir)
     entries = ledger_entries(run_dir)
     previous = None
+    canonical_state = state["manifest_hash"]
     for index, entry in enumerate(entries, 1):
         if entry["ledger_sequence"] != index or entry["previous_entry_hash"] != previous:
             raise IntegrityError("Ledger order or hash chain was changed")
         if compute_entry_hash(entry) != entry["entry_hash"]:
             raise IntegrityError(f"Ledger entry {index} was changed")
+        if entry["parent_canonical_state_hash"] != canonical_state:
+            raise IntegrityError("Ledger canonical-state chain was changed")
+        canonical_state = entry["canonical_state_hash_after"]
         previous = entry["entry_hash"]
     prospective_history = run_dir / "planning/prospective-plans.jsonl"
     prospective_plans = [
         json.loads(line) for line in prospective_history.read_text(encoding="utf-8").splitlines()
     ] if prospective_history.exists() else []
+    matches = {entry["planned_step_id"]: entry for entry in entries if entry["commit_status"] == "COMMITTED"}
     protocol = load_protocol(run_dir)
     for index, plan in enumerate(prospective_plans, 1):
         validate_json_schema(plan, protocol["$defs"]["prospectivePlan"], protocol)
@@ -1308,13 +1930,7 @@ def reconcile_run(run_dir: Path) -> None:
             raise IntegrityError("Prospective plan history was reordered or truncated")
         step_id = f"prospective_{sha256_bytes(plan['recomputed_after_commit_id'].encode())[:16]}"
         plan_hash = sha256_bytes(canonical_json(plan))
-        match = next(
-            (
-                entry for entry in entries
-                if entry["planned_step_id"] == step_id and entry["commit_status"] == "COMMITTED"
-            ),
-            None,
-        )
+        match = matches.get(step_id)
         if not match:
             append_deterministic_step(
                 run_dir,
@@ -1325,13 +1941,13 @@ def reconcile_run(run_dir: Path) -> None:
             )
             entries = ledger_entries(run_dir)
             match = entries[-1]
+            matches[step_id] = match
         if match["output_hash"] != plan_hash or match["prospective_plan_hash_after"] != plan_hash:
             raise IntegrityError(f"Prospective plan audit hash changed: {plan['plan_id']}")
-    if prospective_plans:
-        write_json(run_dir / "state/prospective-plan.json", prospective_plans[-1])
     committed_steps = {}
     expected_constraints = []
     source_index = {}
+    commits = []
     for directory in committed_directories(run_dir):
         meta = read_json(directory / "commit-meta.json")
         verify_immutable_file(directory / "record.json", meta["record_hash"])
@@ -1343,15 +1959,25 @@ def reconcile_run(run_dir: Path) -> None:
         if step_id in committed_steps:
             raise IntegrityError(f"Creative step committed more than once: {step_id}")
         committed_steps[step_id] = directory
-        match = next((entry for entry in entries if entry["planned_step_id"] == step_id and entry["commit_status"] == "COMMITTED"), None)
+        match = matches.get(step_id)
         if match is None:
             if meta["ledger_entry"]["previous_entry_hash"] != (entries[-1]["entry_hash"] if entries else None):
                 raise IntegrityError(f"Cannot reconcile ledger for {step_id}")
             append_ledger_entry(run_dir, meta["ledger_entry"])
             entries.append(meta["ledger_entry"])
+            matches[step_id] = meta["ledger_entry"]
         elif match != meta["ledger_entry"]:
             raise IntegrityError(f"Ledger metadata differs from immutable commit {step_id}")
         record = read_json(directory / "record.json")
+        constraint_hash = sha256_bytes(b"".join(canonical_json(event) for event in meta["constraint_events"]))
+        entry = meta["ledger_entry"]
+        expected_hash = sha256_bytes(f"{entry['parent_canonical_state_hash']}:{meta['record_hash']}:{constraint_hash}".encode())
+        if expected_hash != entry["canonical_state_hash_after"] or entry["output_hash"] != meta["record_hash"]:
+            raise IntegrityError(f"Commit state hash changed: {step_id}")
+        if record["generation_id"] != state["generation_id"]:
+            raise IntegrityError("Committed record belongs to a different generation")
+        validate_declared_id_uniqueness(record)
+        commits.append((str(directory.relative_to(run_dir)), meta, record))
         for identifier in generated_ids(record):
             if identifier in source_index:
                 raise IntegrityError(f"Generated ID was reused: {identifier}")
@@ -1360,41 +1986,35 @@ def reconcile_run(run_dir: Path) -> None:
     inflight_path = run_dir / "state/inflight.json"
     if inflight_path.exists() and read_json(inflight_path).get("step_id") in committed_steps:
         inflight_path.unlink()
-    for event in expected_constraints:
+    for entry in entries:
+        if entry["step_type"] == "creative" and entry["commit_status"] == "COMMITTED" and entry["planned_step_id"] not in committed_steps:
+            raise IntegrityError(f"Committed archive disappeared: {entry['planned_step_id']}")
+    if sum(entry["step_phase"] == "prospective_plan" and entry["commit_status"] == "COMMITTED" for entry in entries) != len(prospective_plans):
+        raise IntegrityError("Prospective plan history was truncated")
+    for sequence, event in enumerate(expected_constraints, 1):
+        if event["constraint_event_sequence"] != sequence:
+            raise IntegrityError("Constraint event order was changed")
         for source in event["sources"]:
             resolved = source_index.get(source["artifact_id"])
             if not resolved or resolved != {"commit_id": source["source_commit_id"], "hash": source["source_hash"]}:
                 raise IntegrityError(f"Constraint source provenance changed: {source['artifact_id']}")
+    if state["ledger_sequence"] > len(entries):
+        raise IntegrityError("Durable ledger history was truncated")
     constraint_bytes = b"".join(canonical_json(event) for event in expected_constraints)
     constraint_path = run_dir / "constraints/constraint-events.jsonl"
     existing = constraint_path.read_bytes() if constraint_path.exists() else b""
     if not constraint_bytes.startswith(existing):
         raise IntegrityError("Constraint event history was changed")
+    constraint_path.parent.mkdir(parents=True, exist_ok=True)
     if len(existing) < len(constraint_bytes):
         with constraint_path.open("ab") as handle:
             handle.write(constraint_bytes[len(existing):])
             handle.flush()
             os.fsync(handle.fileno())
-    write_json(run_dir / "state/source-index.json", source_index)
-    facts, knowledge, obligations, motifs, foreclosures = project_constraint_state(expected_constraints)
-    write_json(run_dir / "state/canonical-facts.json", facts)
-    write_json(run_dir / "state/knowledge-state.json", knowledge)
-    write_json(run_dir / "state/obligations.json", obligations)
-    write_json(run_dir / "state/motifs.json", motifs)
-    write_json(run_dir / "state/foreclosure-candidates.json", foreclosures)
-    entries = ledger_entries(run_dir)
-    state["ledger_sequence"] = len(entries)
-    if entries:
-        state["canonical_state_hash"] = entries[-1]["canonical_state_hash_after"]
-    state["creative_step_count"] = sum(
-        entry["step_type"] == "creative" and entry["commit_status"] == "COMMITTED" for entry in entries
-    )
-    state["analysis_step_count"] = sum(
-        entry["step_type"] == "analysis" and entry["commit_status"] == "COMMITTED" for entry in entries
-    )
-    state["input_tokens"] = sum(entry["token_accounting"]["input_tokens"] or 0 for entry in entries)
-    state["output_tokens"] = sum(entry["token_accounting"]["output_tokens"] or 0 for entry in entries)
-    save_state(run_dir, state)
+    expected_maps = project_constraint_state(expected_constraints)
+    if not index_matches(run_dir, entries, commits, prospective_plans, expected_maps, source_index, expected_constraints):
+        rebuild_index(run_dir, entries, commits, prospective_plans)
+    refresh_run_counters(run_dir)
 
 
 def commit_record(
@@ -1412,18 +2032,16 @@ def commit_record(
     branch_relation: str,
     usage_already_ledgered: bool = False,
 ) -> Path:
-    reconcile_run(run_dir)
+    ensure_index(run_dir)
     state = load_state(run_dir)
     protocol = load_protocol(run_dir)
     definition = protocol["$defs"][RECORD_DEFS[record["record_type"]]]
     validate_json_schema(record, definition, protocol)
     if record["generation_id"] != state["generation_id"]:
         raise SchemaError("Record generation_id does not match the frozen run")
-    if any(
-        entry["planned_step_id"] == planned_step_id and entry["commit_status"] == "COMMITTED"
-        for entry in ledger_entries(run_dir)
-    ):
+    if step_is_committed(run_dir, planned_step_id):
         raise IntegrityError(f"Refusing to regenerate committed step {planned_step_id}")
+    validate_declared_id_uniqueness(record)
     duplicate_ids = reused_generated_ids(run_dir, record)
     if duplicate_ids:
         raise SchemaError(f"Record reuses previously committed IDs: {', '.join(sorted(duplicate_ids))}")
@@ -1493,6 +2111,7 @@ def commit_record(
         (".epistemic-repair.json", "epistemic-repair.json"),
         (".repair.json", "reference-repair.json"),
         (".references.json", "named-reference-repair.json"),
+        (".retrieval.json", "retrieval-receipt.json"),
     ):
         source = run_dir / ".staging" / f"{planned_step_id}{suffix}"
         if source.exists():
@@ -1511,7 +2130,7 @@ def commit_record(
         make_read_only(path)
     os.replace(staging, destination)
     os.chmod(destination, 0o555)
-    append_ledger_entry(run_dir, entry)
+    append_ledger_entry(run_dir, entry, commit=(destination, meta, record))
     raw_view = run_dir / "raw" / f"{sequence:04d}-{planned_step_id}.txt"
     if not raw_view.exists():
         try:
@@ -1521,9 +2140,11 @@ def commit_record(
             make_read_only(raw_view)
     state["canonical_state_hash"] = state_after
     state["stage"] = step_phase.upper()
-    save_state(run_dir, state)
-    reconcile_run(run_dir)
-    for suffix in (".artistic.json", ".artistic.txt", ".artistic.api.json", ".semantic.json", ".semantic.api.json", ".semantic-recovery.json", ".repair.json", ".references.json"):
+    refresh_run_counters(run_dir, state)
+    inflight_path = run_dir / "state/inflight.json"
+    if inflight_path.exists() and read_json(inflight_path).get("step_id") == planned_step_id:
+        inflight_path.unlink()
+    for suffix in (".artistic.json", ".artistic.txt", ".artistic.api.json", ".semantic.json", ".semantic.api.json", ".semantic-recovery.json", ".repair.json", ".references.json", ".retrieval.json"):
         (run_dir / ".staging" / f"{planned_step_id}{suffix}").unlink(missing_ok=True)
     if record["record_type"] == "creative_packet" or (
         record["record_type"] == "architecture_plan_batch" and assembled_architecture(run_dir)
@@ -1575,7 +2196,7 @@ def append_failed_attempt(
     )
     append_ledger_entry(run_dir, entry)
     state["ledger_sequence"] = entry["ledger_sequence"]
-    save_state(run_dir, state)
+    refresh_run_counters(run_dir, state)
 
 
 def committed_record(run_dir: Path, record_type: str, packet_slot_id: str | None = None):
@@ -1585,19 +2206,16 @@ def committed_record(run_dir: Path, record_type: str, packet_slot_id: str | None
         return assembled_architecture(run_dir)
     if record_type == "creative_packet" and packet_slot_id is not None:
         return assembled_packet(run_dir, packet_slot_id)
-    for directory in committed_directories(run_dir):
-        record = read_json(directory / "record.json")
-        if record.get("record_type") == record_type and (packet_slot_id is None or record.get("packet_slot_id") == packet_slot_id):
-            return record
-    return None
+    records = indexed_records(run_dir, record_type, packet_slot_id)
+    return records[0] if records else None
 
 
 def all_committed_records(run_dir: Path) -> list[dict]:
-    return [read_json(path / "record.json") for path in committed_directories(run_dir)]
+    return indexed_records(run_dir)
 
 
 def committed_records(run_dir: Path, record_type: str) -> list[dict]:
-    return [record for record in all_committed_records(run_dir) if record.get("record_type") == record_type]
+    return indexed_records(run_dir, record_type)
 
 
 def assembled_genesis(run_dir: Path) -> dict | None:
@@ -1764,6 +2382,7 @@ def retrieve_original_sources(
     constraints: list[dict],
     limit: int = 24,
     records: list[dict] | None = None,
+    *, strict: bool = False,
 ) -> list[dict]:
     wanted = []
     locators = {}
@@ -1772,11 +2391,25 @@ def retrieve_original_sources(
             identifier = source["artifact_id"]
             if identifier not in wanted:
                 wanted.append(identifier)
-                locators[identifier] = source["source_locator"]
-        if len(wanted) >= limit:
+                locators[identifier] = []
+            if source["source_locator"] not in locators[identifier]:
+                locators[identifier].append(source["source_locator"])
+        if limit is not None and len(wanted) >= limit:
             break
     retrieved = []
-    committed = list(reversed(records if records is not None else all_committed_records(run_dir)))
+    catalog = {}
+    if records is None:
+        catalog = _source_index(run_dir, wanted)
+        if strict and set(wanted) - catalog.keys():
+            raise IntegrityError("Required evidence source does not resolve: " + ", ".join(sorted(set(wanted) - catalog.keys())))
+        records = []
+        with index_connection(run_dir) as db:
+            for commit_id in dict.fromkeys(item["commit_id"] for item in catalog.values()):
+                path, digest = db.execute("SELECT path,record_hash FROM records WHERE commit_id=?", (commit_id,)).fetchone()
+                source_path = run_dir / path / "record.json"
+                verify_immutable_file(source_path, digest)
+                records.append(read_json(source_path))
+    committed = list(reversed(records))
     for identifier in wanted:
         for record in committed:
             candidates = []
@@ -1800,14 +2433,27 @@ def retrieve_original_sources(
                 candidates[0] if len(candidates) == 1 else None,
             )
             if source is not None:
+                pointer = ""
+                if record.get("record_type") == "creative_packet":
+                    for field in ("scenes", "artifacts", "endings", "formal_compositions"):
+                        for index, unit in enumerate(record[field]):
+                            if unit is source:
+                                pointer = f"/{field}/{index}"
                 retrieved.append(
                     {
                         "source_id": identifier,
-                        "source_locator": locators[identifier],
+                        "source_locator": locators[identifier][0],
+                        **({"source_locators": locators[identifier]} if len(locators[identifier]) > 1 else {}),
+                        "source_commit_id": catalog.get(identifier, {}).get("commit_id", record.get("commit_id")),
+                        "source_hash": catalog.get(identifier, {}).get("hash"),
+                        "record_pointer": pointer,
+                        "authority": "COMMITTED SOURCE EVIDENCE",
                         "immutable_source": source,
                     }
                 )
                 break
+    if strict and set(wanted) - {item["source_id"] for item in retrieved}:
+        raise IntegrityError("Required evidence source could not be extracted")
     return retrieved
 
 
@@ -2064,7 +2710,7 @@ def request_record(
             "response_format": {"type": "json_schema", "json_schema": {"name": response_definition, "strict": True, "schema": schema}},
         }
         request_hash = sha256_bytes(canonical_json(payload))
-        attempts = [entry["attempt"] for entry in ledger_entries(run_dir) if entry["planned_step_id"] == step_id]
+        attempts = [entry["attempt"] for entry in step_entries(run_dir, step_id)]
         attempt = max(attempts, default=0) + 1
         inflight_path = run_dir / "state/inflight.json"
         if inflight_path.exists():
@@ -2077,6 +2723,20 @@ def request_record(
             write_json(inflight_path, inflight, exclusive=True)
         response_path = run_dir / "raw" / f"{step_id}-attempt{attempt}.api.json"
         response = read_json(response_path) if response_path.exists() else None
+        retrieval_path = run_dir / ".staging" / f"{step_id}.retrieval.json"
+        if retrieval_path.exists():
+            receipt = read_json(retrieval_path)
+            attempt_receipt = run_dir / "raw" / f"{step_id}-attempt{attempt}.retrieval.json"
+            if attempt_receipt.exists():
+                saved = read_json(attempt_receipt)
+                if saved["context_hash"] != receipt["context_hash"] or saved["canonical_state_hash"] != receipt["canonical_state_hash"]:
+                    raise IntegrityError("Saved writing attempt has different retrieval context")
+                receipt = saved
+            else:
+                receipt = receipt | {"attempt": attempt, "prompt_hash": sha256_bytes(current_prompt.encode()),
+                    "prepared_prompt_bytes": len(current_prompt.encode()), "estimated_prompt_tokens": math.ceil(len(current_prompt)/4)}
+                write_json(attempt_receipt, receipt, mode=0o444, exclusive=True)
+            write_json(retrieval_path, receipt)
         try:
             preserved_payload = run_dir / ".staging" / f"{step_id}.artistic.json"
             if preserved_payload.exists():
@@ -2151,7 +2811,7 @@ def request_record(
             inflight_path.unlink(missing_ok=True)
             schema_failures = sum(
                 entry["planned_step_id"] == step_id and entry["failure_class"] == "malformed_response"
-                for entry in ledger_entries(run_dir)
+                for entry in step_entries(run_dir, step_id)
             )
             if isinstance(error, SchemaError) and schema_failure_limit is not None and schema_failures >= schema_failure_limit:
                 raise PausedError(
@@ -2357,7 +3017,7 @@ def named_reference_issues(run_dir: Path, payload: dict, definition: str, *, pla
 
 def record_reference_answer(run_dir: Path, answer: dict) -> None:
     if any(item["planned_step_id"] == answer["step_id"] and item["attempt"] == answer["attempt"]
-           for item in ledger_entries(run_dir)):
+           for item in step_entries(run_dir, answer["step_id"])):
         return
     resolved = answer["result"] != "UNRESOLVED"
     state = load_state(run_dir)
@@ -2369,12 +3029,7 @@ def record_reference_answer(run_dir: Path, answer: dict) -> None:
         motif_ids=[], branch_relation=None, commit_status="COMMITTED" if resolved else "FAILED_BEFORE_COMMIT", state_hash_after=state["canonical_state_hash"],
         failure_class="none" if resolved else "mechanical_validation", usage=answer["api_response"].get("usage", {}))
     append_ledger_entry(run_dir, entry)
-    entries = ledger_entries(run_dir)
-    state["ledger_sequence"] = len(entries)
-    state["analysis_step_count"] = sum(item["step_type"] == "analysis" and item["commit_status"] == "COMMITTED" for item in entries)
-    state["input_tokens"] = sum(item["token_accounting"]["input_tokens"] or 0 for item in entries)
-    state["output_tokens"] = sum(item["token_accounting"]["output_tokens"] or 0 for item in entries)
-    save_state(run_dir, state)
+    refresh_run_counters(run_dir, state)
 
 
 def successful_structural_repair_count(run_dir: Path) -> int:
@@ -2421,14 +3076,14 @@ def resolve_named_reference(run_dir: Path, step_id: str, issue: dict, transport=
     feedback = ""
     last_problem = ""
     for _ in range(3):
-        attempts = [entry["attempt"] for entry in ledger_entries(run_dir) if entry["planned_step_id"] == repair_step]
+        attempts = [entry["attempt"] for entry in step_entries(run_dir, repair_step)]
         attempt = max(attempts, default=0) + 1
         response_path = run_dir / "raw" / f"{repair_step}-attempt{attempt}.api.json"
         started = utc_now()
         response = read_json(response_path) if response_path.exists() else None
         try:
             if response is None:
-                completed = sum(entry["step_type"] == "analysis" and entry["commit_status"] == "COMMITTED" for entry in ledger_entries(run_dir))
+                completed = index_checkpoint(run_dir)["analysis_count"]
                 if completed + successful_structural_repair_count(run_dir) >= budgets.get("max_analysis_step_count", float("inf")):
                     raise CathedralsError("Reference resolution", "Reference request exceeds max_analysis_step_count", "budget_exhaustion")
                 usage = [(read_json(path).get("usage") or {}) for path in (run_dir / "raw").glob("*.api.json")]
@@ -2740,15 +3395,16 @@ def resolve_cross_packet_links(scenes: list[dict], endings: list[dict], edges: l
 
 
 def _read_state_map(run_dir: Path, name: str) -> dict:
-    path = run_dir / "state" / name
-    return read_json(path) if path.exists() else {}
+    ensure_index(run_dir)
+    with index_connection(run_dir) as db:
+        return read_projection(db, name)
 
 
 def _tag_set(value: dict, key: str) -> set[str]:
     return set(value.get("relevance", {}).get(key, []))
 
 
-def relevance_score(event: dict, plan: dict, architecture: dict, dependency_source_ids: set[str], total_events: int) -> int:
+def relevance_score(event: dict, plan: dict, architecture: dict, dependency_source_ids: set[str], total_events: int, *, lexical=True) -> int:
     data = event["data"]
     score = 0
     obligation_ids = set(plan.get("advance_obligation_ids", [])) | set(plan.get("may_satisfy_obligation_ids", []))
@@ -2788,31 +3444,239 @@ def relevance_score(event: dict, plan: dict, architecture: dict, dependency_sour
         or _tag_set(data, "character_ids") & set(plan_tags.get("character_ids", []))
     ):
         score += 9
-    words = set(re.findall(r"[a-z0-9_]+", " ".join(plan["soft_guidance"] + plan_tags.get("keywords", [])).lower()))
-    event_words = set(re.findall(r"[a-z0-9_]+", json.dumps(data, ensure_ascii=False).lower()))
-    score += min(5, len(words & event_words))
+    if lexical:
+        words = set(re.findall(r"[a-z0-9_]+", " ".join(plan["soft_guidance"] + plan_tags.get("keywords", [])).lower()))
+        event_words = set(re.findall(r"[a-z0-9_]+", json.dumps(data, ensure_ascii=False).lower()))
+        score += min(5, len(words & event_words))
     if total_events:
         score += min(2, 2 * event["constraint_event_sequence"] // total_events)
     return score
 
 
+def structured_constraint_sequences(run_dir, architecture, plan):
+    wanted = []
+    weights = {"arc_ids": 10, "branch_ids": 10, "claimant_ids": 8, "technical_slot_ids": 8,
+               "object_ids": 6, "location_ids": 6, "state_keys": 6, "motif_ids": 5}
+    for key, weight in weights.items():
+        wanted.extend((key, value, weight, key) for value in plan.get("relevance", {}).get(key, []))
+    wanted.extend(("_knowledge_character", value, 9, "knowledge") for value in plan.get("relevance", {}).get("character_ids", []))
+    obligations = {item["obligation_id"]: item for item in architecture.get("obligation_graph", [])}
+    for identifier in set(plan.get("advance_obligation_ids", []) + plan.get("may_satisfy_obligation_ids", [])):
+        original = obligations.get(identifier, {})
+        wanted.append(("_obligation", identifier, 12 if original.get("hardness") == "hard" else 6, "assigned"))
+        if original.get("kind") == "causal_debt":
+            wanted.append(("_obligation", identifier, 8, "causal"))
+    for attractor in architecture.get("attractors", []):
+        if attractor["attractor_id"] in plan.get("attractor_ids", []):
+            wanted.extend(("_obligation", identifier, 8, "prerequisite") for identifier in attractor["prerequisite_obligation_ids"])
+    with index_connection(run_dir) as db:
+        matches = []
+        parameters = []
+        if wanted:
+            values = ",".join("(?,?,?,?)" for _ in wanted)
+            parameters.extend(value for row in wanted for value in row)
+            matches.append(f"""SELECT r.event_sequence,w.column4 AS bucket,MAX(w.column3) AS weight
+                FROM event_relevance r JOIN (VALUES {values}) w ON r.key=w.column1 AND r.value=w.column2
+                GROUP BY r.event_sequence,w.column4""")
+        dependencies = plan.get("depends_on_packet_slot_ids", [])
+        if dependencies:
+            parameters.extend(dependencies)
+            matches.append("""SELECT es.event_sequence,'dependency' AS bucket,12 AS weight FROM records r
+                JOIN sources s ON s.commit_id=r.commit_id JOIN event_sources es ON es.source_id=s.id
+                WHERE r.record_type='creative_packet' AND r.packet_slot_id IN (""" + ",".join("?" for _ in dependencies) + ") GROUP BY es.event_sequence")
+        if not matches:
+            return []
+        query = "SELECT event_sequence,SUM(weight) AS score FROM (" + " UNION ALL ".join(matches) + ") GROUP BY event_sequence ORDER BY score DESC,event_sequence LIMIT ?"
+        return [row[0] for row in db.execute(query, (*parameters, SEARCH_CANDIDATES))]
+
+
+def events_by_sequence(run_dir, sequences):
+    values = sorted(set(sequences))
+    result = []
+    with index_connection(run_dir) as db:
+        for offset in range(0, len(values), 500):
+            batch = values[offset:offset + 500]
+            result.extend(json.loads(row[0]) for row in db.execute("SELECT payload FROM events WHERE sequence IN (" + ",".join("?" for _ in batch) + ") ORDER BY sequence", batch))
+    return result
+
+
+def packet_records(run_dir, packet_ids=None, *, recent=None, verify=False):
+    with index_connection(run_dir) as db:
+        if recent is not None:
+            rows = db.execute("SELECT sequence,payload,path,record_hash FROM records WHERE record_type='creative_packet' ORDER BY sequence DESC LIMIT ?", (recent,)).fetchall()
+        else:
+            rows = []
+            values = sorted(set(packet_ids or []))
+            for offset in range(0, len(values), 500):
+                batch = values[offset:offset + 500]
+                rows.extend(db.execute("SELECT sequence,payload,path,record_hash FROM records WHERE record_type='creative_packet' AND packet_slot_id IN (" + ",".join("?" for _ in batch) + ")", batch))
+        result = []
+        for _sequence, payload, path, digest in sorted(rows):
+            if verify:
+                source = run_dir / path / "record.json"
+                verify_immutable_file(source, digest)
+                result.append(read_json(source))
+            else:
+                result.append(json.loads(payload))
+        return result
+
+
+def state_subset(run_dir, name, identifiers):
+    identifiers = sorted(set(identifiers))
+    result = {}
+    with index_connection(run_dir) as db:
+        for offset in range(0, len(identifiers), 500):
+            batch = identifiers[offset:offset + 500]
+            markers = ",".join("?" for _ in batch)
+            result.update((key, json.loads(payload)) for key, payload in db.execute(
+                "SELECT key,payload FROM projection WHERE map=? AND key IN (" + markers + ") ORDER BY key", (name, *batch)))
+            if name == "motifs.json":
+                for motif_id, event_id, sources in db.execute("SELECT motif_id,event_id,sources FROM motif_history WHERE motif_id IN (" + markers + ") ORDER BY sequence", batch):
+                    result[motif_id]["appearances"].extend(json.loads(sources))
+                    result[motif_id]["provenance"].append(event_id)
+    return result
+
+
+def obligation_closure(run_dir, identifiers):
+    obligations, pending = {}, set(identifiers)
+    while pending:
+        found = state_subset(run_dir, "obligations.json", pending)
+        missing = pending - found.keys()
+        if missing:
+            raise IntegrityError("Required obligation does not resolve: " + ", ".join(sorted(missing)))
+        obligations.update(found)
+        pending = {identifier for event in found.values() for identifier in event["data"]["requires"]} - obligations.keys()
+    return obligations
+
+
+def selected_current_knowledge(run_dir, events, required_fact_ids=(), subject_ids=()):
+    sequences = sorted({event["constraint_event_sequence"] for event in events if event["constraint_kind"] == "knowledge_state"})
+    rows = []
+    with index_connection(run_dir) as db:
+        if sequences:
+            rows.extend(db.execute("SELECT subject,relation,proposition,payload FROM knowledge WHERE event_sequence IN (" + ",".join("?" for _ in sequences) + ") ORDER BY subject,relation,proposition", sequences))
+        if required_fact_ids and subject_ids:
+            rows.extend(db.execute("SELECT subject,relation,proposition,payload FROM knowledge WHERE proposition IN (" + ",".join("?" for _ in required_fact_ids) + ") AND subject IN (" + ",".join("?" for _ in subject_ids) + ") ORDER BY subject,relation,proposition", (*required_fact_ids, *subject_ids)))
+    result = {}
+    for subject, relation, proposition, payload in rows:
+        relations = result.setdefault(subject, {key: {} for key in ("believes", "claims", "explicitly_does_not_know", "knows", "suspects")})
+        relations[relation][proposition] = json.loads(payload)
+    return [{"subject_id": subject, **relations} for subject, relations in sorted(result.items())]
+
+
+def compact_context_value(value):
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def pack_packet_context(required, optional, max_tokens, receipt):
+    def render(sections, compact):
+        sources = {}
+
+        def collect(value):
+            if isinstance(value, dict):
+                if {"artifact_id", "source_commit_id", "source_hash"}.issubset(value):
+                    key = canonical_json(value)
+                    sources.setdefault(key, [value, 0])[1] += 1
+                else:
+                    for key, child in value.items():
+                        if key != "immutable_source":
+                            collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        if compact:
+            for _label, items in sections:
+                collect(items)
+        shared = {key: f"source_{index:03d}" for index, key in enumerate(sorted(key for key, (value, count) in sources.items() if count > 1 and len(key) > 128), 1)}
+
+        def encode(value):
+            if isinstance(value, dict):
+                if {"artifact_id", "source_commit_id", "source_hash"}.issubset(value):
+                    reference = shared.get(canonical_json(value))
+                    if reference:
+                        return {"$context_ref": reference}
+                return {key: child if key == "immutable_source" else encode(child) for key, child in value.items()}
+            if isinstance(value, list):
+                return [encode(child) for child in value]
+            return value
+
+        rendered = []
+        if shared:
+            rendered.append("===== SHARED SOURCE METADATA =====\nEach $context_ref expands to the exact source object below. Literary source units remain complete.\n" + compact_context_value({reference: sources[key][0] for key, reference in shared.items()}) + "\n")
+        for label, items in sections:
+            if items:
+                rendered.append(f"===== {label} =====\n" + "\n\n".join(
+                    compact_context_value(encode(item)) if compact else item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, indent=2)
+                    for item in items) + "\n")
+        return "\n".join(rendered)
+
+    # Source-bearing objects are deduplicated only by verified identity/containment, never by similar wording.
+    original_required = [(label, value if isinstance(value, list) else [value]) for label, value in required]
+    seen, filtered = set(), []
+    for label, value in required:
+        items = value if isinstance(value, list) else [value]
+        output = []
+        for item in items:
+            identity = canonical_json(item) if not isinstance(item, str) else None
+            if identity is not None:
+                seen.add(identity)
+            output.append(item)
+        filtered.append((label, output))
+    text = render(filtered, True)
+    receipt["required_pretty_bytes"] = len(render(original_required, False).encode())
+    receipt["required_compact_bytes"] = len(text.encode())
+    maximum = max_tokens * 4
+    if len(text) > maximum:
+        receipt["required_components"] = {label: len(render([(label, items)], True)) for label, items in filtered if items}
+        receipt["capacity_failure"] = True
+        raise PausedError("Packet context", f"Required whole-source context needs approximately {math.ceil(len(text)/4):,} tokens; ceiling {max_tokens:,}. "
+            + "Components (characters): " + canonical_json(receipt["required_components"]).decode().strip(), "budget_exhaustion")
+    packed = filtered
+    for label, items in optional:
+        for item in items:
+            identity = canonical_json(item)
+            if identity in seen:
+                receipt["omissions"].append({"section": label, "reason": "duplicate_optional_item"})
+                continue
+            trial = packed + [(label, [item])]
+            candidate = render(trial, True)
+            if len(candidate) <= maximum:
+                packed = trial
+                text = candidate
+                seen.add(identity)
+            else:
+                receipt["omissions"].append({"section": label, "source_id": item.get("source_id") if isinstance(item, dict) else None, "reason": "prepared_context_budget"})
+    receipt["context_bytes"] = len(text.encode())
+    receipt["estimated_context_tokens"] = math.ceil(len(text)/4)
+    receipt["context_hash"] = sha256_bytes(text.encode())
+    return text
+
+
 def select_relevant_constraints(
-    run_dir: Path,
-    architecture: dict,
-    plan: dict,
-    limit: int = 96,
-    records: list[dict] | None = None,
+    run_dir: Path, architecture: dict, plan: dict, limit: int = 96, records: list[dict] | None = None, *, query=None, trace=None,
 ) -> list[dict]:
-    path = run_dir / "constraints/constraint-events.jsonl"
-    events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
-    committed = records if records is not None else all_committed_records(run_dir)
-    dependencies = [
-        record for record in committed
-        if record.get("record_type") == "creative_packet" and record.get("packet_slot_id") in plan["depends_on_packet_slot_ids"]
-    ]
-    dependency_ids = {identifier for record in dependencies for identifier in generated_ids(record)}
-    scored = [(relevance_score(event, plan, architecture, dependency_ids, len(events)), event) for event in events]
-    return [event for score, event in sorted(scored, key=lambda item: (-item[0], item[1]["constraint_event_sequence"])) if score > 0][:limit]
+    ensure_index(run_dir)
+    query = search_query(plan) if query is None else query
+    hits = search_history(run_dir, query, constraints=True, plan=plan)
+    lexical_rank = {hit["event_sequence"]: rank for rank, hit in enumerate(hits)}
+    structured = structured_constraint_sequences(run_dir, architecture, plan)
+    sequences = set(structured) | set(lexical_rank)
+    with index_connection(run_dir) as db:
+        recent_sequences = [row[0] for row in db.execute("SELECT sequence FROM events ORDER BY sequence DESC LIMIT 96")]
+        sequences.update(recent_sequences)
+    total = index_checkpoint(run_dir)["event_sequence"]
+    dependencies = records if records is not None else packet_records(run_dir, plan.get("depends_on_packet_slot_ids", []))
+    dependency_ids = {identifier for record in dependencies if record.get("packet_slot_id") in plan.get("depends_on_packet_slot_ids", []) for identifier in generated_ids(record)}
+    scored = [(relevance_score(event, plan, architecture, dependency_ids, total, lexical=False)
+        + (5/(1+lexical_rank[event["constraint_event_sequence"]]) if event["constraint_event_sequence"] in lexical_rank else 0), event)
+        for event in events_by_sequence(run_dir, sequences)]
+    ranked = [(score,event) for score,event in sorted(scored, key=lambda item: (-item[0],item[1]["constraint_event_sequence"])) if score > 0][:limit]
+    if trace is not None:
+        trace["constraint_candidate_counts"] = {"fts": len(hits), "structured": len(structured), "recent": len(recent_sequences), "deserialized": len(sequences)}
+        trace["selected_constraints"] = [{"constraint_id": event["constraint_id"], "event_sequence": event["constraint_event_sequence"], "score": score,
+            "fts_rank": lexical_rank.get(event["constraint_event_sequence"])} for score,event in ranked]
+    return [event for score,event in ranked]
 
 
 def _within_record_budget(records: list[dict], max_tokens: int) -> list[dict]:
@@ -2827,106 +3691,164 @@ def _within_record_budget(records: list[dict], max_tokens: int) -> list[dict]:
     return output
 
 
-def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict) -> str:
+def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, receipt=None, step_id=None) -> str:
+    ensure_index(run_dir)
     manifest = read_json(run_dir / "run-manifest.json")
     genesis = committed_record(run_dir, "genesis")
-    records = all_committed_records(run_dir)
-    dependency_records = [
-        record for record in records
-        if record.get("record_type") == "creative_packet" and record.get("packet_slot_id") in plan["depends_on_packet_slot_ids"]
-    ]
-    recent = [record for record in records if record.get("record_type") == "creative_packet"][-2:]
-    selected = select_relevant_constraints(run_dir, architecture, plan, records=records)
-    selected_fact_ids = {
-        event["data"]["fact_id"] for event in selected if event["constraint_kind"] == "canonical_fact"
-    }
-    fact_state = _read_state_map(run_dir, "canonical-facts.json")
-    past = [event for key, event in fact_state.items() if key in selected_fact_ids]
-    selected_motif_ids = {
-        event["data"]["motif_id"] for event in selected if event["constraint_kind"] == "motif_state"
-    }
-    motif_state = _read_state_map(run_dir, "motifs.json")
-    motifs = [value for key, value in motif_state.items() if key in selected_motif_ids]
-    retrieved_sources = _within_record_budget(
-        retrieve_original_sources(run_dir, selected, records=records), manifest["budgets"]["max_retrieved_source_tokens"]
-    )
+    dependencies = packet_records(run_dir, plan.get("depends_on_packet_slot_ids", []), verify=True)
+    if {record["packet_slot_id"] for record in dependencies} != set(plan.get("depends_on_packet_slot_ids", [])):
+        raise IntegrityError("Required predecessor packet does not resolve")
+    query = search_query(plan, genesis)
+    receipt = {} if receipt is None else receipt
+    selected = select_relevant_constraints(run_dir, architecture, plan, records=dependencies, query=query, trace=receipt)
+    past = list(state_subset(run_dir, "canonical-facts.json", [event["data"]["fact_id"] for event in selected if event["constraint_kind"] == "canonical_fact"]).values())
+    motifs = list(state_subset(run_dir, "motifs.json", [event["data"]["motif_id"] for event in selected if event["constraint_kind"] == "motif_state"]).values())
+    attractors = [item for item in architecture["attractors"] if item["attractor_id"] in plan.get("attractor_ids", [])]
+    prerequisite_ids = {identifier for attractor in attractors for identifier in attractor["prerequisite_obligation_ids"]}
+    for arc in architecture.get("arcs", []):
+        if arc["arc_id"] in plan.get("relevance", {}).get("arc_ids", []):
+            prerequisite_ids.update(arc.get("hard_obligation_ids", []))
+    assigned_ids = set(plan.get("advance_obligation_ids", []) + plan.get("may_satisfy_obligation_ids", []))
+    required_obligations = obligation_closure(run_dir, assigned_ids | prerequisite_ids)
+    selected_obligation_ids = {event["data"]["obligation_id"] for event in selected if event["constraint_kind"] in {"obligation", "obligation_update"}}
+    obligations = state_subset(run_dir, "obligations.json", selected_obligation_ids) | required_obligations
+    hard = [event for event in obligations.values() if event["data"]["hardness"] == "hard" and event["data"]["status"] == "active"]
+    soft = [event for event in obligations.values() if event["data"]["hardness"] == "soft" and event["data"]["status"] == "active" and event["data"]["obligation_id"] not in assigned_ids]
+    subjects = sorted(set(plan.get("relevance", {}).get("character_ids", []) + plan.get("relevance", {}).get("claimant_ids", [])))
+    knowledge = selected_current_knowledge(run_dir, selected, [item["data"]["fact_id"] for item in past], subjects)
+    proof_events = []
+    for event in required_obligations.values():
+        proof_events.append(event)
+        if event.get("resolution_event"):
+            proof_events.append(event["resolution_event"])
+    dependency_ids = {identifier for record in dependencies for identifier in generated_ids(record)}
+    uncovered_proofs = [event | {"sources": [source for source in event["sources"] if source["artifact_id"] not in dependency_ids]} for event in proof_events]
+    required_sources = retrieve_original_sources(run_dir, uncovered_proofs, limit=None, strict=True) if uncovered_proofs else []
+    required_ids = {identifier for record in dependencies for identifier in generated_ids(record)} | {source["source_id"] for source in required_sources}
+    protected_past = [event for event in past if any(source["artifact_id"] in required_ids for source in event["sources"])]
+    protected_fact_ids = {event["data"]["fact_id"] for event in protected_past}
+    protected_knowledge, optional_knowledge = [], []
+    for subject in knowledge:
+        required_relations, optional_relations = {}, {}
+        for relation, propositions in subject.items():
+            if not isinstance(propositions, dict):
+                continue
+            required_relations[relation], optional_relations[relation] = {}, {}
+            for proposition, event in propositions.items():
+                target = required_relations if proposition in protected_fact_ids or any(source["artifact_id"] in required_ids for source in event["sources"]) else optional_relations
+                target[relation][proposition] = event
+        if any(required_relations.values()):
+            protected_knowledge.append({"subject_id": subject["subject_id"], **required_relations})
+        if any(optional_relations.values()):
+            optional_knowledge.append({"subject_id": subject["subject_id"], **optional_relations})
     geomancy = ensure_frozen_geomancy(run_dir)
     slots = set(plan["scene_slot_ids"])
-    relevant_geomancy = [item for item in geomancy["assignments"] if item["technical_slot_id"] in slots]
-    obligation_state = _read_state_map(run_dir, "obligations.json")
-    selected_knowledge_ids = {
-        event["constraint_id"] for event in selected if event["constraint_kind"] == "knowledge_state"
-    }
-    knowledge_state = _read_state_map(run_dir, "knowledge-state.json")
-    knowledge = []
-    for subject_id, relations in knowledge_state.items():
-        relevant_relations = {
-            relation: {
-                proposition_id: event
-                for proposition_id, event in propositions.items()
-                if event["constraint_id"] in selected_knowledge_ids
-            }
-            for relation, propositions in relations.items()
-        }
-        if any(relevant_relations.values()):
-            knowledge.append({"subject_id": subject_id, **relevant_relations})
-    selected_obligation_ids = {
-        event["data"].get("obligation_id")
-        for event in selected
-        if event["constraint_class"] == "future_obligation"
-    }
-    active_obligations = [
-        event for key, event in obligation_state.items()
-        if key in selected_obligation_ids and event["data"]["status"] == "active"
+    required = [
+        ("FROZEN ENGINE LAW", (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
+        ("FROZEN GENERATION BRIEF", manifest["generation_brief"]),
+        ("IMMUTABLE GENERATED ROOT CANON", genesis),
+        ("CURRENT PACKET STRUCTURAL POSITION", plan),
+        ("IMMUTABLE PAST CONSTRAINTS", protected_past),
+        ("ACTIVE HARD FUTURE OBLIGATIONS", hard),
+        ("OBLIGATIONS THIS PACKET SHOULD ADVANCE", [obligations[key] for key in plan.get("advance_obligation_ids", [])]),
+        ("OBLIGATIONS THIS PACKET MAY SATISFY", [obligations[key] for key in plan.get("may_satisfy_obligation_ids", [])]),
+        ("DIRECT DEPENDENCY SOURCE EVIDENCE", dependencies),
+        ("REQUIRED PREREQUISITE SOURCE EVIDENCE", required_sources),
+        ("CHARACTER KNOWLEDGE / BELIEF CONSTRAINTS", protected_knowledge),
+        ("ENDING ATTRACTOR" if plan["packet_kind"] == "ending" else "ENDING / BRANCH ATTRACTORS EXERTING PRESSURE", attractors),
+        ("FROZEN THRESHOLD GEOMANCY", [item for item in geomancy["assignments"] if item["technical_slot_id"] in slots]),
     ]
-    hard_obligations = [item for item in active_obligations if item["data"]["hardness"] == "hard"]
-    soft_obligations = [item for item in active_obligations if item["data"]["hardness"] == "soft"]
-    advance = sorted(
-        (obligation_state[item] for item in plan["advance_obligation_ids"] if item in obligation_state),
-        key=lambda item: item["data"]["hardness"] != "hard",
-    )
-    may_satisfy = sorted(
-        (obligation_state[item] for item in plan["may_satisfy_obligation_ids"] if item in obligation_state),
-        key=lambda item: item["data"]["hardness"] != "hard",
-    )
-    attractors = [item for item in architecture["attractors"] if item["attractor_id"] in plan["attractor_ids"]]
-    ending_sections = []
     if plan["packet_kind"] == "ending":
-        prerequisite_ids = sorted({
-            obligation_id for attractor in attractors for obligation_id in attractor["prerequisite_obligation_ids"]
-        })
-        prerequisite_chain = [obligation_state[item] for item in prerequisite_ids if item in obligation_state]
-        relevant_debts = [obligation_state[item] for item in selected_obligation_ids if item in obligation_state]
-        ending_sections = [
-            ("BACKWARD PREREQUISITE CHAIN", prerequisite_chain),
-            ("SATISFIED PREREQUISITES WITH SOURCES", [item for item in prerequisite_chain if item["data"]["status"] == "satisfied"]),
-            ("RELEVANT UNSATISFIED / AMBIGUOUS PRESSURES", [item for item in relevant_debts if item["data"]["status"] in {"active", "intentionally_unresolved"}]),
+        chain = [required_obligations[key] for key in sorted(prerequisite_ids)]
+        required.extend([
+            ("BACKWARD PREREQUISITE CHAIN", chain),
+            ("SATISFIED PREREQUISITES WITH SOURCES", [item for item in chain if item["data"]["status"] == "satisfied"]),
+            ("RELEVANT UNSATISFIED / AMBIGUOUS PRESSURES", [item for item in obligations.values() if item["data"]["status"] in {"active", "intentionally_unresolved"}]),
             ("CURRENT READER STATE", [item for item in past if "reader" in item["data"]["subject"] or item["data"].get("relevance", {}).get("state_keys")]),
-            ("BRANCH RESIDUE", [item for item in relevant_debts if item["data"]["kind"] == "branch_residue"]),
-            ("CLAIMANT PRESSURES", [item for item in relevant_debts if item["data"].get("relevance", {}).get("claimant_ids")]),
-        ]
-    return bounded_context(
-        [
-            ("FROZEN ENGINE LAW", (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
-            ("FROZEN GENERATION BRIEF", manifest["generation_brief"]),
-            ("IMMUTABLE GENERATED ROOT CANON", genesis),
-            ("CURRENT PACKET STRUCTURAL POSITION", plan),
-            ("IMMUTABLE PAST CONSTRAINTS", past),
-            ("ACTIVE HARD FUTURE OBLIGATIONS", hard_obligations),
-            ("OBLIGATIONS THIS PACKET SHOULD ADVANCE", advance),
-            ("OBLIGATIONS THIS PACKET MAY SATISFY", may_satisfy),
-            ("DIRECT DEPENDENCY SOURCE EVIDENCE", dependency_records),
-            ("CHARACTER KNOWLEDGE / BELIEF CONSTRAINTS", knowledge),
-            ("ENDING ATTRACTOR" if plan["packet_kind"] == "ending" else "ENDING / BRANCH ATTRACTORS EXERTING PRESSURE", attractors),
-            *ending_sections,
-            ("RETRIEVED ORIGINAL SOURCE EVIDENCE", retrieved_sources),
-            ("RELEVANT MOTIF PRESSURES", motifs),
-            ("FROZEN THRESHOLD GEOMANCY", relevant_geomancy),
-            ("RECENT LOCAL SOURCE", recent),
-            ("SOFT FUTURE PRESSURES", soft_obligations),
-        ],
-        manifest["budgets"]["max_prepared_context_tokens"] - 14000,
-    )
+            ("BRANCH RESIDUE", [item for item in obligations.values() if item["data"]["kind"] == "branch_residue"]),
+            ("CLAIMANT PRESSURES", [item for item in obligations.values() if item["data"].get("relevance", {}).get("claimant_ids")]),
+        ])
+    checkpoint = index_checkpoint(run_dir)
+    receipt.setdefault("selected_constraints", [{"constraint_id": event["constraint_id"], "event_sequence": event["constraint_event_sequence"]} for event in selected])
+    receipt.update({"version": 1, "index_version": INDEX_VERSION, "canonical_state_hash": checkpoint["canonical_hash"],
+        "ledger_sequence": checkpoint["ledger_sequence"], "event_sequence": checkpoint["event_sequence"],
+        "query": query,
+        "selected_sources": [], "omissions": []})
+    dependency_catalog = _source_index(run_dir, [record["commit_id"] for record in dependencies])
+    for record in dependencies:
+        receipt["selected_sources"].append({"source_id": record["commit_id"], "source_commit_id": record["commit_id"],
+            "source_hash": dependency_catalog[record["commit_id"]]["hash"], "record_pointer": "", "required": True})
+    receipt["selected_sources"].extend({key: source.get(key) for key in ("source_id", "source_commit_id", "source_hash", "record_pointer")} | {"required": True} for source in required_sources)
+    actual_step = step_id or packet_step_id(plan | {"advance_obligation_ids": plan.get("advance_obligation_ids", []), "may_satisfy_obligation_ids": plan.get("may_satisfy_obligation_ids", [])})
+    receipt_path = run_dir / ".staging" / f"{actual_step}.retrieval.json"
+    ceiling = manifest["budgets"]["max_prepared_context_tokens"] - 14000
+    # Check required inputs before doing optional searches or loading any optional original prose.
+    try:
+        pack_packet_context(required, [], ceiling, receipt)
+        recent = packet_records(run_dir, recent=2, verify=True)
+        covered_commits = {record["commit_id"] for record in dependencies}
+        covered_ids = {identifier for record in dependencies for identifier in generated_ids(record)} | {source["source_id"] for source in required_sources}
+        covered_commits.update(source["source_commit_id"] for source in required_sources if isinstance(source["immutable_source"], dict) and source["immutable_source"].get("commit_id") == source["source_commit_id"])
+        chosen, cache, source_chars = [], {}, 0
+        hits = search_history(run_dir, query, plan=plan)
+        receipt["source_candidate_count"] = len(hits)
+        ranks = {(hit["commit_id"],hit["pointer"]): {key: hit[key] for key in ("document_id", "bm25", "locality")} for hit in hits}
+        for hit in hits:
+            if hit["commit_id"] in covered_commits or hit["source_id"] in covered_ids or hit["kind"] == "root" and genesis:
+                receipt["omissions"].append({"source_id": hit["source_id"], "source_commit_id": hit["commit_id"], "record_pointer": hit["pointer"], "reason": "covered_by_required_context"})
+                continue
+            if len(chosen) >= SEARCH_SOURCE_LIMIT:
+                receipt["omissions"].append({"source_id": hit["source_id"], "reason": "source_count_limit"})
+                continue
+            # The catalog holds complete units, so skip oversized results without reading their archives.
+            with index_connection(run_dir) as db:
+                body_chars = db.execute("SELECT length(body) FROM search_documents WHERE id=?", (hit["document_id"],)).fetchone()[0]
+            if source_chars + body_chars > manifest["budgets"]["max_retrieved_source_tokens"] * 4:
+                receipt["omissions"].append({"source_id": hit["source_id"], "reason": "retrieval_budget"})
+                continue
+            source = read_search_source(run_dir, hit, cache)
+            size = len(compact_context_value(source))
+            if source_chars + size > manifest["budgets"]["max_retrieved_source_tokens"] * 4:
+                receipt["omissions"].append({"source_id": hit["source_id"], "reason": "retrieval_budget"})
+                continue
+            chosen.append(source)
+            source_chars += size
+            covered_ids.add(hit["source_id"])
+        if len(chosen) < SEARCH_SOURCE_LIMIT:
+            for source in retrieve_original_sources(run_dir, selected):
+                if source["source_id"] in covered_ids or source.get("source_commit_id") in covered_commits:
+                    continue
+                size = len(compact_context_value(source))
+                if len(chosen) < SEARCH_SOURCE_LIMIT and source_chars + size <= manifest["budgets"]["max_retrieved_source_tokens"] * 4:
+                    chosen.append(source)
+                    source_chars += size
+                    covered_ids.add(source["source_id"])
+                else:
+                    receipt["omissions"].append({"source_id": source["source_id"], "reason": "retrieval_budget"})
+        current_knowledge = {event["constraint_id"] for subject in knowledge for relation, propositions in subject.items() if isinstance(propositions, dict) for event in propositions.values()}
+        current_facts = {event["constraint_id"] for event in past}
+        historical = []
+        for event in selected:
+            kind = event["constraint_kind"]
+            reason = "superseded" if kind == "canonical_fact" and event["constraint_id"] not in current_facts else "retracted_or_superseded" if kind == "knowledge_state" and event["constraint_id"] not in current_knowledge else None
+            if kind in {"obligation", "obligation_update"} and event["data"].get("status") != obligations.get(event["data"]["obligation_id"], {}).get("data", {}).get("status"):
+                reason = "historical_obligation_status"
+            if reason:
+                historical.append({"authority": "CONSTRAINT HISTORY", "current_state_note": reason, "event": event})
+        # Source identities are deduplicated before packing; soft continuity may be omitted, never required inputs.
+        optional = [("RETRIEVED ORIGINAL SOURCE EVIDENCE", chosen),
+                    ("OTHER RELEVANT PAST CONSTRAINTS", [event for event in past if event["data"]["fact_id"] not in protected_fact_ids]),
+                    ("OTHER RELEVANT CHARACTER KNOWLEDGE", optional_knowledge), ("HISTORICAL CONSTRAINT EVENTS", historical),
+                    ("RELEVANT MOTIF PRESSURES", motifs), ("RECENT LOCAL SOURCE", [record for record in recent if record["commit_id"] not in covered_commits]),
+                    ("SOFT FUTURE PRESSURES", soft)]
+        text = pack_packet_context(required, optional, ceiling, receipt)
+        for source in chosen:
+            metadata = {key: source.get(key) for key in ("source_id", "source_commit_id", "source_hash", "record_pointer")}
+            if not any(item.get("source_id") == source["source_id"] and item.get("reason") == "prepared_context_budget" for item in receipt["omissions"]):
+                receipt["selected_sources"].append(metadata | ranks.get((source.get("source_commit_id"),source.get("record_pointer")), {}) | {"required": False})
+        return text
+    finally:
+        write_json(receipt_path, receipt)
 
 
 def evaluate_feasibility(architecture: dict, obligations: dict, foreclosure_candidates: dict) -> list[dict]:
@@ -3089,8 +4011,9 @@ def build_prospective_plan(run_dir: Path, architecture: dict, recomputed_after_c
             "reason": "Eligible by committed dependencies; ranked by active constraint pressure and initial priority.",
         })
     packet_order.sort(key=lambda item: (-item["score"], item["packet_slot_id"]))
-    history = run_dir / "planning/prospective-plans.jsonl"
-    sequence = len(history.read_text(encoding="utf-8").splitlines()) + 1 if history.exists() else 1
+    ensure_index(run_dir)
+    with index_connection(run_dir) as db:
+        sequence = db.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM plans").fetchone()[0]
     return {
         "record_type": "prospective_plan",
         "protocol_version": PROTOCOL_VERSION,
@@ -3120,9 +4043,8 @@ def recompute_prospective_plan(run_dir: Path, recomputed_after_commit_id: str) -
         handle.write(canonical_json(plan))
         handle.flush()
         os.fsync(handle.fileno())
-    write_json(run_dir / "state/prospective-plan.json", plan)
     plan_hash = sha256_bytes(canonical_json(plan))
-    append_deterministic_step(run_dir, step_id, "prospective_plan", plan_hash, prospective_plan_hash=plan_hash)
+    append_deterministic_step(run_dir, step_id, "prospective_plan", plan_hash, prospective_plan_hash=plan_hash, plan=plan)
     return plan
 
 
@@ -3156,7 +4078,7 @@ def select_next_packet(run_dir: Path, architecture: dict) -> dict | None:
 def step_is_committed(run_dir: Path, step_id: str) -> bool:
     return any(
         entry["planned_step_id"] == step_id and entry["commit_status"] == "COMMITTED"
-        for entry in ledger_entries(run_dir)
+        for entry in step_entries(run_dir, step_id)
     )
 
 
@@ -3696,7 +4618,7 @@ def request_architecture_analysis(
         current_prompt = prompt + feedback
         if planning_mode:
             parameters["max_tokens"] = planning_output_limit(run_dir, current_prompt, schema, maximum, pause_stage, purpose=context_purpose)
-        entries = [entry for entry in ledger_entries(run_dir) if entry["planned_step_id"] == step_id]
+        entries = step_entries(run_dir, step_id)
         attempts = [entry["attempt"] for entry in entries]
         attempt = max(attempts, default=0) + 1
         if planning_mode:
@@ -3790,7 +4712,7 @@ def architecture_plan_schema_failure_count(run_dir: Path, step_id: str) -> int:
     return sum(
         entry["planned_step_id"] in {step_id, f"{step_id}_expanded"}
         and entry["failure_class"] == "malformed_response"
-        for entry in ledger_entries(run_dir)
+        for entry in step_entries(run_dir, step_id) + step_entries(run_dir, f"{step_id}_expanded")
     )
 
 
@@ -3854,7 +4776,7 @@ def repair_architecture_plan_batch_payload(
             annotations[packet_id] = matches[0]
 
     failed_entries = [
-        entry for entry in ledger_entries(run_dir)
+        entry for entry in step_entries(run_dir, step_id) + step_entries(run_dir, f"{step_id}_expanded")
         if entry["planned_step_id"] in {step_id, f"{step_id}_expanded"}
         and entry["failure_class"] == "malformed_response"
     ]
@@ -4750,11 +5672,14 @@ def semantic_prompt(artistic: dict, context: str, instruction: str, accepted=Non
               "\nRELEVANT CANON AND CONSTRAINTS\n" + compact_semantic_context(context) + "\n")
     if accepted is not None:
         prompt += "ACCEPTED SEMANTIC METADATA\n" + canonical_json(accepted).decode()
-    return prompt + "\nINSTRUCTION\n" + SEMANTIC_INSTRUCTION + " " + instruction
+    return prompt + "\nINSTRUCTION\n" + SEMANTIC_INSTRUCTION + " " + instruction + (
+        " Retrieved PLANNED INTENTION describes future work, not events established by this payload. "
+        "CONSTRAINT HISTORY may be superseded or retracted. Derive new assertions only from the immutable artistic payload. "
+        "Each $context_ref expands to the exact source metadata object in SHARED SOURCE METADATA.")
 
 
 def semantic_attempt(run_dir: Path, step_id: str) -> int:
-    attempts = [entry["attempt"] for entry in ledger_entries(run_dir) if entry["planned_step_id"] == f"{step_id}_semantic"]
+    attempts = [entry["attempt"] for entry in step_entries(run_dir, f"{step_id}_semantic")]
     attempts.extend(int(match.group(1)) for path in (run_dir / "raw").glob(f"{step_id}-semantic-attempt*.api.json")
                     if (match := re.fullmatch(rf"{re.escape(step_id)}-semantic-attempt([0-9]+)\.api\.json", path.name)))
     return max(attempts, default=0) + 1
@@ -4824,8 +5749,7 @@ def seed_semantic_recovery(run_dir: Path, step_id: str, artistic: dict, response
 def semantic_event_capacity(run_dir: Path, payload: dict) -> None:
     manifest = run_dir / "run-manifest.json"
     if manifest.exists():
-        events = run_dir / "constraints/constraint-events.jsonl"
-        used = len(events.read_text().splitlines()) if events.exists() else 0
+        used = index_checkpoint(run_dir)["event_sequence"]
         if used + sum(len(items) for items in payload.values()) > read_json(manifest)["budgets"].get("max_constraint_events", float("inf")):
             raise CathedralsError("Semantic normalization", "Semantic normalization exceeds max_constraint_events", "budget_exhaustion")
 
@@ -4867,7 +5791,7 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
         write_json(path, state)
     for key in SEMANTIC_CATEGORIES:
         failures = 0
-        ledger_start = len(ledger_entries(run_dir))
+        ledger_start = index_checkpoint(run_dir)["ledger_sequence"]
         while not state["complete"][key]:
             semantic_event_capacity(run_dir, state["payload"])
             size = state["page_size"][key]
@@ -4932,7 +5856,7 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
                     state["calls"].append({"step_id": query, "attempt": meta["attempt"], "category": key})
                 if error is None:
                     preserve_planning_result(run_dir, step_id, query, result, response, kind="semantic_page", phase="validation")
-                elif not any(entry["planned_step_id"] == query and entry["attempt"] == meta["attempt"] for entry in ledger_entries(run_dir)):
+                elif not any(entry["planned_step_id"] == query and entry["attempt"] == meta["attempt"] for entry in step_entries(run_dir, query)):
                     append_failed_attempt(run_dir, step_id=query, attempt=meta["attempt"], phase="validation", prompt=prompt,
                         context=context, parameters=meta["parameters"], started_at=response.get("_cathedrals_started_at", utc_now()),
                         failure_class=error.failure_class, step_type="analysis", usage=response.get("usage") or {})
@@ -4958,7 +5882,7 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
             write_json(path, state)
             if failures >= 3:
                 attempts = sum(entry["planned_step_id"].startswith(f"{step_id}_semantic_{key}_")
-                               for entry in ledger_entries(run_dir)[ledger_start:])
+                               for entry in indexed_ledger(run_dir, after=ledger_start))
                 raise PausedError("Semantic normalization", f"{key} exhausted {failures} page correction attempts in this invocation. "
                     f"This category made {attempts} provider attempts. Accepted metadata and prose were retained. Last problem: {error.reason}") from error
     semantic_event_capacity(run_dir, state["payload"])
@@ -5073,7 +5997,7 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
             target.unlink(missing_ok=True)
             semantic_api_path.unlink(missing_ok=True)
             assembled = isinstance(response, dict) and response.get("_cathedrals_semantic_assembled")
-            already_accounted = any(entry["planned_step_id"] == f"{step_id}_semantic" and entry["attempt"] == attempt for entry in ledger_entries(run_dir))
+            already_accounted = any(entry["attempt"] == attempt for entry in step_entries(run_dir, f"{step_id}_semantic"))
             if not assembled and not already_accounted:
                 append_failed_attempt(run_dir, step_id=f"{step_id}_semantic", attempt=attempt, phase="validation", prompt=prompt,
                     context=context, parameters=parameters, started_at=started, failure_class=error.failure_class, step_type="analysis",
@@ -5897,21 +6821,23 @@ def architecture_plan_prompt(run_dir: Path, specs: list[dict], sequence: int, co
     ), context
 
 
-def packet_prompt(run_dir: Path, architecture: dict, plan: dict) -> tuple[str, str]:
-    context = relevant_packet_context(run_dir, architecture, plan)
-    packet_sequence = 1 + sum(
-        record.get("record_type") == "creative_packet" for record in all_committed_records(run_dir)
-    )
+def packet_prompt(run_dir: Path, architecture: dict, plan: dict, *, step_id=None) -> tuple[str, str]:
+    actual_step = step_id or packet_step_id(plan)
+    receipt = {}
+    context = relevant_packet_context(run_dir, architecture, plan, receipt=receipt, step_id=actual_step)
+    with index_connection(run_dir) as db:
+        packet_sequence = 1 + db.execute("SELECT COUNT(*) FROM records WHERE record_type='creative_packet'").fetchone()[0]
     batch = plan_batch_for(run_dir, plan["packet_slot_id"])
     obligations = json.dumps(
-        plan | {
+        {
+            "packet_plan_location": "CURRENT PACKET STRUCTURAL POSITION in the context above",
             "packet_sequence": packet_sequence,
             "architecture_core_commit_id": architecture["architecture_core_commit_id"],
             "packet_plan_commit_id": batch["commit_id"],
             "logical_packet_literary_word_target": PACKET_LITERARY_WORD_TARGET,
         },
         ensure_ascii=False,
-        indent=2,
+        separators=(",", ":"),
     ) + "\n\nAuthor only the assigned scenes or endings. Nest each artifact, choice, and formal composition under its owning content. Fill every listed technical slot exactly once and meet the allocated artifact/composition totals. The engine supplies IDs, envelopes, sequences, parent commits, geomancy, reverse references, provenance, and semantic constraint metadata."
     if plan["packet_kind"] == "literary":
         name = "generation-packet.md"
@@ -5931,13 +6857,18 @@ def packet_prompt(run_dir: Path, architecture: dict, plan: dict) -> tuple[str, s
                 packet_payload_schema(run_dir, plan), ensure_ascii=False, separators=(",", ":")
             ),
         }
-    return render_prompt(run_dir, name, replacements), context
+    prompt = render_prompt(run_dir, name, replacements)
+    receipt["prepared_prompt_bytes"] = len(prompt.encode())
+    receipt["estimated_prompt_tokens"] = math.ceil(len(prompt)/4)
+    receipt["prompt_hash"] = sha256_bytes(prompt.encode())
+    write_json(run_dir / ".staging" / f"{actual_step}.retrieval.json", receipt)
+    return prompt, context
 
 
 def step_was_truncated(run_dir: Path, step_id: str) -> bool:
     return any(
         entry["planned_step_id"] == step_id and entry["failure_class"] == "provider_truncation"
-        for entry in ledger_entries(run_dir)
+        for entry in step_entries(run_dir, step_id)
     )
 
 
@@ -5961,8 +6892,7 @@ def expanded_output_limit(run_dir: Path, prompt: str, base_step_id: str) -> int:
     observed = max(
         (
             entry["token_accounting"]["input_tokens"] or 0
-            for entry in ledger_entries(run_dir)
-            if entry["planned_step_id"] == base_step_id
+            for entry in step_entries(run_dir, base_step_id)
         ),
         default=0,
     )
@@ -6050,7 +6980,7 @@ def request_packet_slice(run_dir: Path, architecture: dict, plan: dict, transpor
         expanded_id = packet_step_id(plan, expanded=True)
         if step_was_truncated(run_dir, expanded_id):
             raise TruncationError("A single-content packet was truncated after its context-safe expanded retry")
-        prompt, context = packet_prompt(run_dir, architecture, plan)
+        prompt, context = packet_prompt(run_dir, architecture, plan, step_id=expanded_id)
         maximum = expanded_output_limit(run_dir, prompt, step_id)
         if maximum <= BASE_OUTPUT_TOKENS:
             raise TruncationError("A single-content packet was truncated and the model context has no safe expansion headroom")
@@ -6225,7 +7155,7 @@ def planning_output_limit(run_dir: Path, prompt: str, schema: dict, requested: i
 
 def preserve_planning_result(run_dir: Path, step_id: str, repair_step: str, result, response: dict, *, kind: str, phase="architecture") -> None:
     meta = response["_cathedrals_request"]
-    if not any(item["planned_step_id"] == repair_step and item["attempt"] == meta["attempt"] for item in ledger_entries(run_dir)):
+    if not any(item["planned_step_id"] == repair_step and item["attempt"] == meta["attempt"] for item in step_entries(run_dir, repair_step)):
         state = load_state(run_dir)
         entry = new_ledger_entry(run_dir, planned_step_id=repair_step, attempt=meta["attempt"],
             step_type="analysis", step_phase=phase, parent_state_hash=state["canonical_state_hash"],
@@ -6235,7 +7165,7 @@ def preserve_planning_result(run_dir: Path, step_id: str, repair_step: str, resu
             motif_ids=[], branch_relation=None, commit_status="COMMITTED", state_hash_after=state["canonical_state_hash"],
             failure_class="none", usage=response.get("usage") or {})
         append_ledger_entry(run_dir, entry)
-        reconcile_run(run_dir)
+        refresh_run_counters(run_dir)
     repair_path = run_dir / ".staging" / f"{step_id}.repair.json"
     audit = read_json(repair_path) if repair_path.exists() else {"history": []}
     if not any(item["step_id"] == repair_step for item in audit["history"]):
@@ -7021,7 +7951,7 @@ def execute_planning_phases(run_dir: Path, transport=http_json) -> list[dict]:
         if state["bulk_failed"]:
             response = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(state["payload"], ensure_ascii=False)}}],
                         "usage": {}, "_cathedrals_assembled_from_fields": True}
-        attempt = max((item["attempt"] for item in ledger_entries(run_dir) if item["planned_step_id"] == step), default=0) + 1
+        attempt = max((item["attempt"] for item in step_entries(run_dir, step)), default=0) + 1
         commit_record(run_dir, record, json.dumps(state["payload"], ensure_ascii=False), response,
             planned_step_id=step, attempt=attempt, step_phase="architecture", prompt=state["prompt"], context=state["context"],
             parameters=state["bulk_response"].get("_cathedrals_request", {}).get("parameters", {"temperature": 0.7, "max_tokens": EXPANDED_OUTPUT_TOKENS, "seed": step_seed(read_json(run_dir / 'generation-brief.json')['generation_seed'], step), "stream": True}),
@@ -7534,7 +8464,7 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
     if commit_path.exists():
         meta = read_json(commit_path)
         entry = meta["ledger_entry"]
-        matches = [item for item in ledger_entries(run_dir) if item["planned_step_id"] == step_id and item["commit_status"] == "COMMITTED"]
+        matches = [item for item in step_entries(run_dir, step_id) if item["commit_status"] == "COMMITTED"]
         if not matches:
             entries = ledger_entries(run_dir)
             if entry["previous_entry_hash"] != (entries[-1]["entry_hash"] if entries else None):
@@ -7548,11 +8478,11 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
             write_json(result_path, meta["verdict"], mode=0o444, exclusive=True)
         if sha256_bytes(canonical_json(read_json(result_path))) != entry["output_hash"]:
             raise IntegrityError(f"Committed analysis verdict changed for {step_id}")
-        reconcile_run(run_dir)
+        ensure_index(run_dir)
         return meta["verdict"]
     if result_path.exists() or raw_path.exists():
         raise IntegrityError(f"Analysis output exists without commit metadata: {step_id}")
-    reconcile_run(run_dir)
+    ensure_index(run_dir)
     state = load_state(run_dir)
     brief = read_json(run_dir / "generation-brief.json")
     seed = step_seed(brief["generation_seed"], step_id)
@@ -7566,7 +8496,7 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
         **parameters,
         "response_format": {"type": "json_schema", "json_schema": {"name": "artistic_verdict", "strict": True, "schema": ARTISTIC_SCHEMA}},
     }
-    attempt = 1 + sum(entry["planned_step_id"] == step_id for entry in ledger_entries(run_dir))
+    attempt = 1 + len(step_entries(run_dir, step_id))
     started_at = utc_now()
     response = None
     content = None
@@ -7656,7 +8586,7 @@ def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http
     append_ledger_entry(run_dir, entry)
     write_json(raw_path, response, mode=0o444, exclusive=True)
     write_json(result_path, verdict, mode=0o444, exclusive=True)
-    reconcile_run(run_dir)
+    ensure_index(run_dir)
     return verdict
 
 
@@ -8125,8 +9055,8 @@ def finalize_failure(run_dir: Path, error: CathedralsError) -> dict:
 
 
 def ensure_resume_ready(run_dir: Path, output_fn=print, transport=http_json, input_fn=input) -> None:
-    state = load_state(run_dir)
     reconcile_run(run_dir)
+    state = load_state(run_dir)
     brief = read_json(run_dir / "generation-brief.json")
     payload = transport("GET", api_url(brief["lm_studio_base_url"], "/v1/models"), timeout=10.0)
     models = usable_model_ids(payload)
