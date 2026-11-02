@@ -112,6 +112,31 @@ follow the same verified-archive rebuild path as core state. Frozen snapshots re
 their own implementation. Details and measured limits are in
 [FTS5 retrieval](fts5-retrieval.md).
 
+Packet capacity checks use exact shared source records and phase-specific instruction
+profiles from frozen engine inputs. The whole Genesis foundation, cast, and constraints
+appear once; prerequisite references point to those objects. Narrative doctrine and
+mechanics remain required. Development milestones and unrelated workflow instructions
+are excluded from the packet profile. Normalization has its own extraction profile,
+preserving complete artistic/source content and relevant state.
+
+The engine measures prompt instructions/schema overhead and estimates packet input
+as UTF-8 bytes/3. It keeps the frozen input ceiling and reserves output/safety space;
+correction feedback is checked before another request. Capacity receipts count shared
+source payloads once and report per-role reference overhead. See
+[the packet-capacity regression](packet-context-capacity.md).
+
+Model preflight requires the selected model's unique loaded instance and actual
+`config.context_length`. It never uses another model's capacity or a theoretical
+maximum. Load the intended model explicitly with at least 64,148 context tokens.
+Ambiguous model keys require an exact instance ID. Streamed context rejections retain
+the full provider error and show the `LM Studio context capacity` stage with the
+actual requested and available token counts. They follow the existing incomplete-
+response preservation path and do not trigger repeated automatic writing attempts.
+
+These changes apply to new engine snapshots. Updating an installation does not
+change a paused run's frozen launcher or inputs; test the corrected engine in a new
+generation rather than editing archived snapshots or receipts.
+
 ## Provenance and Counters
 
 Every attempted step records generation ID, ledger sequence, planned step and attempt,

@@ -103,6 +103,42 @@ class ProviderStreamingTests(unittest.TestCase):
         with self.assertRaises(RUNNER.SchemaError):
             RUNNER.parse_structured_content('{"unfinished":')
 
+    def test_context_refusal_preserves_full_error_and_names_the_loaded_capacity(self):
+        detail = ('Engine protocol predict request returned 400: {"error":{"code":400,"message":'
+            '"request (23308 tokens) exceeds the available context size (8192 tokens), try increasing it",'
+            '"type":"exceed_context_size_error","n_prompt_tokens":23308,"n_ctx":8192}}')
+        data = ('event: error\ndata: ' + json.dumps({"error": {"message": detail}}) + '\n\n').encode()
+        archive = io.BytesIO()
+        with self.assertRaises(RUNNER.IncompleteResponseError) as raised:
+            RUNNER.read_chat_stream(Stream(data), archive=archive, report=False)
+        error = raised.exception
+        self.assertEqual(error.stage, "LM Studio context capacity")
+        self.assertIn("23,308", error.reason)
+        self.assertIn("8,192", error.reason)
+        self.assertIn("64,148", error.reason)
+        self.assertIn(detail, error.reason)
+        self.assertNotIn("Invalid stream event", error.reason)
+        self.assertEqual(archive.getvalue(), data)
+        self.assertEqual(error.response["_cathedrals_provider_error"]["message"], detail)
+        with self.assertRaises(RUNNER.IncompleteResponseError) as replayed:
+            RUNNER.normalize_provider_response(error.response)
+        self.assertEqual(replayed.exception.stage, error.stage)
+        self.assertIn(detail, replayed.exception.reason)
+
+    def test_context_refusal_archives_one_attempt_without_retrying(self):
+        detail = "request (23308 tokens) exceeds the available context size (8192 tokens), try increasing it"
+        data = ('data: ' + json.dumps({"error": {"message": detail}}) + '\n\n').encode()
+        with mock.patch.object(RUNNER.urllib.request, "urlopen", return_value=Stream(data)) as post, contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(RUNNER.IncompleteResponseError):
+                RUNNER.request_record(self.run, expected_record_type="genesis_foundation", step_id="context_refused", phase="genesis",
+                    prompt="prompt", context="context", branch_relation="root", temperature=0.8)
+        post.assert_called_once()
+        raw = self.run / "raw/context_refused-attempt1.api.json"
+        self.assertIn(detail, RUNNER.read_json(raw)["_cathedrals_error"])
+        self.assertEqual(raw.with_suffix(".sse").read_bytes(), data)
+        self.assertEqual(len(RUNNER.step_entries(self.run, "context_refused")), 1)
+        self.assertFalse((self.run / "state/inflight.json").exists())
+
     def test_interrupted_stream_saves_partial_evidence_and_resume_uses_new_attempt(self):
         prefix = event({"content": '{"name":'})
         arguments = dict(expected_record_type="genesis_foundation", step_id="stream_test", phase="genesis",

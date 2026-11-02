@@ -354,7 +354,7 @@ no more than 2. FTS rank replaces metadata word-overlap scoring with a bounded
 history. Thus Scene 130 may retrieve Scene 12 even when its relevant detail was
 never extracted into a constraint.
 
-Required inputs include engine law, brief, full generated root canon, the local
+Required inputs include applicable engine law, brief, full generated root canon, the local
 packet plan, whole predecessor packets, assigned obligations and their recursive
 prerequisites, cited proof, and the selected current facts/knowledge tied to that
 evidence. These bypass optional retrieval limits. Ending-specific prerequisite,
@@ -368,7 +368,26 @@ coverage is deduplicated; optional constraints, knowledge, historical state, mot
 recent prose, and soft pressure fill remaining prepared-context space. No unit is
 clipped. JSON uses compact separators and repeated source-reference metadata can
 use exact `$context_ref` objects; authored strings and literary units stay complete.
-The local plan appears once. Context estimates retain the engine's characters/4 rule.
+The three original Genesis records appear once in SHARED SOURCE RECORDS, with root
+canon and prerequisite roles referencing their complete objects. Sources share only
+when owning commit, source hash, JSON Pointer, and payload agree. Conflicting payloads
+fail integrity checking. The merged Genesis view remains internal to entity lookup.
+
+Packet instructions retain full ontology, style, grammar, claimant/state, constitution,
+branching, and web law, plus exact binding sections of the frozen work-instance and
+workflow files. Development milestones and unrelated execution instructions stay in
+the frozen snapshot rather than every writing prompt. Normalization retains the
+instructions, ontology, state model, and authorship/generation/validation/integrity
+rules alongside the same complete source objects and required state. It does not
+carry the packet's style and operational manuals. The selected section names and
+original file hashes are recorded in the retrieval receipt.
+
+The local plan appears once. Packet estimates use conservative UTF-8 bytes/3,
+matching analysis. Render the instructions, execution envelope, and schema before
+packing context; reserve their measured size instead of subtracting a fixed 14,000
+tokens. The frozen input ceiling remains unchanged, and output/safety reserves also
+constrain the available model window. Recheck the complete request and correction
+feedback before dispatch. No required source is clipped to meet a limit.
 
 Plans, committed literary material, composition metadata, root canon, and historical
 constraints carry distinct authority labels. Superseded facts and retracted knowledge
@@ -378,7 +397,8 @@ independent of FTS rank.
 
 Each writing attempt preserves a compact retrieval receipt containing query terms,
 candidate counts, selected constraint ranks/scores, source IDs/hashes/pointers,
-omissions, state/context/prompt hashes, and size estimates. Receipts contain no prose.
+omissions, instruction-profile provenance, shared-source coverage and savings,
+state/context/prompt hashes, and size estimates. Receipts contain no prose.
 Saved writing reuses its original attempt receipt; the accepted receipt is hashed
 supplemental commit provenance. See [implementation and rehearsal](fts5-retrieval.md).
 

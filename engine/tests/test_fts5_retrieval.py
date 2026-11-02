@@ -22,7 +22,7 @@ def decode_context(text):
     sections = {}
     parts = re.split(r"^===== (.*?) =====\n", text, flags=re.MULTILINE)
     for label, body in zip(parts[1::2], parts[2::2]):
-        if label == "SHARED SOURCE METADATA":
+        if label in {"SHARED SOURCE METADATA", "SHARED SOURCE RECORDS"}:
             body = body.split("\n", 1)[1]
         values = []
         decoder = json.JSONDecoder()
@@ -37,6 +37,7 @@ def decode_context(text):
             body = body[end:]
         sections.setdefault(label, []).extend(values)
     shared = sections.pop("SHARED SOURCE METADATA", [{}])[0]
+    shared.update(sections.pop("SHARED SOURCE RECORDS", [{}])[0])
 
     def expand(value):
         if isinstance(value, dict):
@@ -58,7 +59,14 @@ class FTS5RetrievalTests(unittest.TestCase):
         law = self.run / "state/frozen-engine-context.txt"
         law.chmod(0o644)
         law.write_text("Synthetic engine law.")
-        self.architecture = {"obligation_graph": [], "attractors": [], "arcs": [], "packet_plans": []}
+        for patch in (
+            mock.patch.object(RUNNER, "packet_root_sources", return_value=[]),
+            mock.patch.object(RUNNER, "instruction_profile", return_value=("Synthetic engine law.", {"purpose": "fixture"})),
+            mock.patch.object(RUNNER, "plan_batch_for", return_value={"commit_id": "fixture_batch"}),
+        ):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.architecture = {"architecture_core_commit_id": "fixture_core", "obligation_graph": [], "attractors": [], "arcs": [], "packet_plans": []}
 
     def commit(self, number, *, prose=None, title=None, change=None):
         record = packet(self.run.name, number)
@@ -178,7 +186,7 @@ class FTS5RetrievalTests(unittest.TestCase):
         self.commit(2, prose="x" * 160000)
         transport = mock.Mock()
         oversized = plan(depends_on_packet_slot_ids=["packet_000002"])
-        with mock.patch.object(RUNNER, "committed_record", return_value={"record_type": "genesis"}), mock.patch.object(
+        with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: self.architecture if kind == "architecture" else {"record_type": "genesis"}), mock.patch.object(
             RUNNER, "ensure_frozen_geomancy", return_value={"assignments": []}
         ), self.assertRaises(RUNNER.PausedError):
             RUNNER.request_packet_slice(self.run, self.architecture, oversized, transport)

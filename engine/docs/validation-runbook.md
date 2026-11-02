@@ -125,6 +125,17 @@ saved-writing/receipt replay are covered. The 20-scene integration run also veri
 root/plan/literary/composition/constraint catalog coverage, repeated claimant IDs,
 and hash-checked accepted receipts.
 
+The packet-capacity suite reproduces the saved first-packet overflow with synthetic
+record sizes and eight prerequisite citations into three Genesis commits. Both
+writing and initial/paged normalization must fit the unchanged input ceiling. Expand
+shared references to verify every required field and role; raw source objects must
+appear once. Check exact frozen instruction sections and hashes, mismatched source
+payloads, missing Genesis commits, archive tampering, Unicode byte estimates,
+optional omissions, and required overflow. Correction feedback and output/safety
+reserves must be checked before dispatch. Preflight tests reject unloaded, undersized,
+ambiguous, and unmeasurable selected instances without borrowing another model's
+capacity. Streamed context refusals preserve complete diagnostics and one attempt.
+
 The storage benchmark now also reports old metadata-scan versus indexed selection
 timings and decoded-event counts, prose-only evidence rank, context size/time, and
 fixed-coverage formatting savings. Search after a deleted-index rebuild must retain

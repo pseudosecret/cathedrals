@@ -36,8 +36,10 @@ bounded correction attempts before prose preservation and then pauses if still i
 Retrieved PLANNED INTENTION guides future writing without establishing fictional
 events. CONSTRAINT HISTORY may be superseded or retracted; respect current state.
 Search matches do not establish character or reader knowledge. Each `$context_ref`
-expands to the exact source metadata object in SHARED SOURCE METADATA. Literary
-source units retain their original wording and whitespace.
+expands to the complete object in SHARED SOURCE RECORDS or SHARED SOURCE METADATA.
+Read Genesis foundation anchors, cast profiles, and constraint extensions together.
+Every cited source appears in full once; its references retain each required role.
+Literary source units retain their original wording and whitespace.
 
 FROZEN AND RETRIEVED ENDING CONTEXT BEGINS
 

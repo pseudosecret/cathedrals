@@ -60,9 +60,13 @@ checkpoints, constraint ranks/scores, selected source IDs/commit hashes/pointers
 omissions, prompt/context hashes, and byte/token estimates. The accepted commit
 archives `retrieval-receipt.json` through the existing supplemental-file hash map;
 replay and publication preserve it. A capacity-failure staging receipt can exist
-without a writing attempt. Prompt-only `$context_ref` objects share exact repeated
-source-reference metadata; they do not change the underlying record protocol or
-literary source strings.
+without a writing attempt. Receipts also identify instruction-profile source hashes
+and selected sections, actual prompt overhead, shared-source coverage, and saved
+payload bytes. Prompt-only `$context_ref` objects address complete objects in SHARED
+SOURCE RECORDS or SHARED SOURCE METADATA. Record identities use owning commit, source
+hash, and JSON Pointer; their full payloads appear once, preserving every reference
+role. Root canon references the three original Genesis archives. These references
+do not change the underlying record protocol, source bytes, or database schema.
 
 ## Record Protocol
 

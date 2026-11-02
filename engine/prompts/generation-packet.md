@@ -61,8 +61,11 @@ Retrieved material is author working memory. PLANNED INTENTION describes future
 work; it does not establish that an event has occurred. CONSTRAINT HISTORY may be
 superseded or retracted; use the supplied current state for character knowledge and
 active obligations. Search matches do not grant knowledge to characters or readers.
-Each `$context_ref` expands to the exact source metadata object in SHARED SOURCE
-METADATA. Complete literary units retain their original wording and whitespace.
+Each `$context_ref` expands to the complete object in SHARED SOURCE RECORDS or
+SHARED SOURCE METADATA. Read the three original Genesis records together: foundation
+anchors, cast profiles, and committed constraint extensions jointly define root canon.
+Every cited source appears in full once; its references retain each required role.
+Complete literary units retain their original wording and whitespace.
 
 FROZEN AND RETRIEVED CONTEXT BEGINS
 

@@ -2442,6 +2442,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             )
             RUNNER.write_state_map(run, "canonical-facts.json", {"fact_reader_state": reader_fact}
             )
+            RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
             RUNNER.write_state_map(run, "obligations.json", {"obligation_one": satisfied}
             )
             for name in ("knowledge-state.json", "motifs.json"):
@@ -2458,6 +2459,8 @@ class CathedralsRunnerTests(unittest.TestCase):
                 RUNNER, "retrieve_original_sources", return_value=[]
             ), mock.patch.object(
                 RUNNER, "ensure_frozen_geomancy", return_value={"assignments": []}
+            ), mock.patch.object(RUNNER, "packet_root_sources", return_value=[]), mock.patch.object(
+                RUNNER, "instruction_profile", return_value=("law", {"purpose": "fixture"})
             ):
                 context = RUNNER.relevant_packet_context(
                     run, architecture_fixture(), plan
@@ -2497,6 +2500,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
             (run / "state").mkdir()
+            RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
             (run / "state/frozen-engine-context.txt").write_text(
                 "law", encoding="utf-8"
             )
@@ -2527,6 +2531,8 @@ class CathedralsRunnerTests(unittest.TestCase):
                 RUNNER, "retrieve_original_sources", return_value=[]
             ), mock.patch.object(
                 RUNNER, "ensure_frozen_geomancy", return_value={"assignments": []}
+            ), mock.patch.object(RUNNER, "packet_root_sources", return_value=[]), mock.patch.object(
+                RUNNER, "instruction_profile", return_value=("law", {"purpose": "fixture"})
             ):
                 context = RUNNER.relevant_packet_context(
                     run, architecture_fixture(), plan

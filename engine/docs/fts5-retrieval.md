@@ -33,7 +33,7 @@ and 96 recent events. The final optional selection keeps at most 96 events, usin
 existing structural weights plus a bounded FTS-rank bonus. Structural source and
 obligation lookup remains independent of lexical matching.
 
-The engine retains required canon, the whole local plan and predecessor packets,
+The engine retains required narrative canon, the whole local plan and predecessor packets,
 assigned obligations and prerequisite closure, their cited evidence, and selected
 current state tied to that evidence. Required proof bypasses optional search limits.
 Optional discovery permits up to 24 complete units within the frozen retrieval
@@ -42,11 +42,20 @@ and soft pressures into remaining context. New runs retain the existing 12,288-t
 optional retrieval allowance and prepared-context ceiling.
 
 Original source units come from checksum-verified archive records. JSON formatting
-is compact; repeated source-reference metadata can share exact `$context_ref`
-objects. Literary strings stay complete, the local plan is displayed once, and
-required section roles remain explicit. Required overflow pauses before the provider
-call with component sizes. Optional overflow omits complete units and records why.
-Token estimates retain the existing characters/4 heuristic.
+is compact; exact source payloads appear once in SHARED SOURCE RECORDS, and repeated
+source-reference metadata can share objects in SHARED SOURCE METADATA. `$context_ref`
+preserves every role while addressing a complete object. Genesis uses its three
+original archives, with prerequisite citations pointing into that same shared pool.
+Sharing requires matching owning commit, hash, pointer, and payload. Literary strings
+stay complete and the local plan is displayed once. Required overflow pauses before
+the provider call with shared payloads counted once; optional overflow omits complete
+units and records why.
+
+The later [packet-capacity correction](packet-context-capacity.md) adds phase-specific
+instruction profiles and replaces the fixed 14,000-token overhead allowance with the
+rendered instructions/schema size. Packet estimates now use conservative UTF-8 bytes/3,
+matching analysis. The frozen input and retrieval ceilings remain unchanged. The
+measurements below precede that correction and retain their original estimator.
 
 Labels distinguish planned intentions, root canon, committed literary material,
 composition metadata, and constraint history. Retracted/superseded history does not

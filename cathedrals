@@ -46,6 +46,7 @@ BASE_OUTPUT_TOKENS = 10900
 EXPANDED_OUTPUT_TOKENS = 21800
 ANALYSIS_OUTPUT_TOKENS = 15000
 MIN_PLANNING_OUTPUT_TOKENS = 256
+RECORD_SYSTEM_PROMPT = "Execute the supplied Cathedrals phase. Return only the schema-constrained payload."
 REFERENCE_REPAIRS_PER_CHUNK = 3
 GENESIS_CONSTRAINT_TOKENS = 8192
 INITIAL_CLAIMANT_MIN = 5
@@ -102,6 +103,16 @@ ARCHITECTURE_CONTEXT_FILES = (
     "docs/branching-architecture-contract.md",
     "formats/web.md",
 )
+PACKET_WORK_SECTIONS = (
+    "authorship_boundary", "surface_container", "central_transgression", "reader_role", "claimants",
+    "aesthetic_attractor", "branching_experience_model", "fractal_grammar", "threshold_geomancy",
+    "state_logic_profile", "scope", "format_selection", "generation_run", "validation",
+    "complete_work_barrier", "generated_output_integrity",
+)
+SEMANTIC_WORK_SECTIONS = ("authorship_boundary", "generation_run", "validation", "generated_output_integrity")
+PACKET_WORKFLOW_SECTIONS = (
+    "Invariant", "3. Commit Semantics", "5. Prospective Foreclosure", "7. Complete-Work Barrier", "Human Escalation",
+)
 
 
 class CathedralsError(Exception):
@@ -137,7 +148,21 @@ class TruncationError(CathedralsError):
 
 class IncompleteResponseError(CathedralsError):
     def __init__(self, reason: str, response: dict | None = None):
-        super().__init__("LM Studio response", reason, "provider_incomplete_response")
+        stage = "LM Studio response"
+        refusal = (response or {}).get("_cathedrals_provider_error")
+        if refusal:
+            detail = refusal.get("message", json.dumps(refusal, ensure_ascii=False)) if isinstance(refusal, dict) else str(refusal)
+            stage = "LM Studio request rejected"
+            reason = f"LM Studio rejected the request. Provider detail: {detail}"
+            capacity = re.search(r"request \((\d+) tokens\).*?available context size \((\d+) tokens\)", detail, re.I | re.S)
+            if capacity:
+                stage = "LM Studio context capacity"
+                reason = (f"LM Studio rejected a {int(capacity[1]):,}-token request because the selected instance has only "
+                    f"{int(capacity[2]):,} context tokens. Reload the selected model with at least "
+                    f"{49152 + BASE_OUTPUT_TOKENS + 4096:,} context tokens, then resume. Provider detail: {detail}")
+            if (response or {}).get("_cathedrals_error"):
+                reason = response["_cathedrals_error"]
+        super().__init__(stage, reason, "provider_incomplete_response")
         self.response = response
 
 
@@ -598,7 +623,10 @@ def read_chat_stream(response, *, archive=None, label="LM Studio", report=True):
             done = True
             return
         chunk = json.loads(data)
-        if not isinstance(chunk, dict) or chunk.get("error"):
+        if isinstance(chunk, dict) and chunk.get("error"):
+            result["_cathedrals_provider_error"] = chunk["error"]
+            raise ValueError("LM Studio rejected the request")
+        if not isinstance(chunk, dict):
             raise ValueError(f"Invalid stream event: {_json_value(chunk)}")
         for field in ("id", "created", "model", "system_fingerprint"):
             if field in chunk:
@@ -2525,6 +2553,48 @@ def engine_context(run_dir: Path | None = None, files=ENGINE_CONTEXT_FILES) -> s
     return "\n\n".join(sections)
 
 
+def instruction_profile(run_dir: Path, purpose="packet") -> tuple[str, dict]:
+    semantic = purpose == "semantic"
+    files = ("llm-instructions.md", "canon/ontology.md", "data/state-model.yaml") if semantic else tuple(
+        name for name in ENGINE_CONTEXT_FILES if name not in {"data/work-instance.yaml", "docs/generation-workflow-contract.md"})
+    sections, provenance = [], {"purpose": purpose, "sources": {}}
+    for name in (*files, "data/work-instance.yaml", *(("docs/generation-workflow-contract.md",) if not semantic else ())):
+        path = engine_root(run_dir) / name
+        text = path.read_text(encoding="utf-8")
+        source = {"hash": sha256_file(path)}
+        if name == "data/work-instance.yaml":
+            selected = SEMANTIC_WORK_SECTIONS if semantic else PACKET_WORK_SECTIONS
+            matches = list(re.finditer(r"(?m)^([a-z_][a-z_0-9]*):", text))
+        elif name == "docs/generation-workflow-contract.md":
+            selected = PACKET_WORKFLOW_SECTIONS
+            matches = list(re.finditer(r"(?m)^## (.+)$", text))
+        else:
+            selected, matches = None, []
+        if selected is not None:
+            found = {match[1]: text[match.start():matches[index + 1].start() if index + 1 < len(matches) else len(text)]
+                for index, match in enumerate(matches)}
+            if set(selected) - found.keys():
+                raise IntegrityError(f"Instruction profile sections are missing from {name}: " + ", ".join(sorted(set(selected) - found.keys())))
+            text = "\n".join(found[key] for key in selected)
+            source["sections"] = list(selected)
+        sections.append(f"===== engine/{name} =====\n{text}")
+        provenance["sources"][name] = source
+    text = "\n\n".join(sections)
+    provenance["hash"] = sha256_bytes(text.encode())
+    return text, provenance
+
+
+def estimated_prompt_tokens(text: str) -> int:
+    return math.ceil(len(text.encode("utf-8")) / 3)
+
+
+def packet_input_limit(run_dir: Path, output_tokens=BASE_OUTPUT_TOKENS) -> int:
+    budgets = read_json(run_dir / "run-manifest.json")["budgets"]
+    window = min(budgets.get("model_context_window_tokens", float("inf")),
+        load_state(run_dir).get("model_context_window_tokens", float("inf")))
+    return int(min(budgets["max_prepared_context_tokens"], window - output_tokens - budgets.get("context_safety_reserve_tokens", 4096)))
+
+
 def render_prompt(run_dir: Path, name: str, replacements: dict[str, str]) -> str:
     value = (engine_root(run_dir) / "prompts" / name).read_text(encoding="utf-8")
     for key, replacement in replacements.items():
@@ -2688,8 +2758,6 @@ def request_record(
 ) -> dict:
     state = load_state(run_dir)
     brief = read_json(run_dir / "generation-brief.json")
-    if len(prompt) // 4 > read_json(run_dir / "run-manifest.json")["budgets"]["max_prepared_context_tokens"]:
-        raise CathedralsError("Context assembly", f"Prepared prompt for {step_id} exceeds the frozen context budget", "budget_exhaustion")
     seed = step_seed(brief["generation_seed"], step_id)
     protocol = load_protocol(run_dir)
     response_definition = response_definition or RECORD_DEFS[expected_record_type]
@@ -2700,10 +2768,15 @@ def request_record(
     for correction in range(3):
         content = None
         current_prompt = prompt + feedback
+        prompt_tokens = estimated_prompt_tokens(RECORD_SYSTEM_PROMPT + current_prompt)
+        capacity = packet_input_limit(run_dir, max_tokens)
+        if prompt_tokens > capacity:
+            raise PausedError("Context assembly", f"Prepared request for {step_id} needs approximately {prompt_tokens:,} input tokens; "
+                f"ceiling {capacity:,} after output and safety reserves. No request was sent.", "budget_exhaustion")
         payload = {
             "model": load_state(run_dir)["model"],
             "messages": [
-                {"role": "system", "content": "Execute the supplied Cathedrals phase. Return only the schema-constrained payload."},
+                {"role": "system", "content": RECORD_SYSTEM_PROMPT},
                 {"role": "user", "content": current_prompt},
             ],
             **parameters,
@@ -2734,7 +2807,7 @@ def request_record(
                 receipt = saved
             else:
                 receipt = receipt | {"attempt": attempt, "prompt_hash": sha256_bytes(current_prompt.encode()),
-                    "prepared_prompt_bytes": len(current_prompt.encode()), "estimated_prompt_tokens": math.ceil(len(current_prompt)/4)}
+                    "prepared_prompt_bytes": len(current_prompt.encode()), "estimated_prompt_tokens": prompt_tokens}
                 write_json(attempt_receipt, receipt, mode=0o444, exclusive=True)
             write_json(retrieval_path, receipt)
         try:
@@ -3568,12 +3641,34 @@ def compact_context_value(value):
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+def packet_root_sources(run_dir):
+    kinds = ("genesis_foundation", "genesis_cast", "genesis_constraints")
+    with index_connection(run_dir) as db:
+        rows = db.execute("SELECT commit_id,record_type FROM records WHERE record_type IN (?,?,?) ORDER BY sequence", kinds).fetchall()
+    if [kind for _identifier, kind in rows] != list(kinds):
+        raise IntegrityError("Packet context requires all three original Genesis records")
+    cache = {}
+    return [read_search_source(run_dir, {"commit_id": identifier, "source_id": identifier, "pointer": "", "kind": "root"}, cache)
+        for identifier, _kind in rows]
+
+
 def pack_packet_context(required, optional, max_tokens, receipt):
-    def render(sections, compact):
-        sources = {}
+    def render(sections, compact, details=None):
+        sources, records = {}, {}
+
+        def record_identity(value):
+            if {"source_commit_id", "source_hash", "record_pointer", "immutable_source"}.issubset(value):
+                return (value["source_commit_id"], value["source_hash"], value["record_pointer"])
 
         def collect(value):
             if isinstance(value, dict):
+                identity = record_identity(value)
+                if identity is not None:
+                    payload = compact_context_value(value["immutable_source"])
+                    if identity in records and records[identity][1] != payload:
+                        raise IntegrityError("Conflicting immutable source payloads for the same commit/hash/pointer")
+                    entry = records.setdefault(identity, [value["immutable_source"], payload, 0])
+                    entry[2] += 1
                 if {"artifact_id", "source_commit_id", "source_hash"}.issubset(value):
                     key = canonical_json(value)
                     sources.setdefault(key, [value, 0])[1] += 1
@@ -3589,6 +3684,7 @@ def pack_packet_context(required, optional, max_tokens, receipt):
             for _label, items in sections:
                 collect(items)
         shared = {key: f"source_{index:03d}" for index, key in enumerate(sorted(key for key, (value, count) in sources.items() if count > 1 and len(key) > 128), 1)}
+        record_refs = {identity: f"record_{index:03d}" for index, identity in enumerate(sorted(records), 1)}
 
         def encode(value):
             if isinstance(value, dict):
@@ -3596,19 +3692,36 @@ def pack_packet_context(required, optional, max_tokens, receipt):
                     reference = shared.get(canonical_json(value))
                     if reference:
                         return {"$context_ref": reference}
-                return {key: child if key == "immutable_source" else encode(child) for key, child in value.items()}
+                identity = record_identity(value)
+                return {key: ({"$context_ref": record_refs[identity]} if identity is not None else child)
+                    if key == "immutable_source" else encode(child) for key, child in value.items()}
             if isinstance(value, list):
                 return [encode(child) for child in value]
             return value
 
-        rendered = []
+        rendered, components = [], {}
+        if records:
+            block = "===== SHARED SOURCE RECORDS =====\nEach $context_ref expands to its complete original source unit below.\n" + compact_context_value(
+                {record_refs[identity]: entry[0] for identity, entry in sorted(records.items())}) + "\n"
+            rendered.append(block)
+            components["SHARED SOURCE RECORDS"] = len(block.encode())
         if shared:
-            rendered.append("===== SHARED SOURCE METADATA =====\nEach $context_ref expands to the exact source object below. Literary source units remain complete.\n" + compact_context_value({reference: sources[key][0] for key, reference in shared.items()}) + "\n")
+            block = "===== SHARED SOURCE METADATA =====\nEach $context_ref expands to the exact source metadata object below.\n" + compact_context_value({reference: sources[key][0] for key, reference in shared.items()}) + "\n"
+            rendered.append(block)
+            components["SHARED SOURCE METADATA"] = len(block.encode())
         for label, items in sections:
             if items:
-                rendered.append(f"===== {label} =====\n" + "\n\n".join(
+                block = f"===== {label} =====\n" + "\n\n".join(
                     compact_context_value(encode(item)) if compact else item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, indent=2)
-                    for item in items) + "\n")
+                    for item in items) + "\n"
+                rendered.append(block)
+                components[label] = components.get(label, 0) + len(block.encode())
+        if details is not None:
+            details.update({"required_components": components,
+                "shared_source_count": len(records), "source_reference_count": sum(entry[2] for entry in records.values()),
+                "source_payload_bytes_saved": sum(len(entry[1].encode()) * (entry[2] - 1) for entry in records.values()),
+                "shared_source_coverage": [{"context_ref": record_refs[identity], "source_commit_id": identity[0],
+                    "source_hash": identity[1], "record_pointer": identity[2], "references": entry[2]} for identity, entry in sorted(records.items())]})
         return "\n".join(rendered)
 
     # Source-bearing objects are deduplicated only by verified identity/containment, never by similar wording.
@@ -3623,15 +3736,14 @@ def pack_packet_context(required, optional, max_tokens, receipt):
                 seen.add(identity)
             output.append(item)
         filtered.append((label, output))
-    text = render(filtered, True)
+    text = render(filtered, True, receipt)
     receipt["required_pretty_bytes"] = len(render(original_required, False).encode())
     receipt["required_compact_bytes"] = len(text.encode())
-    maximum = max_tokens * 4
-    if len(text) > maximum:
-        receipt["required_components"] = {label: len(render([(label, items)], True)) for label, items in filtered if items}
+    maximum = max(0, max_tokens * 3)
+    if len(text.encode()) > maximum:
         receipt["capacity_failure"] = True
-        raise PausedError("Packet context", f"Required whole-source context needs approximately {math.ceil(len(text)/4):,} tokens; ceiling {max_tokens:,}. "
-            + "Components (characters): " + canonical_json(receipt["required_components"]).decode().strip(), "budget_exhaustion")
+        raise PausedError("Packet context", f"Required whole-source context needs approximately {estimated_prompt_tokens(text):,} tokens; ceiling {max_tokens:,}. "
+            + "Components (UTF-8 bytes; shared records counted once): " + canonical_json(receipt["required_components"]).decode().strip(), "budget_exhaustion")
     packed = filtered
     for label, items in optional:
         for item in items:
@@ -3641,14 +3753,18 @@ def pack_packet_context(required, optional, max_tokens, receipt):
                 continue
             trial = packed + [(label, [item])]
             candidate = render(trial, True)
-            if len(candidate) <= maximum:
+            if len(candidate.encode()) <= maximum:
                 packed = trial
                 text = candidate
                 seen.add(identity)
             else:
                 receipt["omissions"].append({"section": label, "source_id": item.get("source_id") if isinstance(item, dict) else None, "reason": "prepared_context_budget"})
+    packed_details = {}
+    text = render(packed, True, packed_details)
+    packed_details["context_components"] = packed_details.pop("required_components")
+    receipt.update(packed_details)
     receipt["context_bytes"] = len(text.encode())
-    receipt["estimated_context_tokens"] = math.ceil(len(text)/4)
+    receipt["estimated_context_tokens"] = estimated_prompt_tokens(text)
     receipt["context_hash"] = sha256_bytes(text.encode())
     return text
 
@@ -3691,10 +3807,12 @@ def _within_record_budget(records: list[dict], max_tokens: int) -> list[dict]:
     return output
 
 
-def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, receipt=None, step_id=None) -> str:
+def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, receipt=None, step_id=None, prompt_overhead_tokens=0) -> str:
     ensure_index(run_dir)
     manifest = read_json(run_dir / "run-manifest.json")
     genesis = committed_record(run_dir, "genesis")
+    root_sources = packet_root_sources(run_dir)
+    law, law_provenance = instruction_profile(run_dir)
     dependencies = packet_records(run_dir, plan.get("depends_on_packet_slot_ids", []), verify=True)
     if {record["packet_slot_id"] for record in dependencies} != set(plan.get("depends_on_packet_slot_ids", [])):
         raise IntegrityError("Required predecessor packet does not resolve")
@@ -3744,9 +3862,9 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
     geomancy = ensure_frozen_geomancy(run_dir)
     slots = set(plan["scene_slot_ids"])
     required = [
-        ("FROZEN ENGINE LAW", (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
+        ("FROZEN ENGINE LAW", law),
         ("FROZEN GENERATION BRIEF", manifest["generation_brief"]),
-        ("IMMUTABLE GENERATED ROOT CANON", genesis),
+        ("IMMUTABLE GENERATED ROOT CANON", root_sources),
         ("CURRENT PACKET STRUCTURAL POSITION", plan),
         ("IMMUTABLE PAST CONSTRAINTS", protected_past),
         ("ACTIVE HARD FUTURE OBLIGATIONS", hard),
@@ -3773,7 +3891,11 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
     receipt.update({"version": 1, "index_version": INDEX_VERSION, "canonical_state_hash": checkpoint["canonical_hash"],
         "ledger_sequence": checkpoint["ledger_sequence"], "event_sequence": checkpoint["event_sequence"],
         "query": query,
+        "instruction_profile": law_provenance,
+        "token_estimator": "ceil(utf8_bytes/3)", "prompt_overhead_tokens": prompt_overhead_tokens,
         "selected_sources": [], "omissions": []})
+    receipt["selected_sources"].extend({key: source[key] for key in ("source_id", "source_commit_id", "source_hash", "record_pointer")} | {"required": True}
+        for source in root_sources)
     dependency_catalog = _source_index(run_dir, [record["commit_id"] for record in dependencies])
     for record in dependencies:
         receipt["selected_sources"].append({"source_id": record["commit_id"], "source_commit_id": record["commit_id"],
@@ -3781,7 +3903,9 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
     receipt["selected_sources"].extend({key: source.get(key) for key in ("source_id", "source_commit_id", "source_hash", "record_pointer")} | {"required": True} for source in required_sources)
     actual_step = step_id or packet_step_id(plan | {"advance_obligation_ids": plan.get("advance_obligation_ids", []), "may_satisfy_obligation_ids": plan.get("may_satisfy_obligation_ids", [])})
     receipt_path = run_dir / ".staging" / f"{actual_step}.retrieval.json"
-    ceiling = manifest["budgets"]["max_prepared_context_tokens"] - 14000
+    ceiling = packet_input_limit(run_dir) - prompt_overhead_tokens
+    receipt["prepared_input_ceiling"] = packet_input_limit(run_dir)
+    receipt["context_ceiling"] = ceiling
     # Check required inputs before doing optional searches or loading any optional original prose.
     try:
         pack_packet_context(required, [], ceiling, receipt)
@@ -3803,12 +3927,12 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
             # The catalog holds complete units, so skip oversized results without reading their archives.
             with index_connection(run_dir) as db:
                 body_chars = db.execute("SELECT length(body) FROM search_documents WHERE id=?", (hit["document_id"],)).fetchone()[0]
-            if source_chars + body_chars > manifest["budgets"]["max_retrieved_source_tokens"] * 4:
+            if source_chars + body_chars > manifest["budgets"]["max_retrieved_source_tokens"] * 3:
                 receipt["omissions"].append({"source_id": hit["source_id"], "reason": "retrieval_budget"})
                 continue
             source = read_search_source(run_dir, hit, cache)
-            size = len(compact_context_value(source))
-            if source_chars + size > manifest["budgets"]["max_retrieved_source_tokens"] * 4:
+            size = len(compact_context_value(source).encode())
+            if source_chars + size > manifest["budgets"]["max_retrieved_source_tokens"] * 3:
                 receipt["omissions"].append({"source_id": hit["source_id"], "reason": "retrieval_budget"})
                 continue
             chosen.append(source)
@@ -3818,8 +3942,8 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
             for source in retrieve_original_sources(run_dir, selected):
                 if source["source_id"] in covered_ids or source.get("source_commit_id") in covered_commits:
                     continue
-                size = len(compact_context_value(source))
-                if len(chosen) < SEARCH_SOURCE_LIMIT and source_chars + size <= manifest["budgets"]["max_retrieved_source_tokens"] * 4:
+                size = len(compact_context_value(source).encode())
+                if len(chosen) < SEARCH_SOURCE_LIMIT and source_chars + size <= manifest["budgets"]["max_retrieved_source_tokens"] * 3:
                     chosen.append(source)
                     source_chars += size
                     covered_ids.add(source["source_id"])
@@ -5649,7 +5773,11 @@ SEMANTIC_INSTRUCTION = (
 )
 
 
-def compact_semantic_context(context: str) -> str:
+def compact_semantic_context(context: str, run_dir: Path | None = None) -> str:
+    if run_dir is not None and "===== FROZEN ENGINE LAW =====\n" in context:
+        law, _provenance = instruction_profile(run_dir, "semantic")
+        context = re.sub(r"(?ms)^===== FROZEN ENGINE LAW =====\n.*?(?=^===== (?!engine/)[^\n]+ =====\n|\Z)",
+            lambda _match: "===== FROZEN ENGINE LAW =====\n" + law + "\n\n", context, count=1)
     chunks = re.split(r"(?m)(^===== [^\n]+ =====\n)", context)
     decoder = json.JSONDecoder()
     for index, chunk in enumerate(chunks):
@@ -5667,15 +5795,16 @@ def compact_semantic_context(context: str) -> str:
     return "".join(chunks)
 
 
-def semantic_prompt(artistic: dict, context: str, instruction: str, accepted=None) -> str:
+def semantic_prompt(artistic: dict, context: str, instruction: str, accepted=None, *, run_dir: Path | None = None) -> str:
     prompt = ("IMMUTABLE ARTISTIC PAYLOAD\n" + canonical_json(artistic).decode() +
-              "\nRELEVANT CANON AND CONSTRAINTS\n" + compact_semantic_context(context) + "\n")
+              "\nRELEVANT CANON AND CONSTRAINTS\n" + compact_semantic_context(context, run_dir) + "\n")
     if accepted is not None:
         prompt += "ACCEPTED SEMANTIC METADATA\n" + canonical_json(accepted).decode()
     return prompt + "\nINSTRUCTION\n" + SEMANTIC_INSTRUCTION + " " + instruction + (
         " Retrieved PLANNED INTENTION describes future work, not events established by this payload. "
         "CONSTRAINT HISTORY may be superseded or retracted. Derive new assertions only from the immutable artistic payload. "
-        "Each $context_ref expands to the exact source metadata object in SHARED SOURCE METADATA.")
+        "Each $context_ref expands to its complete object in SHARED SOURCE RECORDS or SHARED SOURCE METADATA. "
+        "Genesis foundation, cast, and constraints are complete original records; apply their anchors, profiles, and extensions together.")
 
 
 def semantic_attempt(run_dir: Path, step_id: str) -> int:
@@ -5807,7 +5936,7 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
                 "Never repeat accepted records or renumber accepted facts. An empty items array is allowed only with complete=true. "
                 "Complete partial candidates in their original order when supported. Partial candidates: " +
                 canonical_json(state["pending"].get(key, [])).decode() + " " + state["feedback"].get(key, ""))
-            prompt = semantic_prompt(artistic, context, instruction, state["payload"])
+            prompt = semantic_prompt(artistic, context, instruction, state["payload"], run_dir=run_dir)
             print(f"Semantic normalization: {key}, {offset} accepted records, up to {size} per page", file=sys.stderr)
             response, error = None, None
             try:
@@ -5938,7 +6067,7 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
         pending = read_json(pending_path) if pending_path.exists() else None
         if pending:
             attempt = pending["attempt"]
-        prompt = semantic_prompt(artistic_payload, context, "Return the complete semantic delta. " + feedback)
+        prompt = semantic_prompt(artistic_payload, context, "Return the complete semantic delta. " + feedback, run_dir=run_dir)
         response_path = run_dir / "raw" / f"{step_id}-semantic-attempt{attempt}.api.json"
         started, response, normalized = utc_now(), None, None
         try:
@@ -6824,7 +6953,6 @@ def architecture_plan_prompt(run_dir: Path, specs: list[dict], sequence: int, co
 def packet_prompt(run_dir: Path, architecture: dict, plan: dict, *, step_id=None) -> tuple[str, str]:
     actual_step = step_id or packet_step_id(plan)
     receipt = {}
-    context = relevant_packet_context(run_dir, architecture, plan, receipt=receipt, step_id=actual_step)
     with index_connection(run_dir) as db:
         packet_sequence = 1 + db.execute("SELECT COUNT(*) FROM records WHERE record_type='creative_packet'").fetchone()[0]
     batch = plan_batch_for(run_dir, plan["packet_slot_id"])
@@ -6842,7 +6970,7 @@ def packet_prompt(run_dir: Path, architecture: dict, plan: dict, *, step_id=None
     if plan["packet_kind"] == "literary":
         name = "generation-packet.md"
         replacements = {
-            "PACKET_CONTEXT": context,
+            "PACKET_CONTEXT": "",
             "PACKET_OBLIGATIONS": obligations,
             "PACKET_PROTOCOL_DEFINITIONS": json.dumps(
                 packet_payload_schema(run_dir, plan), ensure_ascii=False, separators=(",", ":")
@@ -6851,15 +6979,22 @@ def packet_prompt(run_dir: Path, architecture: dict, plan: dict, *, step_id=None
     else:
         name = "generation-ending-packet.md"
         replacements = {
-            "ENDING_PACKET_CONTEXT": context,
+            "ENDING_PACKET_CONTEXT": "",
             "ENDING_PACKET_OBLIGATIONS": obligations,
             "ENDING_PROTOCOL_DEFINITIONS": json.dumps(
                 packet_payload_schema(run_dir, plan), ensure_ascii=False, separators=(",", ":")
             ),
         }
+    envelope = render_prompt(run_dir, name, replacements)
+    overhead = estimated_prompt_tokens(RECORD_SYSTEM_PROMPT + envelope)
+    context = relevant_packet_context(run_dir, architecture, plan, receipt=receipt, step_id=actual_step, prompt_overhead_tokens=overhead)
+    replacements["PACKET_CONTEXT" if plan["packet_kind"] == "literary" else "ENDING_PACKET_CONTEXT"] = context
     prompt = render_prompt(run_dir, name, replacements)
     receipt["prepared_prompt_bytes"] = len(prompt.encode())
-    receipt["estimated_prompt_tokens"] = math.ceil(len(prompt)/4)
+    receipt["estimated_prompt_tokens"] = estimated_prompt_tokens(RECORD_SYSTEM_PROMPT + prompt)
+    _semantic_law, semantic_provenance = instruction_profile(run_dir, "semantic")
+    receipt["normalization_instruction_profile"] = semantic_provenance
+    receipt["estimated_normalization_context_tokens"] = estimated_prompt_tokens(compact_semantic_context(context, run_dir))
     receipt["prompt_hash"] = sha256_bytes(prompt.encode())
     write_json(run_dir / ".staging" / f"{actual_step}.retrieval.json", receipt)
     return prompt, context
@@ -8910,30 +9045,34 @@ def preflight_model_capacity(base_url: str, model: str, output_fn=print, transpo
             "LM Studio model capacity could not be read from /api/v1/models. Update LM Studio, keep the Local Server running, and try again.",
             error.failure_class,
         ) from error
-    limits = []
-    loaded_limits = []
+    matches, exact = [], []
     for candidate in payload.get("models", []) if isinstance(payload, dict) else []:
         if candidate.get("type") != "llm":
             continue
         for instance in candidate.get("loaded_instances", []):
-            config = instance.get("config", {})
-            limit = config.get("context_length") or candidate.get("max_context_length")
-            if isinstance(limit, int):
-                loaded_limits.append(limit)
-            if model in {candidate.get("key"), instance.get("id")}:
-                if isinstance(limit, int):
-                    limits.append(limit)
-    if not limits and len(loaded_limits) == 1:
-        limits = loaded_limits
-    if not limits:
-        raise CathedralsError("LM Studio preflight", f"No loaded context limit could be resolved for {model!r}.", "budget_exhaustion")
-    if limits and max(limits) < required:
-        raise CathedralsError(
+            if model == instance.get("id"):
+                exact.append(instance)
+            if model == candidate.get("key"):
+                matches.append(instance)
+    instances = exact or matches
+    if len(instances) != 1:
+        problem = "is not loaded" if not instances else "has multiple loaded instances; select its exact instance ID"
+        raise PausedError("LM Studio preflight", f"Selected model {model!r} {problem}. "
+            f"Load the intended model with at least {required:,} context tokens before starting or resuming.", "budget_exhaustion")
+    config = instances[0].get("config")
+    limit = config.get("context_length") if isinstance(config, dict) else None
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+        raise PausedError("LM Studio preflight", f"The loaded context limit for {model!r} is unavailable. "
+            "Reload that model with an explicit context length; its theoretical maximum cannot establish available capacity.", "budget_exhaustion")
+    if limit < required:
+        raise PausedError(
             "LM Studio preflight",
-            f"The selected model is loaded with a {max(limits):,}-token context; Cathedrals requires at least {required:,} for a prepared packet, output, and safety reserve.",
+            f"Selected model {model!r} is loaded with a {limit:,}-token context; Cathedrals requires at least {required:,} "
+            "for a prepared packet, output, and safety reserve. Reload that model with a larger context, then resume.",
             "budget_exhaustion",
         )
-    return max(limits)
+    output_fn(f"Model context: {model} — {limit:,} loaded tokens")
+    return limit
 
 
 def committed_hashes(run_dir: Path) -> dict[str, str]:
