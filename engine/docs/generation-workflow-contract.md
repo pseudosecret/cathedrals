@@ -162,6 +162,16 @@ requests. Actual response usage is ledgered immediately, once per request, and i
 not charged again for split successes or the eventual parent commit. Resume continues
 only pending work, with no complete Architecture rewrite.
 
+Focused string planning values use a strict `{"value": "..."}` response object,
+with the original field schema applied to `value`. The engine unwraps that one
+value before schema and domain validation. Literal/quoted strings and exact singleton
+field-path wrappers remain readable for saved responses, including JSON code fences.
+Extraction never searches a graph patch, explanation, or reasoning for a plausible
+ID. Extra sibling fields, duplicate JSON keys, invalid targets, and ambiguous containers
+are rejected. `$connect` and other `$` paths label engine tasks rather than draft
+properties to create. Raw provider responses remain unchanged; accepted values and
+their original response evidence are checkpointed and replayed without another call.
+
 Plan reference catalogs include every allocated literary slot before Architecture is
 committed and dependencies only from earlier staged allocations. Recorded motif-event
 IDs map exactly to their motif IDs. A focused reference value may select an existing
@@ -474,3 +484,13 @@ forward-only generation run rather than one response. This preserves irreversibi
 and surrendered human control but remains in textual tension with README language
 that says all scenes and arcs are generated in a single pass and forbids prompting
 one scene and then the next. The root README is not edited or silently redefined.
+
+## Bounded execution policy
+
+For manifests with `execution_policy.bounded_planning`, engine-allocated layout
+and coherent record batches replace whole-core-first planning. Up to four records
+are authored per batch; accepted fields are checkpointed. Scoped contexts retain
+frozen law, global canon, relevant entities, obligations and full mandatory proof.
+Read-only retrieval is a separate bounded analysis stage; final authoring retains
+strict JSON schemas. See [bounded-execution.md](bounded-execution.md) for the frozen
+policy, tool limits, projection authority, replay and acceptance requirements.

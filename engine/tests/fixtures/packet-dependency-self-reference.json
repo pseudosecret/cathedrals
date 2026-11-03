@@ -1,0 +1,12 @@
+{
+  "possible_scene_count": 30,
+  "dependencies": {
+    "literary_packet_0001": ["literary_packet_0001", "literary_packet_0002"],
+    "literary_packet_0002": ["literary_packet_0001", "literary_packet_0002"],
+    "literary_packet_0003": ["literary_packet_0001", "literary_packet_0002"],
+    "literary_packet_0004": ["literary_packet_0001", "literary_packet_0002"],
+    "literary_packet_0005": ["literary_packet_0004"],
+    "ending_packet_0001": ["literary_packet_0005", "ending_packet_0001"],
+    "ending_packet_0002": ["literary_packet_0005", "ending_packet_0002"]
+  }
+}

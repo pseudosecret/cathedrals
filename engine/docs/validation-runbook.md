@@ -69,6 +69,14 @@ must not be cached as success. Usage is counted once for every actual response.
 Check initial whole-core and plan-batch prompts as well as recovery prompts. Required
 sections must be complete before the final UTF-8 estimate is checked; builders must
 not silently omit sections or list items using a different character/token ratio.
+Focused string-value tests verify strict single-key response schemas, literal/quoted
+and exact field-path wrapper compatibility, preserved whitespace/literal JSON text,
+and rejection of full graph patches, extra fields, duplicate keys, and invalid targets.
+Domain validators still run after decoding. Saved wrapped responses must replay after
+a checkpoint interruption without provider access, raw-response changes, or duplicate
+usage accounting. A mismatched snapshot notice must preserve snapshot bytes and
+continue dispatching to that run's frozen engine.
+
 The planning-context suite reproduces saved failing input sizes with synthetic data,
 checks all 25 geomancy assignments instead of the previously rendered 13, and verifies
 that genuinely oversized complete requests pause before provider contact. Empty
@@ -227,3 +235,23 @@ Finalization records the ledger head, every committed creative record, constrain
 event stream, prospective-plan history, projections, decision graph, validation verdicts, and build hash. Any later
 literary or generated-fact hash mismatch invalidates publication. Engine presentation
 defects may be fixed in a separate engine revision without changing generated content.
+
+Run `test_bounded_execution.py` for fragmented tool streams, native-tool fallback,
+argument limits, replay accounting, tentative projection recovery, stable planning
+IDs and historical proposition existence. Run `test_thirty_scene_acceptance.py`
+for the complete bounded-compiler publication. Use the Playwright harness under
+`engine/tools/browser` to verify links, evidence pages, theme persistence, reader
+state and a condition-valid ending path. A live 30-scene acceptance run remains a
+separate requirement; an offline synthetic result does not satisfy it.
+
+Genesis source prevention has dedicated regressions in
+`engine/tests/test_genesis_reference_prevention.py`. These checks require no live
+provider and leave running generations alone. They verify complete canon/profile
+source units, bounded context-sensitive repair batches, original-payload recovery
+and exact usage after a paused batch.
+
+Run `engine/tests/test_planning_dependencies_retrieval.py` to exercise the saved
+self/future dependency failure and ensure the response schemas prevent it on the first
+attempt. The same tests cover complete-list repair, retained prerequisites, retrieval
+request bounds, source fetching after search, shared usage accounting and invalidation
+when tentative content, upstream plans or committed state change.

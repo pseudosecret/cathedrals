@@ -136,6 +136,9 @@ response preservation path and do not trigger repeated automatic writing attempt
 These changes apply to new engine snapshots. Updating an installation does not
 change a paused run's frozen launcher or inputs; test the corrected engine in a new
 generation rather than editing archived snapshots or receipts.
+When the installed launcher differs from the selected run's frozen launcher, resume
+prints that distinction before handing control to the snapshot. This notice does
+not upgrade the snapshot or alter the run.
 
 ## Provenance and Counters
 
@@ -172,8 +175,12 @@ allocation, Markdown, reference, and length validation before it is staged for s
 normalization and reused after a pause. Length corrections occur before staging;
 metadata normalization cannot shorten preserved prose.
 
-Invalid references receive automatic focused resolution throughout Genesis,
-Architecture, packet plans, scenes, endings, and semantic metadata. After deterministic
+Genesis uses an enumerated canon/entity source catalog and contextual repair batches
+of up to four references. The engine derives direct-source tags and preserves accepted
+metadata before later validation. See [genesis-reference-prevention.md](genesis-reference-prevention.md).
+
+Invalid references in Architecture, packet plans, scenes, endings, and semantic metadata
+receive automatic focused resolution. After deterministic
 aliases, the model receives the invalid field, source context, and typed valid targets;
 it returns only an exact identifier or `UNRESOLVED`. Repairs change reference fields
 before commit and preserve literary bytes. Missing targets or unsupported mappings
@@ -227,6 +234,15 @@ If complete compact context still exceeds the frozen prompt limit or
 model capacity, planning enters `PAUSED_GENERATION`, preserving all accepted work.
 The diagnostic reports prompt estimates, schema size, limits, and output/safety
 reserves. No oversized request is sent and no authored context is silently clipped.
+
+Focused string planning requests return a strict `{"value": "..."}` object instead
+of an unconstrained string response. The field's enum/pattern and route validation
+still apply after decoding. `$connect`, `$layout`, and similar path labels describe
+engine operations; the model supplies the requested value, and the engine applies it.
+Exact singleton wrappers from saved responses can be decoded without choosing new
+content. A full topology/edge patch, alternatives, extra fields, or duplicate keys
+cannot substitute for one value. Invalid answers retain the existing three-attempt
+limit and pause behavior. Successful decoding preserves raw evidence and accounting.
 
 Planning catalogs include allocated scene and ending slots before Architecture exists.
 Motif-event aliases use their exact recorded motif IDs. For an unresolved reference,
@@ -336,3 +352,17 @@ selection logic, or forbidden phase writes. During the run, stop as
 `FAILED_GENERATION` for irrecoverable committed-history corruption and hard-budget exhaustion.
 
 Do not stop for ordinary fictional choices. They belong to autonomous generation.
+
+New runs use the bounded compiler and scoped source policy described in
+[bounded-execution.md](bounded-execution.md). A synthetic preflight freezes native
+tool retrieval or automatic fallback before fiction starts. Keep the same model
+and reasoning settings when comparing runs. Phase progress includes input/output
+and reasoning usage. A 30-scene synthetic publication and an actual Chromium
+playthrough now supplement the existing offline validation checks.
+
+Updated packet planning constrains each dependency list to earlier allocated packets;
+the first packet has an empty list. Recovery preserves valid prerequisites and repairs
+the complete invalid list. Optional retrieval receives a compact task/catalog request
+and reuses results across related record batches, with semantic revision and source-hash
+checks. See [planning-dependencies-retrieval.md](planning-dependencies-retrieval.md).
+These installation changes do not update any existing frozen run.

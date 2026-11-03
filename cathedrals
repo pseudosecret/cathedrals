@@ -52,7 +52,6 @@ GENESIS_CONSTRAINT_TOKENS = 8192
 INITIAL_CLAIMANT_MIN = 5
 INITIAL_CLAIMANT_MAX = 8
 MAX_CLAIMANTS = 12
-GENESIS_RAW_FACT_MAX = 24
 PACKET_LITERARY_WORD_TARGET = 4800
 CHUNK_LITERARY_WORDS = 1200
 PLAN_BATCH_SIZE = 8
@@ -612,6 +611,7 @@ def read_chat_stream(response, *, archive=None, label="LM Studio", report=True):
     pending = b""
     lines = []
     done = False
+    tool_calls = {}
 
     def event():
         nonlocal received, done
@@ -637,6 +637,25 @@ def read_chat_stream(response, *, archive=None, label="LM Studio", report=True):
             if part.get("index", 0) != 0:
                 continue
             delta = part.get("delta", {})
+            for fragment in delta.get("tool_calls", []):
+                if fragment.get("type", "function") != "function":
+                    raise ValueError("Unsupported tool call type")
+                index = fragment.get("index")
+                if not isinstance(index, int) or index < 0 or index >= 8:
+                    raise ValueError("Invalid tool call index")
+                call = tool_calls.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                for key in ("id",):
+                    if key in fragment:
+                        if not isinstance(fragment[key], str):
+                            raise ValueError("Invalid tool call ID fragment")
+                        call[key] += fragment[key]
+                for key in ("name", "arguments"):
+                    if key in fragment.get("function", {}):
+                        value = fragment["function"][key]
+                        if not isinstance(value, str):
+                            raise ValueError("Invalid tool function fragment")
+                        call["function"][key] += value
+                        received += len(value)
             for field in ("content", "reasoning", "reasoning_content"):
                 value = delta.get(field)
                 if value is not None:
@@ -676,6 +695,8 @@ def read_chat_stream(response, *, archive=None, label="LM Studio", report=True):
         if not done or not choice["finish_reason"]:
             raise ValueError("Stream ended without [DONE] and a finish reason")
         result["_cathedrals_stream_complete"] = True
+        if tool_calls:
+            choice["message"]["tool_calls"] = [tool_calls[index] for index in sorted(tool_calls)]
         return result
     except (OSError, http.client.HTTPException, ValueError, TypeError, AttributeError, KeyboardInterrupt) as error:
         reason = str(error) or type(error).__name__
@@ -806,7 +827,7 @@ def copy_engine_snapshot(run_dir: Path) -> None:
     destination = snapshot_root(run_dir)
     ignore = shutil.ignore_patterns(
         ".git", ".cathedrals", "generated-work", "__pycache__", "*.pyc", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".DS_Store",
-        "*~", "*.swp", "*.swo", ".#*", "#*#",
+        "node_modules", "*~", "*.swp", "*.swo", ".#*", "#*#",
     )
     destination.mkdir()
     shutil.copy2(ROOT / "cathedrals", destination / "cathedrals")
@@ -870,7 +891,7 @@ def save_state(run_dir: Path, state: dict) -> None:
     write_json(state_path(run_dir), state)
 
 
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 STATE_MAPS = ("canonical-facts.json", "knowledge-state.json", "obligations.json", "motifs.json", "foreclosure-candidates.json")
 _REPLAYING = set()
 
@@ -897,7 +918,7 @@ def index_connection(run_dir: Path):
 
 def create_index_schema(db, state):
     db.executescript("""
-        PRAGMA user_version=2;
+        PRAGMA user_version=3;
         CREATE TABLE identity (generation_id TEXT NOT NULL, manifest_hash TEXT NOT NULL);
         CREATE TABLE checkpoint (
             id INTEGER PRIMARY KEY CHECK(id=1), ledger_sequence INTEGER NOT NULL DEFAULT 0,
@@ -908,11 +929,16 @@ def create_index_schema(db, state):
             step_type TEXT NOT NULL, status TEXT NOT NULL, failure_class TEXT NOT NULL,
             entry_hash TEXT NOT NULL UNIQUE, payload TEXT NOT NULL);
         CREATE INDEX ledger_step ON ledger(step_id, attempt);
+        CREATE INDEX ledger_phase ON ledger(json_extract(payload,'$.step_phase'));
         CREATE UNIQUE INDEX committed_step ON ledger(step_id) WHERE status='COMMITTED';
         CREATE TABLE records (commit_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL UNIQUE REFERENCES ledger(sequence),
             step_id TEXT NOT NULL UNIQUE, record_type TEXT NOT NULL, packet_slot_id TEXT,
             path TEXT NOT NULL, record_hash TEXT NOT NULL, payload TEXT NOT NULL);
         CREATE INDEX records_kind ON records(record_type, packet_slot_id, sequence);
+        CREATE TABLE staged_items (step_id TEXT NOT NULL, revision TEXT NOT NULL, pointer TEXT NOT NULL,
+            item_id TEXT NOT NULL, authority TEXT NOT NULL CHECK(authority='TENTATIVE PLAN'), payload TEXT NOT NULL,
+            PRIMARY KEY(step_id,pointer));
+        CREATE INDEX staged_item_id ON staged_items(item_id,step_id);
         CREATE TABLE sources (id TEXT PRIMARY KEY, commit_id TEXT NOT NULL REFERENCES records(commit_id), hash TEXT NOT NULL);
         CREATE TABLE events (sequence INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, payload TEXT NOT NULL);
         CREATE INDEX events_kind ON events(kind, sequence);
@@ -1325,6 +1351,8 @@ def rebuild_index(run_dir, entries, commits, plans):
                         index_commit(db, *by_sequence[entry["ledger_sequence"]])
                 for plan in plans:
                     index_plan(db, plan)
+                for path in sorted((run_dir / ".staging").glob("*.planning.json")):
+                    index_staged_plan(db, path.name.removesuffix(".planning.json"), read_json(path))
         finally:
             db.close()
         os.replace(temporary, destination)
@@ -1455,6 +1483,18 @@ def append_ledger_entry(run_dir: Path, entry: dict, *, commit=None, plan=None) -
             if plan is not None:
                 index_plan(db, plan)
         refresh_run_counters(run_dir)
+        if entry["provider"] and (run_dir / "run-manifest.json").exists() and execution_policy(run_dir):
+            phase = entry["step_phase"]
+            with index_connection(run_dir) as db:
+                calls, input_tokens, output_tokens, reasoning, retries = db.execute("""SELECT COUNT(*),
+                    COALESCE(SUM(json_extract(payload,'$.token_accounting.input_tokens')),0),
+                    COALESCE(SUM(json_extract(payload,'$.token_accounting.output_tokens')),0),
+                    COALESCE(SUM(json_extract(payload,'$.token_accounting.reasoning_tokens')),0),
+                    COALESCE(SUM(status!='COMMITTED'),0) FROM ledger
+                    WHERE json_extract(payload,'$.step_phase')=? AND json_extract(payload,'$.provider') IS NOT NULL
+                    AND json_extract(payload,'$.parameters.assembly') IS NULL""", (phase,)).fetchone()
+            print(f"{phase}: {calls} calls; input {input_tokens:,}; output {output_tokens:,} "
+                f"(reasoning {reasoning:,}); retries {retries}; retrieval {execution_policy(run_dir)['retrieval_mode']}", file=sys.stderr, flush=True)
 
 
 def new_ledger_entry(
@@ -1528,6 +1568,9 @@ def new_ledger_entry(
             "currency": usage.get("currency"),
         },
     }
+    reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+    if reasoning is not None:
+        entry["token_accounting"]["reasoning_tokens"] = reasoning
     entry["entry_hash"] = compute_entry_hash(entry)
     return entry
 
@@ -1580,6 +1623,7 @@ def create_run(
     model: str,
     output_fn=print,
     model_context_window_tokens: int = 64148,
+    execution_policy: dict | None = None,
 ) -> Path:
     identifier = generation_id(frozen.project_name)
     ensure_runtime_layout()
@@ -1645,6 +1689,8 @@ def create_run(
             "playable_status": "READY_TO_PLAY",
         },
     }
+    if execution_policy is not None:
+        manifest["execution_policy"] = execution_policy
     protocol = load_protocol(run_dir)
     validate_json_schema(manifest, protocol["$defs"]["runManifest"], protocol)
     manifest_hash = sha256_bytes(canonical_json(manifest))
@@ -2082,18 +2128,26 @@ def commit_record(
     constraint_events = make_constraint_events(run_dir, record, commit_id, record_hash, planned_step_id)
     constraint_hash = sha256_bytes(b"".join(canonical_json(item) for item in constraint_events))
     state_after = sha256_bytes(f"{state['canonical_state_hash']}:{record_hash}:{constraint_hash}".encode())
-    usage = dict(api_response.get("usage", {}) or {}) if isinstance(api_response, dict) and not usage_already_ledgered else {}
+    usage = copy.deepcopy(api_response.get("usage", {}) or {}) if isinstance(api_response, dict) and not usage_already_ledgered else {}
+
+    def add_usage(extra):
+        for key in ("prompt_tokens", "completion_tokens"):
+            usage[key] = (usage.get(key) or 0) + (extra.get(key) or 0)
+        reasoning = (extra.get("completion_tokens_details") or {}).get("reasoning_tokens")
+        if reasoning is not None:
+            details = usage.get("completion_tokens_details") or {}
+            usage["completion_tokens_details"] = details
+            details["reasoning_tokens"] = (details.get("reasoning_tokens") or 0) + reasoning
+
     semantic_api_path = run_dir / ".staging" / f"{planned_step_id}.semantic.api.json"
     if semantic_api_path.exists():
         semantic_usage = read_json(semantic_api_path).get("usage", {})
-        for key in ("prompt_tokens", "completion_tokens"):
-            usage[key] = (usage.get(key) or 0) + (semantic_usage.get(key) or 0)
+        add_usage(semantic_usage)
     repair_path = run_dir / ".staging" / f"{planned_step_id}.repair.json"
     if repair_path.exists():
         for repair in read_json(repair_path)["history"]:
             repair_usage = {} if repair.get("usage_ledgered") else (repair["api_response"].get("usage") or {})
-            for key in ("prompt_tokens", "completion_tokens"):
-                usage[key] = (usage.get(key) or 0) + (repair_usage.get(key) or 0)
+            add_usage(repair_usage)
     entry = new_ledger_entry(
         run_dir,
         planned_step_id=planned_step_id,
@@ -2140,6 +2194,7 @@ def commit_record(
         (".repair.json", "reference-repair.json"),
         (".references.json", "named-reference-repair.json"),
         (".retrieval.json", "retrieval-receipt.json"),
+        (".retrieval-session.json", "retrieval-session.json"),
     ):
         source = run_dir / ".staging" / f"{planned_step_id}{suffix}"
         if source.exists():
@@ -2439,6 +2494,8 @@ def retrieve_original_sources(
                 records.append(read_json(source_path))
     committed = list(reversed(records))
     for identifier in wanted:
+        if limit is not None and len(retrieved) >= limit:
+            break
         for record in committed:
             candidates = []
             if record.get("record_type") == "creative_packet":
@@ -2461,6 +2518,28 @@ def retrieve_original_sources(
                 candidates[0] if len(candidates) == 1 else None,
             )
             if source is not None:
+                pointers = locators[identifier]
+                if record.get("record_type", "").startswith("genesis_") and all(pointer.startswith("/") for pointer in pointers):
+                    for pointer in pointers:
+                        unit = record
+                        try:
+                            for part in pointer[1:].split("/"):
+                                part = part.replace("~1", "/").replace("~0", "~")
+                                if isinstance(unit, list):
+                                    if not re.fullmatch(r"0|[1-9][0-9]*", part):
+                                        raise ValueError("Invalid array index")
+                                    unit = unit[int(part)]
+                                else:
+                                    unit = unit[part]
+                        except (KeyError, IndexError, TypeError, ValueError) as error:
+                            raise IntegrityError(f"Genesis evidence pointer does not resolve: {identifier}{pointer}") from error
+                        if limit is not None and len(retrieved) >= limit:
+                            break
+                        retrieved.append({"source_id": identifier, "source_locator": pointer,
+                            "source_commit_id": catalog.get(identifier, {}).get("commit_id", record.get("commit_id")),
+                            "source_hash": catalog.get(identifier, {}).get("hash"), "record_pointer": pointer,
+                            "authority": "COMMITTED SOURCE EVIDENCE", "immutable_source": unit})
+                    break
                 pointer = ""
                 if record.get("record_type") == "creative_packet":
                     for field in ("scenes", "artifacts", "endings", "formal_compositions"):
@@ -2704,7 +2783,7 @@ def normalize_provider_response(response, *, plain_answers=None) -> str:
     )
 
 
-def provider_response(transport, url: str, payload: dict, timeout: float, *, started_at=None, preserve=None, plain_answers=None, stream_path=None):
+def provider_response(transport, url: str, payload: dict, timeout: float, *, started_at=None, preserve=None, plain_answers=None, stream_path=None, allow_tools=False):
     try:
         if stream_path and stream_path.exists():
             with stream_path.open("rb") as saved:
@@ -2727,7 +2806,26 @@ def provider_response(transport, url: str, payload: dict, timeout: float, *, sta
         response = response | {"_cathedrals_started_at": started_at}
     if response is not None and preserve:
         preserve(response)
+    if allow_tools and completed_tool_calls(response):
+        return response, ""
     return response, normalize_provider_response(response, plain_answers=plain_answers)
+
+
+def completed_tool_calls(response):
+    if not isinstance(response, dict) or response.get("_cathedrals_stream_complete") is False:
+        return []
+    choice = (response.get("choices") or [{}])[0]
+    if choice.get("finish_reason") != "tool_calls":
+        return []
+    calls = choice.get("message", {}).get("tool_calls", [])
+    if not isinstance(calls, list) or not 1 <= len(calls) <= 8:
+        raise SchemaError("Tool response must contain between one and eight calls")
+    if any(not isinstance(call, dict) or not isinstance(call.get("id"), str) or not call["id"]
+           or call.get("type") != "function" or not isinstance(call.get("function"), dict) for call in calls):
+        raise SchemaError("Malformed completed tool call")
+    if len({call["id"] for call in calls}) != len(calls):
+        raise SchemaError("Duplicate tool call IDs")
+    return calls
 
 
 def step_seed(generation_seed: str, step_id: str) -> str:
@@ -2762,6 +2860,9 @@ def request_record(
     protocol = load_protocol(run_dir)
     response_definition = response_definition or RECORD_DEFS[expected_record_type]
     schema = response_schema or definition_schema(response_definition, protocol)
+    wire_schema = copy.deepcopy(schema)
+    if expected_record_type == "genesis_constraints":
+        wire_schema["$defs"]["relevanceTags"]["properties"]["technical_slot_ids"] = {"type": "array", "maxItems": 0}
     parameters = {"temperature": temperature, "max_tokens": max_tokens, "seed": seed,
                   "stream": True, "stream_options": {"include_usage": True}}
     feedback = ""
@@ -2780,7 +2881,7 @@ def request_record(
                 {"role": "user", "content": current_prompt},
             ],
             **parameters,
-            "response_format": {"type": "json_schema", "json_schema": {"name": response_definition, "strict": True, "schema": schema}},
+            "response_format": {"type": "json_schema", "json_schema": {"name": response_definition, "strict": True, "schema": wire_schema}},
         }
         request_hash = sha256_bytes(canonical_json(payload))
         attempts = [entry["attempt"] for entry in step_entries(run_dir, step_id)]
@@ -2830,12 +2931,19 @@ def request_record(
                 content = normalize_provider_response(response)
             if not preserved_payload.exists():
                 authored = parse_structured_content(content)
-                if reference_context is not None:
+                if reference_context is not None and expected_record_type != "genesis_constraints":
                     authored = repair_named_references(
                         run_dir, step_id, authored, response_definition, schema, transport,
                         **reference_context,
                     )
-            if expected_record_type == "architecture_core" and payload_repairer:
+            if expected_record_type == "genesis_constraints":
+                authored = prepare_genesis_metadata(run_dir, authored, schema)
+                preserve_artistic_payload(run_dir, step_id, authored, content, response)
+                if payload_repairer:
+                    authored = payload_repairer(step_id, authored, content, response)
+                final_schema = genesis_constraints_schema(run_dir, authored.get("_claimant_extensions", []))
+                validate_json_schema({key: value for key, value in authored.items() if key != "_claimant_extensions"}, final_schema)
+            elif expected_record_type == "architecture_core" and payload_repairer:
                 validate_architecture_draft(authored, schema, run_dir)
             else:
                 validate_json_schema(authored, schema)
@@ -2843,7 +2951,7 @@ def request_record(
                 payload_validator(authored)
             if payload_preserver:
                 payload_preserver(authored, content, response)
-            if payload_repairer:
+            if payload_repairer and expected_record_type != "genesis_constraints":
                 authored = payload_repairer(step_id, authored, content, response)
             record = record_builder(authored) if record_builder else authored
             validate_json_schema(record, protocol["$defs"][RECORD_DEFS[expected_record_type]], protocol)
@@ -2872,6 +2980,10 @@ def request_record(
             if expected_record_type == "architecture_core" and staged_artistic.exists() and isinstance(error, SchemaError):
                 inflight_path.unlink(missing_ok=True)
                 raise PausedError("Architecture repair", error.reason) from error
+            if expected_record_type == "genesis_constraints" and staged_artistic.exists() and isinstance(error, SchemaError):
+                inflight_path.unlink(missing_ok=True)
+                raise PausedError("Genesis metadata validation", error.reason +
+                    " Accepted metadata and reference checkpoints were preserved; the complete payload was not requested again.") from error
             staged_semantic = run_dir / ".staging" / f"{step_id}.semantic.json"
             if isinstance(error, SchemaError) and staged_artistic.exists() and staged_semantic.exists():
                 write_atomic(run_dir / "state" / f"{step_id}.semantic-feedback.txt", error.reason.encode())
@@ -2953,6 +3065,11 @@ def named_reference_issues(run_dir: Path, payload: dict, definition: str, *, pla
     literary_slots = {slot: item for item in plans.values() for slot in item["scene_slot_ids"] + item["ending_slot_ids"]}
     slots |= literary_slots
     facts = {key: event["data"] for key, event in _read_state_map(run_dir, "canonical-facts.json").items()}
+    if index_path(run_dir).exists():
+        with index_connection(run_dir) as db:
+            for row in db.execute("SELECT payload FROM events WHERE kind='canonical_fact' ORDER BY sequence"):
+                fact = json.loads(row[0])["data"]
+                facts.setdefault(fact["fact_id"], fact)
     motifs = _read_state_map(run_dir, "motifs.json")
     state_keys = {key: key for key in load_protocol(run_dir)["$defs"]["stateKey"]["enum"]}
     content = {item[key]: item for record in committed_records(run_dir, "creative_packet")
@@ -3064,7 +3181,8 @@ def named_reference_issues(run_dir: Path, payload: dict, definition: str, *, pla
         local = {f"fact_{index:02d}": item for index, item in enumerate(payload["canonical_facts"], 1)}
         aliases = {alias for index in range(1, len(local) + 1) for alias in fact_position_aliases(index)}
         if plan is None:
-            source_slots = slots
+            source_slots = slots | genesis_source_catalog(run_dir)
+            slots = source_slots
             facts = {}
             motifs = {item["motif_id"]: item for item in payload["motif_events"]}
         else:
@@ -3652,6 +3770,24 @@ def packet_root_sources(run_dir):
         for identifier, _kind in rows]
 
 
+def scoped_root_sources(run_dir, plan):
+    identities = set(plan.get("relevance", {}).get("claimant_ids", []) + plan.get("relevance", {}).get("character_ids", []))
+    with index_connection(run_dir) as db:
+        rows = db.execute("SELECT commit_id,source_id,pointer,kind FROM search_documents WHERE kind='root' ORDER BY sequence,id").fetchall()
+    return [read_search_source(run_dir, dict(zip(("commit_id", "source_id", "pointer", "kind"), row))) for row in rows
+        if row[2] in {"/work_canon", "/format_composition_law"} or row[1] in identities]
+
+
+def predecessor_contracts(run_dir, records):
+    return [{"authority": "COMMITTED PREDECESSOR CONTRACT", "source_commit_id": record["commit_id"],
+        "source_hash": _source_index(run_dir, [record["commit_id"]])[record["commit_id"]]["hash"],
+        "packet_slot_id": record["packet_slot_id"], "constraint_delta": record["constraint_delta"],
+        "decision_edges": record["decision_edges"],
+        "content_ids": {key: [value[identity] for value in record[key]]
+            for key, identity in (("scenes", "scene_id"), ("artifacts", "artifact_id"), ("endings", "ending_id"))}}
+        for record in records]
+
+
 def pack_packet_context(required, optional, max_tokens, receipt):
     def render(sections, compact, details=None):
         sources, records = {}, {}
@@ -3811,7 +3947,8 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
     ensure_index(run_dir)
     manifest = read_json(run_dir / "run-manifest.json")
     genesis = committed_record(run_dir, "genesis")
-    root_sources = packet_root_sources(run_dir)
+    scoped = execution_policy(run_dir).get("scoped_sources", False)
+    root_sources = scoped_root_sources(run_dir, plan) if scoped else packet_root_sources(run_dir)
     law, law_provenance = instruction_profile(run_dir)
     dependencies = packet_records(run_dir, plan.get("depends_on_packet_slot_ids", []), verify=True)
     if {record["packet_slot_id"] for record in dependencies} != set(plan.get("depends_on_packet_slot_ids", [])):
@@ -3839,11 +3976,15 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
         proof_events.append(event)
         if event.get("resolution_event"):
             proof_events.append(event["resolution_event"])
-    dependency_ids = {identifier for record in dependencies for identifier in generated_ids(record)}
+    dependency_ids = set() if scoped else {identifier for record in dependencies for identifier in generated_ids(record)}
     uncovered_proofs = [event | {"sources": [source for source in event["sources"] if source["artifact_id"] not in dependency_ids]} for event in proof_events]
     required_sources = retrieve_original_sources(run_dir, uncovered_proofs, limit=None, strict=True) if uncovered_proofs else []
     required_ids = {identifier for record in dependencies for identifier in generated_ids(record)} | {source["source_id"] for source in required_sources}
-    protected_past = [event for event in past if any(source["artifact_id"] in required_ids for source in event["sources"])]
+    mandatory_tags = {key: set(plan.get("relevance", {}).get(key, []))
+        for key in ("claimant_ids", "character_ids", "object_ids", "location_ids", "state_keys")}
+    protected_past = [event for event in past if any(source["artifact_id"] in required_ids for source in event["sources"])
+        or scoped and (event["data"].get("subject") in subjects or any(values.intersection(
+            event["data"].get("relevance", {}).get(key, [])) for key, values in mandatory_tags.items()))]
     protected_fact_ids = {event["data"]["fact_id"] for event in protected_past}
     protected_knowledge, optional_knowledge = [], []
     for subject in knowledge:
@@ -3853,7 +3994,7 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
                 continue
             required_relations[relation], optional_relations[relation] = {}, {}
             for proposition, event in propositions.items():
-                target = required_relations if proposition in protected_fact_ids or any(source["artifact_id"] in required_ids for source in event["sources"]) else optional_relations
+                target = required_relations if scoped and subject["subject_id"] in subjects or proposition in protected_fact_ids or any(source["artifact_id"] in required_ids for source in event["sources"]) else optional_relations
                 target[relation][proposition] = event
         if any(required_relations.values()):
             protected_knowledge.append({"subject_id": subject["subject_id"], **required_relations})
@@ -3870,12 +4011,19 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
         ("ACTIVE HARD FUTURE OBLIGATIONS", hard),
         ("OBLIGATIONS THIS PACKET SHOULD ADVANCE", [obligations[key] for key in plan.get("advance_obligation_ids", [])]),
         ("OBLIGATIONS THIS PACKET MAY SATISFY", [obligations[key] for key in plan.get("may_satisfy_obligation_ids", [])]),
-        ("DIRECT DEPENDENCY SOURCE EVIDENCE", dependencies),
+        ("DIRECT DEPENDENCY SOURCE EVIDENCE", predecessor_contracts(run_dir, dependencies) if scoped else dependencies),
         ("REQUIRED PREREQUISITE SOURCE EVIDENCE", required_sources),
         ("CHARACTER KNOWLEDGE / BELIEF CONSTRAINTS", protected_knowledge),
         ("ENDING ATTRACTOR" if plan["packet_kind"] == "ending" else "ENDING / BRANCH ATTRACTORS EXERTING PRESSURE", attractors),
         ("FROZEN THRESHOLD GEOMANCY", [item for item in geomancy["assignments"] if item["technical_slot_id"] in slots]),
     ]
+    tool_session = run_dir / "raw" / f"{step_id or packet_step_id(plan)}.retrieval-session.json"
+    if not tool_session.exists() and step_id and step_id.endswith("_expanded"):
+        tool_session = run_dir / "raw" / f"{step_id.removesuffix('_expanded')}.retrieval-session.json"
+    tool_records = []
+    if tool_session.exists():
+        tool_records = read_json(tool_session)["working_set"]
+        required.append(("MODEL REQUESTED VERIFIED RECORDS", tool_records))
     if plan["packet_kind"] == "ending":
         chain = [required_obligations[key] for key in sorted(prerequisite_ids)]
         required.extend([
@@ -3913,15 +4061,15 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
         covered_commits = {record["commit_id"] for record in dependencies}
         covered_ids = {identifier for record in dependencies for identifier in generated_ids(record)} | {source["source_id"] for source in required_sources}
         covered_commits.update(source["source_commit_id"] for source in required_sources if isinstance(source["immutable_source"], dict) and source["immutable_source"].get("commit_id") == source["source_commit_id"])
-        chosen, cache, source_chars = [], {}, 0
+        chosen, cache, source_chars = [], {}, len(compact_context_value(tool_records).encode()) if tool_records else 0
         hits = search_history(run_dir, query, plan=plan)
         receipt["source_candidate_count"] = len(hits)
         ranks = {(hit["commit_id"],hit["pointer"]): {key: hit[key] for key in ("document_id", "bm25", "locality")} for hit in hits}
         for hit in hits:
-            if hit["commit_id"] in covered_commits or hit["source_id"] in covered_ids or hit["kind"] == "root" and genesis:
+            if hit["commit_id"] in covered_commits or hit["source_id"] in covered_ids or hit["kind"] == "root" and genesis and not scoped:
                 receipt["omissions"].append({"source_id": hit["source_id"], "source_commit_id": hit["commit_id"], "record_pointer": hit["pointer"], "reason": "covered_by_required_context"})
                 continue
-            if len(chosen) >= SEARCH_SOURCE_LIMIT:
+            if len(chosen) + len(tool_records) >= SEARCH_SOURCE_LIMIT:
                 receipt["omissions"].append({"source_id": hit["source_id"], "reason": "source_count_limit"})
                 continue
             # The catalog holds complete units, so skip oversized results without reading their archives.
@@ -3938,12 +4086,12 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
             chosen.append(source)
             source_chars += size
             covered_ids.add(hit["source_id"])
-        if len(chosen) < SEARCH_SOURCE_LIMIT:
+        if len(chosen) + len(tool_records) < SEARCH_SOURCE_LIMIT:
             for source in retrieve_original_sources(run_dir, selected):
                 if source["source_id"] in covered_ids or source.get("source_commit_id") in covered_commits:
                     continue
                 size = len(compact_context_value(source).encode())
-                if len(chosen) < SEARCH_SOURCE_LIMIT and source_chars + size <= manifest["budgets"]["max_retrieved_source_tokens"] * 3:
+                if len(chosen) + len(tool_records) < SEARCH_SOURCE_LIMIT and source_chars + size <= manifest["budgets"]["max_retrieved_source_tokens"] * 3:
                     chosen.append(source)
                     source_chars += size
                     covered_ids.add(source["source_id"])
@@ -4298,18 +4446,8 @@ def build_genesis_constraints(run_dir: Path, payload: dict) -> dict:
     cast = committed_record(run_dir, "genesis_cast")
     if payload["new_soft_obligations"] or payload["obligation_updates"]:
         raise SchemaError("Genesis semantic normalization cannot create or update obligations")
-    foundation = committed_record(run_dir, "genesis_foundation")
     extensions = payload.get("_claimant_extensions", [])
-    content_ids = {
-        anchor["technical_slot_id"]: ("genesis", anchor["claimant_id"])
-        for anchor in foundation["claimant_anchors"]
-    } | {
-        character["technical_slot_id"]: ("genesis", character["character_id"])
-        for character in cast["characters"]
-    } | {
-        extension["anchor"]["technical_slot_id"]: ("genesis", extension["anchor"]["claimant_id"])
-        for extension in extensions
-    }
+    content_ids = {key: item["source_ref"] for key, item in genesis_source_catalog(run_dir, extensions).items()}
     delta = build_semantic_delta(run_dir, "genesis_constraints", payload, content_ids)
     return record_envelope(run_dir, "genesis_constraints", "genesis_constraints") | {
         "cast_commit_id": cast["commit_id"], "story_format": "web",
@@ -4726,17 +4864,66 @@ def preserve_artistic_payload(run_dir: Path, step_id: str, payload: dict, conten
         write_json(base.with_suffix(".artistic.api.json"), response, mode=0o444, exclusive=True)
 
 
+def planning_string_value(content: str, schema: dict, path=None):
+    if content.strip() in schema.get("enum", []):
+        return content.strip()
+
+    def unique_object(pairs):
+        value = {}
+        for key, child in pairs:
+            if key in value:
+                raise SchemaError(f"Planning value response repeats the JSON key {key!r}")
+            value[key] = child
+        return value
+
+    framed = re.fullmatch(r"\s*```(?:json)?\s*\n([\s\S]*)\n```\s*", content)
+    try:
+        value = json.loads(framed.group(1) if framed else content, object_pairs_hook=unique_object)
+    except json.JSONDecodeError:
+        return content
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and set(value) == {"value"}:
+        return value["value"]
+    if isinstance(value, (dict, list)):
+        candidate = value
+        for part in path or []:
+            if isinstance(candidate, dict) and set(candidate) == {part}:
+                candidate = candidate[part]
+            elif isinstance(candidate, list) and part == 0 and len(candidate) == 1:
+                candidate = candidate[0]
+            else:
+                break
+        else:
+            if path:
+                return candidate
+        raise SchemaError('Return exactly {"value": "the requested string"}; do not return a containing record, graph patch, or alternatives.')
+    return content
+
+
 def request_architecture_analysis(
     run_dir: Path, step_id: str, prompt: str, schema: dict, transport, validator=None,
     *, phase="architecture", system_prompt="Repair only the identified uncommitted Architecture fields. Return JSON only.",
     response_name="architectureRepair", pause_stage="Architecture repair",
-    value_mode=False, initial_draft=False, temperature=0.0, max_tokens=None,
-    planning_mode=False, context_purpose="planning",
+    value_mode=False, value_path=None, initial_draft=False, temperature=0.0, max_tokens=None,
+    planning_mode=False, context_purpose="planning", retrieval_task=None,
 ):
     brief = read_json(run_dir / "generation-brief.json")
     seed = step_seed(brief["generation_seed"], step_id)
     maximum = max_tokens or read_json(run_dir / "run-manifest.json")["budgets"]["max_analysis_output_tokens"]
     parameters = {"temperature": temperature, "max_tokens": maximum, "seed": seed, "stream": True, "stream_options": {"include_usage": True}}
+    string_value = value_mode and schema.get("type") == "string"
+    response_schema = schema
+    if string_value:
+        response_schema = {"type": "object", "additionalProperties": False, "required": ["value"],
+            "properties": {"value": {key: value for key, value in schema.items() if key != "$defs"}}}
+        if "$defs" in schema:
+            response_schema["$defs"] = schema["$defs"]
+    if planning_mode and context_purpose == "planning" and retrieval_task is not None:
+        extra = retrieval_working_set(run_dir, step_id, retrieval_task["task"], transport,
+            scope_id=retrieval_task["scope_id"], scope_step=retrieval_task["step_id"])
+        if extra:
+            prompt += "\nOPTIONAL VERIFIED RETRIEVAL\n" + compact_context_value(extra)
     feedback = ""
     for correction in range(3):
         current_prompt = prompt + feedback
@@ -4778,10 +4965,8 @@ def request_architecture_analysis(
                         {"role": "user", "content": current_prompt},
                     ],
                     **parameters,
-                    "response_format": {"type": "json_schema", "json_schema": {"name": response_name, "strict": True, "schema": schema}},
+                    "response_format": {"type": "json_schema", "json_schema": {"name": response_name, "strict": True, "schema": response_schema}},
                 }
-                if value_mode and schema.get("type") == "string":
-                    request.pop("response_format")
                 response, content = provider_response(
                     transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
                     float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")), started_at=started,
@@ -4792,15 +4977,8 @@ def request_architecture_analysis(
             else:
                 content = normalize_provider_response(response,
                     plain_answers=set(schema["enum"]) if value_mode and schema.get("type") == "string" and "enum" in schema else None)
-            if value_mode and schema.get("type") == "string":
-                authored = content
-                if content.strip().startswith('"'):
-                    try:
-                        decoded = json.loads(content)
-                        if isinstance(decoded, str):
-                            authored = decoded
-                    except json.JSONDecodeError:
-                        pass
+            if string_value:
+                authored = planning_string_value(content, schema, value_path)
             else:
                 authored = parse_structured_content(content)
             validate_json_schema(authored, schema)
@@ -4824,7 +5002,9 @@ def request_architecture_analysis(
                 raise
             if correction < 2:
                 if error.failure_class not in RETRYABLE_PROVIDER_FAILURES:
-                    feedback += f"\n\nCORRECTION REQUIRED\n{error.reason}\nReturn only a corrected repair response."
+                    shape = ('Return exactly {"value": "the requested string"}, using the supplied value schema. '
+                        'Do not return the surrounding record or a field-path patch.') if string_value else "Return only a corrected repair response."
+                    feedback += f"\n\nCORRECTION REQUIRED\n{error.reason}\n{shape}"
                 continue
             raise PausedError(
                 pause_stage, f"{step_id} exhausted 3 focused repair attempts. Last problem: {error.reason}"
@@ -4968,6 +5148,45 @@ def validate_genesis_constraints_payload(payload: dict) -> None:
         raise SchemaError("Genesis constraints cannot reference Architecture IDs")
 
 
+def genesis_source_catalog(run_dir: Path, extensions=()) -> dict:
+    foundation = committed_record(run_dir, "genesis_foundation")
+    cast = committed_record(run_dir, "genesis_cast")
+    sources = {}
+
+    def add(handle, record, pointer, description, artifact_id=None):
+        sources[handle] = {"technical_slot_id": handle, "description": description,
+            "artifact_id": artifact_id or record["commit_id"],
+            "source_ref": {"artifact_type": "genesis", "artifact_id": artifact_id or record["commit_id"],
+                "source_locator": pointer}}
+
+    canon = foundation.get("work_canon", {})
+    if canon:
+        add("genesis_work_canon", foundation, "/work_canon", "Complete global world canon")
+        for field in canon:
+            if re.fullmatch(r"[a-z][a-z0-9_]*", field):
+                add(field, foundation, f"/work_canon/{field}", f"Global canon: {field}")
+        for index, event in enumerate(canon.get("chronology", [])):
+            add(event["event_id"], foundation, f"/work_canon/chronology/{index}", event["event"], event["event_id"])
+    if "format_composition_law" in foundation:
+        add("genesis_format_composition_law", foundation, "/format_composition_law", "Format composition law")
+    for index, anchor in enumerate(foundation.get("claimant_anchors", [])):
+        add(anchor["technical_slot_id"], foundation, f"/claimant_anchors/{index}",
+            f"Claimant anchor: {anchor.get('name', anchor['claimant_id'])}", anchor["claimant_id"])
+    for index, profile in enumerate(cast.get("claimants", [])):
+        handle = profile["claimant_id"].replace("claimant_", "claimant_profile_slot_", 1)
+        add(handle, cast, f"/claimants/{index}", f"Complete profile: {profile['claimant_id']}")
+    for index, character in enumerate(cast.get("characters", [])):
+        add(character["technical_slot_id"], cast, f"/characters/{index}",
+            f"Character: {character['name']}", character["character_id"])
+    for extension in extensions:
+        anchor = extension["anchor"]
+        sources[anchor["technical_slot_id"]] = {"technical_slot_id": anchor["technical_slot_id"],
+            "description": f"Claimant extension: {anchor['name']}", "artifact_id": anchor["claimant_id"],
+            "source_ref": {"artifact_type": "genesis", "artifact_id": anchor["claimant_id"],
+                "source_locator": f"Authored extension at {anchor['technical_slot_id']}"}}
+    return sources
+
+
 def genesis_constraint_catalog(run_dir: Path, extensions: list[dict]) -> dict:
     foundation = committed_record(run_dir, "genesis_foundation")
     cast = committed_record(run_dir, "genesis_cast")
@@ -4980,19 +5199,7 @@ def genesis_constraint_catalog(run_dir: Path, extensions: list[dict]) -> dict:
     return {
         "claimants": {item["claimant_id"]: item for item in claimants},
         "characters": {item["character_id"]: item for item in cast["characters"]},
-        "sources": {
-            item["technical_slot_id"]: {
-                "technical_slot_id": item["technical_slot_id"], "artifact_id": item["claimant_id"],
-                "kind": "claimant", "name": item["name"], "role": item["incident_role"],
-            }
-            for item in claimants
-        } | {
-            item["technical_slot_id"]: {
-                "technical_slot_id": item["technical_slot_id"], "artifact_id": item["character_id"],
-                "kind": "character", "name": item["name"], "role": item["role"],
-            }
-            for item in cast["characters"]
-        },
+        "sources": genesis_source_catalog(run_dir, extensions),
     }
 
 
@@ -5005,10 +5212,34 @@ def fact_position_aliases(index: int) -> tuple[str, ...]:
 
 def normalize_genesis_reference_aliases(payload: dict, run_dir: Path, extensions: list[dict]) -> dict:
     value = copy.deepcopy(payload)
-    sources = genesis_constraint_catalog(run_dir, extensions)["sources"]
-    identity_aliases = {slot: item["artifact_id"] for slot, item in sources.items()}
+    catalog = genesis_constraint_catalog(run_dir, extensions)
+    identity_aliases = {item["technical_slot_id"]: key for group in ("claimants", "characters")
+        for key, item in catalog[group].items()}
+    aliases = {alias: f"fact_{index:02d}" for index in range(1, len(value["canonical_facts"]) + 1)
+        for alias in fact_position_aliases(index)}
     for knowledge in value["knowledge_changes"]:
         knowledge["subject_id"] = identity_aliases.get(knowledge["subject_id"], knowledge["subject_id"])
+        knowledge["proposition_id"] = aliases.get(knowledge["proposition_id"], knowledge["proposition_id"])
+    for group in ("canonical_facts", "knowledge_changes", "motif_events"):
+        for item in value[group]:
+            tags = item.setdefault("relevance", {})
+            tags["technical_slot_ids"] = list(dict.fromkeys([item["source"]["technical_slot_id"]] + tags.get("technical_slot_ids", [])))
+    return value
+
+
+def prepare_genesis_metadata(run_dir, payload, schema):
+    # Check record shape before normalizing fields; only typed reference errors enter focused repair.
+    loose = copy.deepcopy(schema)
+    for node in _walk(loose):
+        if isinstance(node, dict):
+            node.pop("enum", None)
+    validate_json_schema(payload, loose)
+    value = normalize_genesis_reference_aliases(payload, run_dir, [])
+    issues = genesis_reference_issues(value, run_dir, [])
+    reference_paths = {reference_path(path) for issue in issues for path in issue["paths"]}
+    errors = _collect_schema_errors(value, schema, schema, "$")
+    if any(error[1] not in {"enum", "pattern", "const"} or error[0] not in reference_paths for error in errors):
+        validate_json_schema(value, schema)
     return value
 
 
@@ -5031,11 +5262,13 @@ def genesis_reference_issues(payload: dict, run_dir: Path, extensions: list[dict
     def add(kind, path, invalid, context):
         if invalid in (fact_aliases if kind == "proposition" else allowed[kind]):
             return
-        issue = grouped.setdefault((kind, invalid), {
+        meaning = sha256_bytes(canonical_json(context))
+        issue = grouped.setdefault((kind, invalid, meaning), {
             "kind": kind, "invalid": invalid, "paths": [], "contexts": [],
         })
         issue["paths"].append(path)
-        issue["contexts"].append(context)
+        if context not in issue["contexts"]:
+            issue["contexts"].append(context)
 
     groups = ("canonical_facts", "knowledge_changes", "new_soft_obligations", "obligation_updates", "motif_events")
     for group in groups:
@@ -5055,7 +5288,8 @@ def genesis_reference_issues(payload: dict, run_dir: Path, extensions: list[dict
         add("proposition", ("knowledge_changes", index, "proposition_id"), item["proposition_id"], item)
     issues = list(grouped.values())
     for index, issue in enumerate(issues, 1):
-        issue["issue_id"] = f"genesis_reference_{index:03d}"
+        issue["issue_id"] = "genesis_reference_" + sha256_bytes(canonical_json({key: issue[key]
+            for key in ("kind", "invalid", "contexts")}))[:12]
         issue["candidates"] = sorted(allowed[issue["kind"]])
     return issues
 
@@ -5216,10 +5450,11 @@ def repair_genesis_constraints_payload(
     }
 
     def persist(kind, repair_step, result, api_response, **details):
-        state["history"].append({
-            "kind": kind, **details, "step_id": repair_step,
-            "result": result, "api_response": api_response,
-        })
+        if not any(item["step_id"] == repair_step for item in state["history"]):
+            state["history"].append({
+                "kind": kind, **details, "step_id": repair_step,
+                "result": result, "api_response": api_response,
+            })
         write_json(repair_path, state)
 
     def resolve_proposition_batch(issues):
@@ -5248,6 +5483,32 @@ def repair_genesis_constraints_payload(
             )
         persist("proposition", repair_step, result, api_response)
 
+    def resolve_reference_batch(issues):
+        catalog = genesis_constraint_catalog(run_dir, state["claimant_extensions"])
+        properties = {issue["issue_id"]: {"enum": issue["candidates"] + ["UNRESOLVED"]} for issue in issues}
+        schema = {"type": "object", "additionalProperties": False, "required": ["resolutions"],
+            "properties": {"resolutions": {"type": "object", "additionalProperties": False,
+                "required": list(properties), "properties": properties}}}
+        prompt = complete_context([
+            ("REFERENCE USES", [{key: issue[key] for key in ("issue_id", "kind", "invalid", "contexts", "candidates")} for issue in issues]),
+            ("SOURCE CATALOG", list(catalog["sources"].values())),
+            ("IDENTITIES", {key: list(catalog[key].values()) for key in ("claimants", "characters")}),
+            ("INSTRUCTION", "Resolve each use to its actual evidence or identity. Choose UNRESOLVED when unsupported. "
+                "The same invalid string can mean different things in different records. Do not invent facts or promote characters.")])
+        signature = sha256_bytes(canonical_json({"issues": issues, "catalog": catalog}))[:16]
+        query = f"{step_id}_reference_batch_{signature}"
+        result, response = request_architecture_analysis(run_dir, query, prompt, schema, transport,
+            phase="genesis", response_name="genesisReferenceBatch", pause_stage="Genesis reference resolution", max_tokens=8192)
+        resolved = set()
+        for issue in issues:
+            replacement = result["resolutions"][issue["issue_id"]]
+            if replacement != "UNRESOLVED":
+                state["payload"] = apply_genesis_resolution(state["payload"], issue, replacement)
+                resolved.add(issue["issue_id"])
+        persist("reference_batch", query, result, response)
+        return resolved
+
+    deferred = set(state.get("deferred_reference_batches", []))
     for _ in range(64):
         state["payload"] = normalize_genesis_reference_aliases(
             state["payload"], run_dir, state["claimant_extensions"]
@@ -5258,6 +5519,17 @@ def repair_genesis_constraints_payload(
             build_genesis_constraints(run_dir, enriched)
             return enriched
         preserve_artistic_payload(run_dir, step_id, payload, content, response)
+        pending = [issue for issue in issues if issue["kind"] != "proposition" and issue["candidates"]
+            and sha256_bytes(canonical_json({key: issue[key] for key in ("kind", "invalid", "contexts", "candidates")})) not in deferred]
+        if len(pending) > 1:
+            batch = pending[:4]
+            resolved = resolve_reference_batch(batch)
+            for issue in batch:
+                if issue["issue_id"] not in resolved:
+                    deferred.add(sha256_bytes(canonical_json({key: issue[key] for key in ("kind", "invalid", "contexts", "candidates")})))
+            state["deferred_reference_batches"] = sorted(deferred)
+            write_json(repair_path, state)
+            continue
         proposition_issues = [issue for issue in issues if issue["kind"] == "proposition"]
         if proposition_issues and len(proposition_issues) == len(issues):
             if any(not issue["candidates"] for issue in proposition_issues):
@@ -5266,7 +5538,7 @@ def repair_genesis_constraints_payload(
                     "Genesis reference resolution",
                     f"No canonical fact can replace proposition reference {problem['invalid']}",
                 )
-            resolve_proposition_batch(proposition_issues)
+            resolve_proposition_batch(proposition_issues[:4])
             continue
         issue = next(issue for issue in issues if issue["kind"] != "proposition")
         can_expand = (
@@ -5691,14 +5963,16 @@ def validate_packet_payload_for_run(payload: dict, run_dir: Path, plan: dict) ->
         raise SchemaError("Packet payload contains unresolved join keys: " + "; ".join(problems))
 
 
-def semantic_source_ref(slot: str, content_ids: dict[str, tuple[str, str]]) -> dict:
+def semantic_source_ref(slot: str, content_ids: dict) -> dict:
     if slot not in content_ids:
         raise SchemaError(f"Semantic normalization references unknown technical slot {slot}")
+    if isinstance(content_ids[slot], dict):
+        return copy.deepcopy(content_ids[slot])
     artifact_type, artifact_id = content_ids[slot]
     return {"artifact_type": artifact_type, "artifact_id": artifact_id, "source_locator": f"Authored content at {slot}"}
 
 
-def build_semantic_delta(run_dir: Path, step_id: str, payload: dict, content_ids: dict[str, tuple[str, str]]) -> dict:
+def build_semantic_delta(run_dir: Path, step_id: str, payload: dict, content_ids: dict[str, tuple[str, str] | dict]) -> dict:
     def source(item):
         return [semantic_source_ref(item["source"]["technical_slot_id"], content_ids)]
 
@@ -5724,7 +5998,7 @@ def build_semantic_delta(run_dir: Path, step_id: str, payload: dict, content_ids
                 fact["relevance"][key] = list(dict.fromkeys(fact["relevance"].get(key, []) + values))
         for alias in fact_position_aliases(index):
             fact_aliases[alias] = fact["fact_id"]
-    known_facts = set(_read_state_map(run_dir, "canonical-facts.json"))
+    known_facts = historical_fact_ids(run_dir)
     knowledge = []
     for index, item in enumerate(payload["knowledge_changes"], 1):
         proposition = fact_aliases.get(item["proposition_id"], item["proposition_id"])
@@ -6615,7 +6889,7 @@ def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
     for ending in record["endings"]:
         validate_markdown_source(ending["prose_mdx"], f"Ending {ending['ending_id']}")
     changes = record["constraint_delta"]
-    known_propositions = set(_read_state_map(run_dir, "canonical-facts.json")) | {
+    known_propositions = historical_fact_ids(run_dir) | {
         item["fact_id"] for item in changes["canonical_facts"]
     }
     if any(item["proposition_id"] not in known_propositions for item in changes["knowledge_changes"]):
@@ -6725,7 +6999,12 @@ def compact_definition(run_dir: Path, definition: str) -> str:
     return json.dumps(definition_schema(definition, load_protocol(run_dir)), ensure_ascii=False, separators=(",", ":"))
 
 
-def architecture_plan_batch_schema(run_dir: Path, specs: list[dict]) -> dict:
+def packet_dependency_schema(allowed):
+    return {"type": "array", "uniqueItems": True,
+        **({"items": {"type": "string", "enum": list(allowed)}} if allowed else {"maxItems": 0})}
+
+
+def architecture_plan_batch_schema(run_dir: Path, specs: list[dict], *, prior_packet_ids=()) -> dict:
     schema = copy.deepcopy(definition_schema("architecturePlanBatchPayload", load_protocol(run_dir)))
     packet_ids = [item["packet_slot_id"] for item in specs]
     schema["properties"]["packet_plans"] |= {
@@ -6734,18 +7013,22 @@ def architecture_plan_batch_schema(run_dir: Path, specs: list[dict]) -> dict:
     packet_id = schema["$defs"]["packetPlanAnnotation"]["properties"]["packet_slot_id"]
     packet_id.clear()
     packet_id.update({"const": packet_ids[0]} if len(packet_ids) == 1 else {"enum": packet_ids})
+    variants = []
+    for index, spec in enumerate(specs):
+        node = copy.deepcopy(schema["$defs"]["packetPlanAnnotation"])
+        node["properties"]["packet_slot_id"] = {"const": spec["packet_slot_id"]}
+        node["properties"]["depends_on_packet_slot_ids"] = packet_dependency_schema(list(prior_packet_ids) + packet_ids[:index])
+        variants.append(node)
+    schema["properties"]["packet_plans"]["items"] = {"type": "object", "anyOf": variants}
     return schema
 
 
 def architecture_plan_annotation_schema(
     run_dir: Path, spec: dict, allowed_dependencies: list[str]
 ) -> dict:
-    schema = architecture_plan_batch_schema(run_dir, [spec])
+    schema = architecture_plan_batch_schema(run_dir, [spec], prior_packet_ids=allowed_dependencies)
     properties = schema["$defs"]["packetPlanAnnotation"]["properties"]
-    properties["depends_on_packet_slot_ids"] = {
-        "type": "array", "uniqueItems": True,
-        **({"items": {"enum": allowed_dependencies}} if allowed_dependencies else {"maxItems": 0}),
-    }
+    properties["depends_on_packet_slot_ids"] = packet_dependency_schema(allowed_dependencies)
     core = planning_core(run_dir)
     attractors = [
         item["attractor_id"] for item in core["attractors"]
@@ -6755,6 +7038,7 @@ def architecture_plan_annotation_schema(
         "type": "array", "uniqueItems": True, "items": {"enum": attractors},
         **({"minItems": 1, "maxItems": 1} if spec["packet_kind"] == "ending" else {}),
     }
+    schema["properties"]["packet_plans"]["items"]["anyOf"] = [copy.deepcopy(schema["$defs"]["packetPlanAnnotation"])]
     return schema
 
 
@@ -6779,11 +7063,11 @@ def semantic_delta_schema(run_dir: Path, source_slots, *, plan=None) -> dict:
     return schema
 
 
-def genesis_constraints_schema(run_dir: Path) -> dict:
+def genesis_constraints_schema(run_dir: Path, extensions=()) -> dict:
     protocol = load_protocol(run_dir)
     schema = copy.deepcopy(definition_schema("semanticDeltaPayload", protocol))
     for field, maximum in {
-        "canonical_facts": GENESIS_RAW_FACT_MAX,
+        "canonical_facts": 12,
         "knowledge_changes": 24,
         "motif_events": 8,
     }.items():
@@ -6804,6 +7088,16 @@ def genesis_constraints_schema(run_dir: Path) -> dict:
         "semanticKnowledge", "semanticMotif", "semanticSource", "stringList",
     }
     schema["$defs"] = {name: definition for name, definition in schema["$defs"].items() if name in needed}
+    catalog = genesis_constraint_catalog(run_dir, extensions)
+    schema["$defs"]["semanticSource"]["properties"]["technical_slot_id"] = {"type": "string", "enum": sorted(catalog["sources"])}
+    knowledge["subject_id"] = {"type": "string", "enum": sorted(set(catalog["claimants"]) | set(catalog["characters"]))}
+    knowledge["proposition_id"] = {"type": "string", "enum": [f"fact_{index:02d}" for index in range(1, 13)]}
+    tags = schema["$defs"]["relevanceTags"]["properties"]
+    for field, identifiers in (("technical_slot_ids", catalog["sources"]), ("claimant_ids", catalog["claimants"]),
+            ("character_ids", catalog["characters"]), ("state_keys", protocol["$defs"]["stateKey"]["enum"])):
+        tags[field] = {"type": "array", "items": {"enum": sorted(identifiers)}} if identifiers else {"type": "array", "maxItems": 0}
+    for field in ("arc_ids", "branch_ids"):
+        tags[field] = {"type": "array", "maxItems": 0}
     return schema
 
 
@@ -6833,11 +7127,17 @@ def genesis_cast_schema(run_dir: Path) -> dict:
     return schema
 
 
+def generation_context(run_dir, sections, max_tokens):
+    if execution_policy(run_dir).get("scoped_sources"):
+        return complete_context(sections)
+    return bounded_context(sections, max_tokens)
+
+
 def genesis_foundation_prompt(run_dir: Path) -> tuple[str, str]:
     manifest = read_json(run_dir / "run-manifest.json")
-    context = bounded_context(
+    context = generation_context(run_dir,
         [
-            ("FROZEN ENGINE CANON", (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
+            ("FROZEN ENGINE CANON", instruction_profile(run_dir)[0] if execution_policy(run_dir).get("scoped_sources") else (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
             ("FROZEN RUN MANIFEST", manifest),
         ],
         manifest["budgets"]["max_prepared_context_tokens"] - 12000,
@@ -6851,9 +7151,9 @@ def genesis_foundation_prompt(run_dir: Path) -> tuple[str, str]:
 
 def genesis_cast_prompt(run_dir: Path) -> tuple[str, str]:
     manifest = read_json(run_dir / "run-manifest.json")
-    context = bounded_context(
+    context = generation_context(run_dir,
         [
-            ("FROZEN ENGINE CANON", (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
+            ("FROZEN ENGINE CANON", instruction_profile(run_dir)[0] if execution_policy(run_dir).get("scoped_sources") else (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
             ("IMMUTABLE GENESIS FOUNDATION", committed_record(run_dir, "genesis_foundation")),
         ],
         manifest["budgets"]["max_prepared_context_tokens"] - 12000,
@@ -6867,10 +7167,11 @@ def genesis_cast_prompt(run_dir: Path) -> tuple[str, str]:
 
 def genesis_constraints_prompt(run_dir: Path) -> tuple[str, str]:
     manifest = read_json(run_dir / "run-manifest.json")
-    context = bounded_context(
+    context = generation_context(run_dir,
         [
             ("IMMUTABLE GENESIS FOUNDATION", committed_record(run_dir, "genesis_foundation")),
             ("IMMUTABLE GENESIS CAST", committed_record(run_dir, "genesis_cast")),
+            ("VALID GENESIS SOURCE HANDLES", list(genesis_source_catalog(run_dir).values())),
         ],
         manifest["budgets"]["max_prepared_context_tokens"] - 12000,
     )
@@ -6945,7 +7246,7 @@ def architecture_plan_prompt(run_dir: Path, specs: list[dict], sequence: int, co
         {
             "ARCHITECTURE_PLAN_CONTEXT": context,
             "ARCHITECTURE_PLAN_ALLOCATIONS": canonical_json(allocation).decode(),
-            "ARCHITECTURE_PLAN_PROTOCOL_DEFINITIONS": canonical_json(architecture_plan_batch_schema(run_dir, specs)).decode(),
+            "ARCHITECTURE_PLAN_PROTOCOL_DEFINITIONS": canonical_json(architecture_plan_batch_schema(run_dir, specs, prior_packet_ids=prior_ids)).decode(),
         },
     ), context
 
@@ -7111,6 +7412,9 @@ def request_packet_slice(run_dir: Path, architecture: dict, plan: dict, transpor
     if len(slots) != 1:
         raise IntegrityError("Creative packet slices must contain exactly one scene or ending")
     step_id = packet_step_id(plan)
+    retrieval_working_set(run_dir, step_id, {"packet_slot_id": plan["packet_slot_id"], "packet_kind": plan["packet_kind"],
+        "slots": slots, "keywords": search_query(plan)["terms"],
+        "entities": plan.get("relevance", {}).get("claimant_ids", []) + plan.get("relevance", {}).get("character_ids", [])}, transport)
     if step_was_truncated(run_dir, step_id):
         expanded_id = packet_step_id(plan, expanded=True)
         if step_was_truncated(run_dir, expanded_id):
@@ -7207,6 +7511,271 @@ def execute_packet_plan(run_dir: Path, architecture: dict, plan: dict, transport
 
 def save_planning_draft(run_dir: Path, step_id: str, state: dict) -> None:
     write_json(run_dir / ".staging" / f"{step_id}.planning.json", state)
+    ensure_index(run_dir)
+    with index_connection(run_dir) as db:
+        index_staged_plan(db, step_id, state)
+
+
+def index_staged_plan(db, step_id, state):
+    revision = sha256_bytes(canonical_json(state))
+    db.execute("DELETE FROM staged_items WHERE step_id=?", (step_id,))
+    def visit(value, pointer):
+        if isinstance(value, dict):
+            identity = next((value[key] for key in ("obligation_id", "attractor_id", "arc_id", "node_id", "edge_id", "packet_slot_id") if key in value), None)
+            if identity:
+                db.execute("INSERT INTO staged_items VALUES (?,?,?,?,?,?)",
+                    (step_id, revision, pointer, identity, "TENTATIVE PLAN", canonical_json(value).decode()))
+            else:
+                for key, child in value.items():
+                    visit(child, pointer + "/" + str(key).replace("~", "~0").replace("/", "~1"))
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                visit(child, pointer + f"/{index}")
+    visit(state.get("payload", {}), "")
+
+
+def historical_fact_ids(run_dir):
+    ensure_index(run_dir)
+    with index_connection(run_dir) as db:
+        facts = {json.loads(row[0])["data"]["fact_id"] for row in db.execute(
+            "SELECT payload FROM events WHERE kind='canonical_fact'")}
+    return facts | set(_read_state_map(run_dir, "canonical-facts.json"))
+
+
+def retrieval_tools():
+    identifiers = {"type": "array", "minItems": 1, "maxItems": 24, "uniqueItems": True,
+        "items": {"type": "string", "maxLength": 96, "pattern": "^[a-z][a-z0-9_-]*$"}}
+    schemas = {
+        "search_records": ({"query": {"type": "string", "minLength": 1, "maxLength": 512},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 24}}, "Find committed source IDs using literal full text search."),
+        "get_records": ({"ids": identifiers}, "Read complete immutable source units by ID with verified commit/hash/pointer provenance."),
+        "get_constraints": ({"ids": identifiers}, "Read historical constraint events by constraint ID or proposition/obligation ID; current state is separate."),
+        "get_plan_items": ({"ids": identifiers}, "Read tentative planning records by allocated ID. Tentative plans are intentions, never established facts."),
+    }
+    return [{"type": "function", "function": {"name": name, "description": description,
+        "parameters": {"type": "object", "additionalProperties": False, "required": list(properties), "properties": properties}}}
+        for name, (properties, description) in schemas.items()]
+
+
+def read_retrieval_tool(run_dir, name, arguments):
+    definitions = {tool["function"]["name"]: tool["function"]["parameters"] for tool in retrieval_tools()}
+    if name not in definitions:
+        raise SchemaError("Unknown read tool")
+    validate_json_schema(arguments, definitions[name])
+    ensure_index(run_dir)
+    if name == "get_plan_items":
+        # Checkpoints are authoritative, including after interruption between a file and index write.
+        with index_connection(run_dir) as db:
+            for path in sorted((run_dir / ".staging").glob("*.planning.json")):
+                index_staged_plan(db, path.name.removesuffix(".planning.json"), read_json(path))
+    with closing(sqlite3.connect(index_path(run_dir).as_uri() + "?mode=ro", uri=True)) as db:
+        db.execute("PRAGMA query_only=ON")
+        if name == "search_records":
+            query = search_query({"relevance": {"keywords": re.findall(r"[^\W_]+", arguments["query"])}})
+            if not query["expression"]:
+                return []
+            return [dict(zip(("source_id", "source_commit_id", "record_pointer", "kind", "title"), row)) for row in db.execute(
+                "SELECT d.source_id,d.commit_id,d.pointer,d.kind,d.title FROM search_fts JOIN search_documents d "
+                "ON d.id=search_fts.rowid WHERE search_fts MATCH ? ORDER BY bm25(search_fts),d.sequence,d.id LIMIT ?",
+                (query["expression"], arguments["limit"]))]
+        ids = arguments["ids"]
+        placeholders = ",".join("?" for _ in ids)
+        if name == "get_plan_items":
+            return [{"step_id": row[0], "revision": row[1], "record_pointer": row[2], "authority": "TENTATIVE PLAN", "item": json.loads(row[3])}
+                for row in db.execute(f"SELECT step_id,revision,pointer,payload FROM staged_items WHERE item_id IN ({placeholders}) ORDER BY step_id,pointer LIMIT 24", ids)]
+        if name == "get_constraints":
+            return [json.loads(row[0]) for row in db.execute(
+                f"SELECT payload FROM events WHERE id IN ({placeholders}) OR json_extract(payload,'$.data.fact_id') IN ({placeholders}) "
+                f"OR json_extract(payload,'$.data.obligation_id') IN ({placeholders}) ORDER BY sequence LIMIT 24", ids * 3)]
+        rows = db.execute(f"SELECT commit_id,source_id,pointer,kind FROM search_documents WHERE source_id IN ({placeholders}) ORDER BY sequence,id LIMIT 24", ids).fetchall()
+    return [read_search_source(run_dir, dict(zip(("commit_id", "source_id", "pointer", "kind"), row))) for row in rows]
+
+
+def compact_retrieval_prompt(run_dir, task):
+    descriptor = {"task": task, "catalog": [], "catalog_partial": False,
+        "catalog_note": "Optional catalog; search for additional IDs. get_records retrieves complete source units."}
+    if estimated_prompt_tokens(canonical_json(descriptor).decode()) > 2048:
+        raise PausedError("Retrieval context", "Retrieval task descriptor exceeds 2,048 tokens; the authoring prompt was not sent to retrieval", "budget_exhaustion")
+    with index_connection(run_dir) as db:
+        rows = db.execute("SELECT source_id,kind,substr(title,1,160) FROM search_documents "
+            "WHERE kind IN ('root','plan') ORDER BY sequence,id LIMIT 65").fetchall()
+    for identifier, kind, title in rows:
+        item = {"id": identifier, "kind": kind, "title": title}
+        if item in descriptor["catalog"]:
+            continue
+        descriptor["catalog"].append(item)
+        if len(descriptor["catalog"]) > 64 or estimated_prompt_tokens(canonical_json(descriptor).decode()) > 2048:
+            descriptor["catalog"].pop()
+            descriptor["catalog_partial"] = True
+    if len(rows) == 65:
+        descriptor["catalog_partial"] = True
+    return canonical_json(descriptor).decode()
+
+
+def retrieval_scope_revision(run_dir, scope_step, groups=()):
+    upstream = {}
+    for path in sorted((run_dir / ".staging").glob("*.planning.json")):
+        state = read_json(path)
+        if path.name == f"{scope_step}.planning.json":
+            if not groups:
+                continue
+            payload = copy.deepcopy(state.get("payload", {}))
+            for group in groups:
+                cursor = payload
+                parts = group.split(".")
+                for part in parts[:-1]:
+                    cursor = cursor.get(part, {})
+                cursor.pop(parts[-1], None)
+            value = {"other_groups": payload}
+        else:
+            value = {key: state.get(key) for key in ("payload", "record")}
+        upstream[path.stem] = sha256_bytes(canonical_json(value))
+    return {"canonical_state_hash": load_state(run_dir)["canonical_state_hash"], "upstream_plans": upstream}
+
+
+def current_retrieval_records(run_dir, records):
+    result, checkpoints, archives = copy.deepcopy(records), {}, {}
+    for record in result:
+        if record.get("authority") == "TENTATIVE PLAN":
+            step = record["step_id"]
+            path = run_dir / ".staging" / f"{step}.planning.json"
+            if not path.exists():
+                return None
+            if step not in checkpoints:
+                checkpoints[step] = read_json(path)
+            state = checkpoints[step]
+            value = state.get("payload", {})
+            try:
+                for part in record["record_pointer"].strip("/").split("/") if record["record_pointer"] else []:
+                    part = part.replace("~1", "/").replace("~0", "~")
+                    value = value[int(part)] if isinstance(value, list) else value[part]
+            except (KeyError, IndexError, ValueError, TypeError):
+                return None
+            if value != record["item"]:
+                return None
+            record["revision"] = sha256_bytes(canonical_json(state))
+        elif "immutable_source" in record:
+            source = read_search_source(run_dir, {"commit_id": record["source_commit_id"], "source_id": record["source_id"],
+                "pointer": record["record_pointer"], "kind": "root"}, archives)
+            if source["source_hash"] != record["source_hash"] or source["immutable_source"] != record["immutable_source"]:
+                raise IntegrityError("Cached retrieval evidence changed")
+        elif "constraint_id" in record:
+            with index_connection(run_dir) as db:
+                row = db.execute("SELECT payload FROM events WHERE id=?", (record["constraint_id"],)).fetchone()
+            if row is None or json.loads(row[0]) != record:
+                return None
+    return result
+
+
+def retrieval_working_set(run_dir, step_id, task, transport, *, scope_id=None, scope_step=None):
+    policy = execution_policy(run_dir)
+    if policy.get("retrieval_mode") != "tools":
+        return []
+    saved = run_dir / "raw" / f"{step_id}.retrieval-session.json"
+    if saved.exists():
+        return read_json(saved)["working_set"]
+    checkpoint = run_dir / ".staging" / f"{step_id}.retrieval-session.json"
+    revision = retrieval_scope_revision(run_dir, scope_step, task.get("record_groups", []) if isinstance(task, dict) else []) if scope_id else None
+    shared = run_dir / ".staging" / f"retrieval-cache-{sha256_bytes(canonical_json([scope_id, revision]))[:24]}.json" if scope_id else None
+    if shared and shared.exists() and not checkpoint.exists():
+        cache = read_json(shared)
+        records = current_retrieval_records(run_dir, cache["working_set"])
+        if records is not None:
+            write_json(saved, {"working_set": records, "rounds": [], "call_count": 0,
+                "revision": revision, "reused_from": cache["source_step_id"]}, mode=0o444, exclusive=True)
+            return records
+    state = read_json(checkpoint) if checkpoint.exists() else {"rounds": [], "working_set": [], "call_count": 0,
+        "argument_errors": 0, "revision": load_state(run_dir)["canonical_state_hash"],
+        "planning_revisions": {path.name: sha256_file(path) for path in sorted((run_dir / ".staging").glob("*.planning.json"))}}
+    messages = [{"role": "system", "content": "Retrieve optional supporting records for the following task. Do not author fiction or plan changes. "
+        "Mandatory evidence is already supplied. Use only read tools when more context is needed; otherwise say READY. "
+        "At most two rounds and eight calls; sources are complete units. Search first when you need IDs."},
+        {"role": "user", "content": compact_retrieval_prompt(run_dir, task)}]
+    for round_ in state["rounds"]:
+        messages.extend(round_["messages"])
+    for number in range(len(state["rounds"]) + 1, policy["max_tool_rounds"] + 1):
+        if state["call_count"] >= policy["max_tool_calls"]:
+            break
+        round_step = f"{step_id}_retrieval_round_{number:02d}"
+        parameters = {"temperature": 0.0, "max_tokens": 8192, "seed": step_seed(read_json(run_dir / "generation-brief.json")["generation_seed"], round_step),
+            "stream": True, "stream_options": {"include_usage": True}}
+        parameters["max_tokens"] = planning_output_limit(run_dir, canonical_json(messages).decode(), {}, parameters["max_tokens"], "Retrieval context")
+        request = {"model": load_state(run_dir)["model"], "messages": messages, "tools": retrieval_tools(), "tool_choice": "auto", **parameters}
+        paths = sorted((run_dir / "raw").glob(f"{round_step}-attempt*.api.json"), key=lambda path: int(path.name.split("-attempt")[-1].split(".")[0]))
+        response = read_json(paths[-1]) if paths else None
+        if response is not None and response.get("_cathedrals_stream_complete") is False:
+            response = None
+        attempt = (int(paths[-1].name.split("-attempt")[-1].split(".")[0]) + (response is None)) if paths else 1
+        path = run_dir / "raw" / f"{round_step}-attempt{attempt}.api.json"
+        meta = {"step_id": round_step, "attempt": attempt, "parameters": parameters,
+            "prompt_hash": sha256_bytes(canonical_json(messages)), "context_hash": state["revision"]}
+        if response is None:
+            brief = read_json(run_dir / "generation-brief.json")
+            budgets = read_json(run_dir / "run-manifest.json")["budgets"]
+            tokens = estimated_prompt_tokens(canonical_json(request).decode())
+            if tokens > packet_input_limit(run_dir, parameters["max_tokens"]):
+                raise PausedError("Retrieval context", "Complete tool envelope exceeds the frozen input ceiling", "budget_exhaustion")
+            if load_state(run_dir)["analysis_step_count"] >= budgets["max_analysis_step_count"]:
+                raise PausedError("Retrieval budget", "Read rounds exhausted the frozen analysis allowance", "budget_exhaustion")
+            usage = [(read_json(item).get("usage") or {}) for item in (run_dir / "raw").glob("*.api.json")]
+            for key, ceiling, reserve in (("prompt_tokens", "max_cumulative_input_tokens", tokens),
+                    ("completion_tokens", "max_cumulative_output_tokens", parameters["max_tokens"])):
+                if sum(item.get(key) or 0 for item in usage) + reserve > budgets[ceiling]:
+                    raise PausedError("Retrieval budget", f"Read round exceeds {ceiling}", "budget_exhaustion")
+            try:
+                response, _ = provider_response(transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
+                    float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")), allow_tools=True, started_at=utc_now(),
+                    preserve=lambda value: write_json(path, value | {"_cathedrals_request": meta}, mode=0o444, exclusive=True),
+                    stream_path=path.with_suffix(".sse"))
+            except CathedralsError as error:
+                append_failed_attempt(run_dir, step_id=round_step, attempt=attempt, phase="architecture",
+                    prompt=canonical_json(messages).decode(), context=state["revision"], parameters=parameters,
+                    started_at=utc_now(), step_type="analysis",
+                    usage=((getattr(error, "response", None) or (read_json(path) if path.exists() else {})).get("usage") or {}),
+                    failure_class=error.failure_class)
+                raise
+        response["_cathedrals_request"] = meta
+        preserve_planning_result(run_dir, step_id, round_step, {"synthetic": False, "read_only": True}, response, kind="read_only_retrieval", phase="architecture")
+        calls = completed_tool_calls(response)
+        assistant = response["choices"][0]["message"]
+        round_messages = [{key: assistant[key] for key in ("role", "content", "tool_calls") if key in assistant} | {"role": "assistant"}]
+        for call in calls:
+            state["call_count"] += 1
+            if state["call_count"] > policy["max_tool_calls"]:
+                result = {"error": "Task tool call limit reached"}
+            else:
+                try:
+                    arguments = parse_structured_content(call["function"].get("arguments", ""))
+                    records = read_retrieval_tool(run_dir, call["function"].get("name"), arguments)
+                    result = {"records": [], "omissions": []}
+                    if call["function"].get("name") == "search_records":
+                        result["records"] = records
+                        round_messages.append({"role": "tool", "tool_call_id": call["id"], "content": canonical_json(result).decode()})
+                        continue
+                    for record in records:
+                        if record in state["working_set"]:
+                            result["records"].append(record)
+                            continue
+                        prospective = state["working_set"] + [record]
+                        if len(prospective) > SEARCH_SOURCE_LIMIT or estimated_prompt_tokens(compact_context_value(prospective)) > 12288:
+                            result["omissions"].append({"reason": "Optional retrieval budget; complete record not included"})
+                        else:
+                            state["working_set"].append(record)
+                            result["records"].append(record)
+                except (SchemaError, ValueError, TypeError) as error:
+                    state["argument_errors"] += 1
+                    result = {"error": str(error), "correction_allowed": state["argument_errors"] == 1}
+            round_messages.append({"role": "tool", "tool_call_id": call["id"], "content": canonical_json(result).decode()})
+        state["rounds"].append({"messages": round_messages, "step_id": round_step})
+        write_json(checkpoint, state)
+        messages.extend(round_messages)
+        if not calls or state["argument_errors"] > 1 or state["working_set"] and not state["argument_errors"] and all(
+                call["function"].get("name") != "search_records" for call in calls):
+            break
+    write_json(saved, state, mode=0o444, exclusive=True)
+    if shared:
+        write_json(shared, {"source_step_id": step_id, "working_set": state["working_set"]})
+    return state["working_set"]
 
 
 def compact_planning_schema(schema: dict) -> dict:
@@ -7270,6 +7839,96 @@ def prepared_context_limit(budgets: dict, *, planning=False):
     return budgets.get("max_planning_context_tokens", limit) if planning else limit
 
 
+def execution_policy(run_dir):
+    return read_json(run_dir / "run-manifest.json").get("execution_policy", {})
+
+
+def scoped_planning_context(run_dir, step_id, state, paths):
+    if not execution_policy(run_dir).get("bounded_planning"):
+        return planning_context(run_dir, step_id, state)
+    payload = state["payload"]
+    targets = []
+    for path in paths:
+        cursor = payload
+        for part in path:
+            if isinstance(cursor, dict) and part in cursor or isinstance(cursor, list) and isinstance(part, int) and part < len(cursor):
+                cursor = cursor[part]
+            else:
+                cursor = {}
+                break
+        targets.append({"path": path, "retained_value": cursor})
+    core = planning_core(run_dir)
+    items = []
+    def collect(value):
+        if isinstance(value, dict):
+            identity = next((value[key] for key in ("arc_id", "attractor_id", "obligation_id", "node_id", "edge_id", "packet_slot_id") if key in value), None)
+            if identity:
+                items.append((identity, value))
+            else:
+                for child in value.values():
+                    collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+    collect(payload)
+    if step_id != "architecture_core" and core:
+        collect(core)
+    references = set(re.findall(r'"([a-z][a-z0-9_]+)"', canonical_json(targets).decode()))
+    neighbors = [value for identity, value in items if identity in references]
+    for value in neighbors:
+        references.update(re.findall(r'"([a-z][a-z0-9_]+)"', canonical_json(value).decode()))
+    catalog = [{"id": identity, **{key: value[key] for key in ("kind", "purpose", "description", "terminal_transformation", "role") if key in value}}
+        for identity, value in items]
+    genesis = committed_record(run_dir, "genesis")
+    law, provenance = instruction_profile(run_dir)
+    context = {"frozen_law": law, "instruction_profile": provenance,
+        "brief": read_json(run_dir / "generation-brief.json"), "targets": targets, "candidate_catalog": catalog,
+        "committed_source_catalog": genesis_reference_catalog(run_dir),
+        "relevant_records": [value for identity, value in items if identity in references],
+        "global_canon": {key: genesis[key] for key in ("work_canon", "format_composition_law") if key in genesis},
+        "entity_catalog": [{key: value[key] for key in ("claimant_id", "character_id", "name", "public_role", "occupation", "epistemic_regime", "setting_relationship", "role") if key in value}
+            for group in ("claimants", "characters") for value in genesis.get(group, [])],
+        "relevant_entities": [value for group in ("claimants", "characters") for value in genesis.get(group, [])
+            if any(value.get(key) in references for key in ("claimant_id", "character_id") if value.get(key))],
+        "pending_hints": state.get("hints", []), "backward_setups": state.get("setups", [])}
+    if core:
+        context["allocations"] = planned_packet_specs(core)
+    return context
+
+
+def planning_retrieval_task(step_id, state, paths, *, context=None):
+    groups = set()
+    for path in paths:
+        if len(path) == 2 and path[0] in {"arcs", "attractors", "obligation_graph", "packet_plans"} and isinstance(path[1], int):
+            groups.add((path[0],))
+        elif len(path) == 3 and path[0] == "topology" and path[1] in {"nodes", "edges"} and isinstance(path[2], int):
+            groups.add(tuple(path[:2]))
+    if not groups:
+        return None
+    identities = []
+    for group in sorted(groups):
+        values = state["payload"]
+        for part in group:
+            values = values.get(part, {})
+        for value in values:
+            for field in ("arc_id", "attractor_id", "obligation_id", "node_id", "edge_id", "packet_slot_id"):
+                if value.get(field):
+                    identities.append(value[field])
+                    break
+    names = [".".join(group) for group in sorted(groups)]
+    context = context or {}
+    focus = [context.get("global_canon", {}).get("work_canon", {}).get("premise", "")]
+    for target in context.get("targets", []):
+        value = target.get("retained_value")
+        if isinstance(value, dict):
+            focus.extend(value.get(field, "") for field in ("purpose", "description", "terminal_transformation", "branch_path_relation"))
+    keywords = search_query({"relevance": {"keywords": [context.get("brief", {}).get("genre_flavor", "")]},
+        "soft_guidance": [text for text in focus if isinstance(text, str)]})["terms"]
+    return {"scope_id": f"{step_id}:{','.join(names)}", "step_id": step_id,
+        "task": {"phase": step_id, "record_groups": names, "allocated_ids": identities, "keywords": keywords,
+            "purpose": "Find optional committed evidence or upstream plan records that support this whole record group. Mandatory context is supplied separately to each authoring call."}}
+
+
 def planning_output_limit(run_dir: Path, prompt: str, schema: dict, requested: int, stage: str, *, purpose="planning") -> int:
     budgets = read_json(run_dir / "run-manifest.json")["budgets"]
     prompt_tokens = math.ceil(len(prompt.encode()) / 3)
@@ -7314,7 +7973,7 @@ def planning_value(run_dir: Path, step_id: str, state: dict, path: list, schema:
     if "type" not in schema and schema.get("enum") and all(isinstance(item, str) for item in schema["enum"]):
         schema = schema | {"type": "string"}
     schema = compact_planning_schema(schema)
-    context = planning_context(run_dir, step_id, state)
+    context = scoped_planning_context(run_dir, step_id, state, [path])
     task = {"path": path, "schema": schema, "reason": reason, "context": context}
     signature = sha256_bytes(canonical_json(task))[:16]
     if signature in state["values"]:
@@ -7327,18 +7986,21 @@ def planning_value(run_dir: Path, step_id: str, state: dict, path: list, schema:
         "Repair or complete ONE planning value. The engine assembles the surrounding JSON.\n"
         "Preserve accepted creative decisions. Reason backward from the desired payoff to its earlier setup.\n"
         "Setup instruction_ref values are JSON Pointers to complete guidance elsewhere in this context.\n"
+        "Paths containing $ task labels identify engine operations, not JSON properties to create or patches to return.\n"
         f"FIELD PATH\n{reference_path(path)}\n"
         f"PURPOSE\n{reason}\n"
         f"VALUE SCHEMA\n{canonical_json(schema).decode()}\n"
         "FULL ASSEMBLED PLANNING CONTEXT\n" + canonical_json(context).decode() +
-        "\nReturn only this value. For a string, return its text; for other types, return the JSON value. "
+        ('\nReturn exactly {"value": "the requested string"}, with no other keys. ' if schema.get("type") == "string"
+            else "\nReturn only the requested JSON value. ") +
         "Do not return a containing record, alternatives, or explanations."
     )
     repair_step = f"{step_id}_value_{signature}"
     value, response = request_architecture_analysis(
         run_dir, repair_step, prompt, schema, transport, validator,
-        system_prompt="Supply one authored planning value in its complete story context.",
-        response_name="planningValue", pause_stage=f"Planning value {reference_path(path)}", value_mode=True, planning_mode=True,
+        system_prompt=('Supply one authored planning string as {"value": "..."}; the engine applies it to the surrounding plan.'
+            if schema.get("type") == "string" else "Supply one authored planning value in its complete story context."),
+        response_name="planningValue", pause_stage=f"Planning value {reference_path(path)}", value_mode=True, value_path=path, planning_mode=True,
     )
     state["values"][signature] = value
     preserve_planning_result(run_dir, step_id, repair_step, value, response, kind="planning_value")
@@ -7551,7 +8213,7 @@ def planning_batch(run_dir: Path, step_id: str, state: dict, tasks: list[dict], 
               "properties": {key: {name: value for name, value in node.items() if name != "$defs"} for key, node in properties.items()},
               "$defs": definitions}
     schema = compact_planning_schema(schema)
-    context = planning_context(run_dir, step_id, state)
+    context = scoped_planning_context(run_dir, step_id, state, [task["path"] for task in pending])
     prompt = ("Complete only the pending planning targets as one coherent batch. Preserve accepted decisions. "
               "Reason backward from payoffs to earlier setups. Keep planning concise and proportionate to the requested scope.\n"
               "Setup instruction_ref values are JSON Pointers to complete guidance elsewhere in this context.\n"
@@ -7577,6 +8239,7 @@ def planning_batch(run_dir: Path, step_id: str, state: dict, tasks: list[dict], 
         else:
             result, response = request_architecture_analysis(run_dir, repair_step, prompt, schema, transport,
                 initial_draft=True, planning_mode=True, max_tokens=8192,
+                retrieval_task=planning_retrieval_task(step_id, state, [task["path"] for task in pending], context=context),
                 response_name="planningBatchValues", pause_stage="Planning batch")
     except PausedError as error:
         if error.failure_class == "budget_exhaustion":
@@ -7667,6 +8330,10 @@ def fill_planning_shape(run_dir: Path, step_id: str, state: dict, schema: dict, 
                             state["hints"].append(hint)
             if len(path) == 2 and path[0] == "obligation_graph":
                 value["status"] = "active"
+            if state.get("checkpoint_version") == 3 and (len(path) == 2 and path[0] in {
+                    "arcs", "attractors", "obligation_graph", "packet_plans"} or
+                    len(path) == 3 and path[:2] in (["topology", "nodes"], ["topology", "edges"])):
+                return
             for key in dict.fromkeys(node.get("required", []) + list(value)):
                 if key in node.get("properties", {}):
                     prepare(value.get(key), node["properties"][key], path + [key], counts)
@@ -7731,6 +8398,10 @@ def fill_planning_shape(run_dir: Path, step_id: str, state: dict, schema: dict, 
         return node
 
     def task_for(path, node):
+        if len(path) == 2 and path[0] == "packet_plans":
+            variants = root["properties"]["packet_plans"]["items"].get("anyOf")
+            if variants:
+                node = variants[path[1]]
         value = planning_get(state, path)
         missing = missing_schema(value, node)
         if missing is None:
@@ -7780,8 +8451,40 @@ def canonical_planning_aliases(run_dir: Path, payload: dict, audit=None) -> dict
     return result
 
 
+def repair_packet_dependency_lists(run_dir, step_id, state, schema, transport):
+    variants = schema.get("properties", {}).get("packet_plans", {}).get("items", {}).get("anyOf", [])
+    domains = {node["properties"]["packet_slot_id"]["const"]: node["properties"]["depends_on_packet_slot_ids"] for node in variants}
+    for index, plan in enumerate(state["payload"].get("packet_plans", [])):
+        node = domains.get(plan.get("packet_slot_id"))
+        if node is None or "depends_on_packet_slot_ids" not in plan:
+            continue
+        before = plan["depends_on_packet_slot_ids"]
+        if not _collect_schema_errors(before, node, node, "$"):
+            continue
+        allowed = node.get("items", {}).get("enum", [])
+        retained = [value for value in before if value in allowed] if isinstance(before, list) else []
+        if not allowed:
+            after = []
+        else:
+            def preserve_existing(value):
+                if not set(retained).issubset(value):
+                    raise SchemaError("Dependency repair must retain every already-valid earlier prerequisite")
+            after = planning_value(run_dir, step_id, state, ["packet_plans", index, "depends_on_packet_slot_ids"], node,
+                f"Repair the complete dependency list {before!r}. Retain these valid earlier prerequisites: {retained!r}. "
+                "Remove or replace self/future/unknown references using only earlier packet IDs. An empty list is allowed when no valid prerequisite remains.",
+                transport, validator=preserve_existing)
+        state.setdefault("dependency_repairs", []).append({"packet_slot_id": plan["packet_slot_id"], "before": before, "after": after})
+        plan["depends_on_packet_slot_ids"] = after
+        save_planning_draft(run_dir, step_id, state)
+
+
 def repair_planning_references(run_dir: Path, step_id: str, state: dict, schema: dict, transport, *, specs=None) -> None:
+    seen = {}
     while True:
+        fingerprint = sha256_bytes(canonical_json(state["payload"]))
+        seen[fingerprint] = seen.get(fingerprint, 0) + 1
+        if seen[fingerprint] > 3:
+            raise PausedError("Planning references", "Three passes made no progress; accepted planning records were preserved")
         state["payload"] = canonical_planning_aliases(run_dir, state["payload"], state.setdefault("aliases", []))
         if step_id == "architecture_core":
             state["payload"] = normalize_architecture_core_payload(state["payload"], run_dir)
@@ -7799,6 +8502,7 @@ def repair_planning_references(run_dir: Path, step_id: str, state: dict, schema:
                     if edge[field] not in nodes:
                         issues.append({"path": ["topology", "edges", index, field], "invalid": edge[field], "candidates": nodes, "mode": "replace"})
         else:
+            repair_packet_dependency_lists(run_dir, step_id, state, schema, transport)
             issues = named_reference_issues(run_dir, state["payload"], "architecturePlanBatchPayload", specs=specs)
         if not issues:
             save_planning_draft(run_dir, step_id, state)
@@ -7808,7 +8512,7 @@ def repair_planning_references(run_dir: Path, step_id: str, state: dict, schema:
             path = list(issue["path"])
             field = path[-2] if isinstance(path[-1], int) else path[-1]
             choices, additions = list(issue["candidates"]), {}
-            if step_id == "architecture_core" and field in {"termination_targets", "requires", "hard_obligation_ids", "prerequisite_obligation_ids"}:
+            if step_id == "architecture_core" and not execution_policy(run_dir).get("bounded_planning") and field in {"termination_targets", "requires", "hard_obligation_ids", "prerequisite_obligation_ids"}:
                 if len(state["payload"]["obligation_graph"]) < schema["properties"]["obligation_graph"]["maxItems"]:
                     additions["__NEW_OBLIGATION__"] = ("obligation_graph", "obligation_id")
                 if field == "termination_targets" and len(state["payload"]["attractors"]) < schema["properties"]["attractors"]["maxItems"]:
@@ -7822,7 +8526,8 @@ def repair_planning_references(run_dir: Path, step_id: str, state: dict, schema:
             selected.append((issue, additions, {"path": ["$resolutions", key],
                 "schema": {"type": "string", "enum": choices},
                 "reason": f"Resolve {issue['invalid']!r} at {reference_path(path)} using its meaning in the full draft. Choose __NARRATIVE_HINT__ for authored setup intent rather than a typed ID; it will be preserved and placed earlier. Choose a NEW option only for a missing local definition."}))
-        planning_batch(run_dir, step_id, state, [task for _, _, task in selected], transport, size=16)
+        planning_batch(run_dir, step_id, state, [task for _, _, task in selected], transport,
+            size=4 if execution_policy(run_dir).get("bounded_planning") else 16)
         # Reverse order keeps original array indices stable when hints are removed.
         for issue, additions, task in reversed(selected):
             path = list(issue["path"])
@@ -7848,13 +8553,74 @@ def repair_planning_references(run_dir: Path, step_id: str, state: dict, schema:
             save_planning_draft(run_dir, step_id, state)
 
 
+def allocate_core_draft(run_dir, schema, transport):
+    scope = read_json(run_dir / "run-manifest.json")["scope"]
+    topology = planning_schema_node(schema["properties"]["topology"], schema)
+    groups = {key: schema["properties"][key] for key in ("arcs", "attractors", "obligation_graph")}
+    groups.update({key: topology["properties"][key] for key in ("nodes", "edges")})
+    properties = {key: {"type": "integer", "minimum": max(node["minItems"], 4 if key == "nodes" else 3 if key == "edges" else 1),
+        "maximum": min(node["maxItems"], scope["possible_scene_count"] if key in {"arcs", "nodes"} else node["maxItems"])}
+        for key, node in groups.items()}
+    layout_schema = {"type": "object", "additionalProperties": False, "required": list(properties), "properties": properties}
+    genesis = committed_record(run_dir, "genesis")
+    prompt = ("Choose the smallest useful architecture record counts for this scope. Do not write the records yet. "
+        "The engine allocates stable IDs, then asks you to author coherent batches. Include at least four topology nodes "
+        "for three opening paths, and enough edges to connect all nodes. Counts are capacity, not quality targets.\n"
+        + canonical_json({"scope": scope, "global_canon": genesis["work_canon"], "schema": layout_schema}).decode())
+    result, response = request_architecture_analysis(run_dir, "architecture_layout", prompt, layout_schema, transport,
+        response_name="architectureLayout", planning_mode=True, max_tokens=8192)
+    preserve_planning_result(run_dir, "architecture_core", "architecture_layout", result, response, kind="planning_layout")
+    payload = {}
+    for group, identity, prefix in (("arcs", "arc_id", "arc"), ("attractors", "attractor_id", "attractor"),
+            ("obligation_graph", "obligation_id", "obligation"), ("nodes", "node_id", "architecture_node"),
+            ("edges", "edge_id", "architecture_edge")):
+        parent = payload.setdefault("topology", {}) if group in {"nodes", "edges"} else payload
+        parent[group] = [{identity: f"{prefix}_{index:03d}"} for index in range(1, result[group] + 1)]
+    state = {"payload": payload, "values": {}, "hints": [], "unassigned": [], "incomplete": [],
+        "checkpoint_version": 3, "ready": False}
+    save_planning_draft(run_dir, "architecture_core", state)
+    return state
+
+
+def constrain_planning_ids(schema, payload, run_dir):
+    groups = {"arc_id": [value["arc_id"] for value in payload["arcs"]],
+        "attractor_id": [value["attractor_id"] for value in payload["attractors"]],
+        "obligation_id": [value["obligation_id"] for value in payload["obligation_graph"]],
+        "node_id": [value["node_id"] for value in payload["topology"]["nodes"]]}
+    genesis = committed_record(run_dir, "genesis")
+    groups["claimant_id"] = [value["claimant_id"] for value in genesis["claimants"]]
+    groups["character_id"] = [value["character_id"] for value in genesis.get("characters", [])]
+    groups["termination"] = groups["obligation_id"] + groups["attractor_id"]
+    groups["source"] = sorted(set(genesis_reference_catalog(run_dir)) | set(groups["termination"] + groups["arc_id"] + groups["node_id"]))
+    fields = {"requires": "obligation_id", "hard_obligation_ids": "obligation_id",
+        "prerequisite_obligation_ids": "obligation_id", "claimant_pressures": "claimant_id",
+        "entry_segment_id": "node_id", "opening_branch_node_id": "node_id", "reconvergence_node_ids": "node_id",
+        "from_node_id": "node_id", "to_node_id": "node_id", "arc_ids": "arc_id",
+        "attractor_ids": "attractor_id", "claimant_ids": "claimant_id", "character_ids": "character_id",
+        "termination_targets": "termination", "created_by_ids": "source", "artifact_id": "source"}
+    for value in _walk(schema):
+        if not isinstance(value, dict) or "properties" not in value:
+            continue
+        for name, kind in fields.items():
+            if name not in value["properties"]:
+                continue
+            old = planning_schema_node(value["properties"][name], schema)
+            value["properties"][name] = (old | ({"items": {"enum": groups[kind]}, "uniqueItems": True} if groups[kind] else {"maxItems": 0})
+                if old.get("type") == "array" else {"type": "string", "enum": groups[kind]})
+
+
 def prepare_core_draft(run_dir: Path, transport) -> dict:
     if committed_record(run_dir, "architecture_core"):
         return committed_record(run_dir, "architecture_core")
     prompt, context = architecture_core_prompt(run_dir)
     schema = copy.deepcopy(definition_schema("architectureCorePayload", load_protocol(run_dir)))
     schema["$defs"]["obligation"].pop("allOf", None)
-    state = staged_planning_request(run_dir, "architecture_core", prompt, context, schema, transport)
+    path = run_dir / ".staging/architecture_core.planning.json"
+    if execution_policy(run_dir).get("bounded_planning"):
+        state = read_json(path) if path.exists() else allocate_core_draft(run_dir, schema, transport)
+        constrain_planning_ids(schema, state["payload"], run_dir)
+    else:
+        state = staged_planning_request(run_dir, "architecture_core", prompt, context, schema, transport)
     if state.get("ready"):
         return state["record"]
     fill_planning_shape(run_dir, "architecture_core", state, schema, transport)
@@ -7939,8 +8705,16 @@ def prepare_plan_draft(run_dir: Path, specs: list[dict], sequence: int, count: i
     if committed:
         return committed
     prompt, context = architecture_plan_prompt(run_dir, specs, sequence, count)
-    schema = architecture_plan_batch_schema(run_dir, specs)
-    state = staged_planning_request(run_dir, step, prompt, context, schema, transport)
+    prior = [item["packet_slot_id"] for item in planned_packet_specs(planning_core(run_dir))]
+    schema = architecture_plan_batch_schema(run_dir, specs, prior_packet_ids=prior[:prior.index(specs[0]["packet_slot_id"])])
+    path = run_dir / ".staging" / f"{step}.planning.json"
+    if execution_policy(run_dir).get("bounded_planning"):
+        state = read_json(path) if path.exists() else {"payload": {"packet_plans": [
+            {"packet_slot_id": spec["packet_slot_id"]} for spec in specs]}, "values": {}, "hints": [],
+            "unassigned": [], "incomplete": [], "checkpoint_version": 3, "ready": False}
+        save_planning_draft(run_dir, step, state)
+    else:
+        state = staged_planning_request(run_dir, step, prompt, context, schema, transport)
     if state.get("ready"):
         return state["record"]
     supplied = state["payload"].get("packet_plans", [])
@@ -7956,10 +8730,12 @@ def prepare_plan_draft(run_dir: Path, specs: list[dict], sequence: int, count: i
         if key != "packet_plans":
             state["hints"].append({"source_path": [key], "text": json.dumps(state["payload"][key], ensure_ascii=False)})
     state["payload"] = {"packet_plans": annotations}
+    repair_packet_dependency_lists(run_dir, step, state, schema, transport)
+    if specs[0]["packet_slot_id"] == prior[0]:
+        annotations[0]["depends_on_packet_slot_ids"] = []
     fill_planning_shape(run_dir, step, state, schema, transport)
     repair_planning_references(run_dir, step, state, schema, transport, specs=specs)
     annotations = state["payload"]["packet_plans"]
-    prior = [item["packet_slot_id"] for item in planned_packet_specs(planning_core(run_dir))]
     for index, (spec, annotation) in enumerate(zip(specs, annotations)):
         allowed = prior[:prior.index(spec["packet_slot_id"])]
         annotation_schema = architecture_plan_annotation_schema(run_dir, spec, allowed)
@@ -8082,15 +8858,19 @@ def execute_planning_phases(run_dir: Path, transport=http_json) -> list[dict]:
             item["batch_sequence"] == record["batch_sequence"] for item in committed_records(run_dir, "architecture_plan_batch"))):
             continue
         state = read_json(run_dir / ".staging" / f"{step}.planning.json")
-        response = state["bulk_response"]
-        if state["bulk_failed"]:
+        assembled = state.get("checkpoint_version") == 3
+        response = state.get("bulk_response")
+        if assembled or state["bulk_failed"]:
             response = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(state["payload"], ensure_ascii=False)}}],
                         "usage": {}, "_cathedrals_assembled_from_fields": True}
         attempt = max((item["attempt"] for item in step_entries(run_dir, step)), default=0) + 1
         commit_record(run_dir, record, json.dumps(state["payload"], ensure_ascii=False), response,
-            planned_step_id=step, attempt=attempt, step_phase="architecture", prompt=state["prompt"], context=state["context"],
-            parameters=state["bulk_response"].get("_cathedrals_request", {}).get("parameters", {"temperature": 0.7, "max_tokens": EXPANDED_OUTPUT_TOKENS, "seed": step_seed(read_json(run_dir / 'generation-brief.json')['generation_seed'], step), "stream": True}),
-            branch_relation="macroarchitecture", usage_already_ledgered=state.get("bulk_usage_ledgered", state["bulk_failed"]))
+            planned_step_id=step, attempt=attempt, step_phase="architecture",
+            prompt=state.get("prompt", "Engine assembly of checkpointed planning batches; see planning-draft and repair audit."),
+            context=state.get("context", canonical_json(state["payload"]).decode()),
+            parameters=(state.get("bulk_response") or {}).get("_cathedrals_request", {}).get("parameters", {
+                "seed": step_seed(read_json(run_dir / 'generation-brief.json')['generation_seed'], step), "assembly": "checkpointed_batches"}),
+            branch_relation="macroarchitecture", usage_already_ledgered=assembled or state.get("bulk_usage_ledgered", state["bulk_failed"]))
     return batches
 
 
@@ -8469,6 +9249,8 @@ def validate_complete_work(run_dir: Path) -> dict:
                     reachable.add(edge["resolved_content_id"])
                     changed = True
         missing_content = content_ids - reachable
+        if execution_policy(run_dir).get("scoped_sources") and not any(item["ending_id"] in reachable for item in endings):
+            reasons.append("No committed ending is reachable from the opening through playable links.")
         if missing_content:
             warn("reachability_quality", f"Committed content is unreachable from the entry scene: {', '.join(sorted(missing_content)[:8])}.")
     if len({scene["branch_depth"] for scene in scenes}) < 2:
@@ -8520,7 +9302,7 @@ def validate_complete_work(run_dir: Path) -> dict:
         ):
             reasons.append(f"Impossible obligation {identifier} is not scoped to a lawfully foreclosed future.")
     source_index = _source_index(run_dir)
-    known_propositions = set(_read_state_map(run_dir, "canonical-facts.json"))
+    known_propositions = historical_fact_ids(run_dir)
     constraint_path = run_dir / "constraints/constraint-events.jsonl"
     constraint_events = [json.loads(line) for line in constraint_path.read_text(encoding="utf-8").splitlines()] if constraint_path.exists() else []
     for event in constraint_events:
@@ -8829,6 +9611,8 @@ export const renderMarkdown=source=>renderer.render(source);
     style = art_direction_css(direction) + house_style
     state_script = r'''const body=document.body,key=`cathedrals:${body.dataset.generation}:reader-state:v1`;let state=JSON.parse(localStorage.getItem(key)||'{"path":[],"values":{}}');const apply=effects=>effects.forEach(e=>{const v=state.values[e.key];if(e.operation==='set')state.values[e.key]=e.value;else if(e.operation==='increment')state.values[e.key]=(v||0)+e.value;else if(e.operation==='add')state.values[e.key]=[...new Set([...(v||[]),e.value])];else if(e.operation==='remove')state.values[e.key]=(v||[]).filter(x=>x!==e.value)});const satisfies=c=>{const v=state.values[c.key];return c.operator==='equals'?v===c.value:c.operator==='not_equals'?v!==c.value:c.operator==='gte'?v>=c.value:c.operator==='lte'?v<=c.value:c.operator==='contains'?Array.isArray(v)&&v.includes(c.value):!Array.isArray(v)||!v.includes(c.value)};const current=body.dataset.current;if(state.path.at(-1)!==current){state.path.push(current);apply(JSON.parse(body.dataset.effects||'[]'));localStorage.setItem(key,JSON.stringify(state))}document.querySelector('.trace').textContent=state.path.join(' / ');for(const link of document.querySelectorAll('.choice')){const conditions=JSON.parse(link.dataset.conditions),effects=JSON.parse(link.dataset.effects);link.hidden=!conditions.every(satisfies);link.addEventListener('click',()=>{apply(effects);localStorage.setItem(key,JSON.stringify(state))})}document.querySelector('.reset')?.addEventListener('click',()=>{localStorage.removeItem(key);location.href='/'})'''
     theme_script = r'''const root=document.documentElement,key='cathedrals:theme';const saved=localStorage.getItem(key);root.dataset.theme=saved||'dark';document.querySelector('.theme-toggle')?.addEventListener('click',()=>{root.dataset.theme=root.dataset.theme==='light'?'dark':'light';localStorage.setItem(key,root.dataset.theme)});'''
+    state_script = "(() => {\n" + state_script + "\n})();"
+    theme_script = "(() => {\n" + theme_script + "\n})();"
     index_page = r'''---
 import fs from 'node:fs';
 const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));
@@ -9305,6 +10089,66 @@ def print_success(run_dir: Path, build_path: Path, counts: dict, brief: dict, ou
     output_fn(f"Run:\npython3 -m http.server 4321 --directory {build_path}")
 
 
+def probe_execution_policy(base_url, model, transport, output_fn=print):
+    artifacts = []
+    tool = next(item for item in retrieval_tools() if item["function"]["name"] == "get_records")
+    request = {"model": model, "messages": [{"role": "user", "content":
+        "Synthetic transport check, no fiction. Call get_records with ids [synthetic_token]."}],
+        "tools": [tool], "tool_choice": "required",
+        "temperature": 0.0, "max_tokens": 8192, "seed": step_seed("synthetic_preflight", "capability_probe"), "stream": True, "stream_options": {"include_usage": True}}
+    mode = "automatic"
+    def dispatch(label, payload, allow_tools=False):
+        artifact = {"step_id": label, "request": copy.deepcopy(payload), "started_at": utc_now()}
+        artifacts.append(artifact)
+        try:
+            response, content = provider_response(transport, api_url(base_url, "/v1/chat/completions"), payload,
+                float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")), allow_tools=allow_tools,
+                preserve=lambda value: artifact.update({"response": value}))
+            return response, content
+        except CathedralsError as error:
+            artifact["error"] = error.reason
+            raise
+    messages = [{"role": "user", "content": "Synthetic extraction check: synthetic_reader knows that the synthetic token is blue."}]
+    try:
+        response, _ = dispatch("preflight_tools", request, True)
+        calls = completed_tool_calls(response)
+        if len(calls) == 1 and calls[0]["function"].get("name") == "get_records":
+            arguments = parse_structured_content(calls[0]["function"].get("arguments", ""))
+            validate_json_schema(arguments, tool["function"]["parameters"])
+            if arguments == {"ids": ["synthetic_token"]}:
+                mode = "tools"
+                messages = request["messages"] + [{"role": "assistant", "content": "", "tool_calls": calls},
+                    {"role": "tool", "tool_call_id": calls[0]["id"], "content":
+                        '{"id":"synthetic_token","proposition":"The synthetic token is blue.","subject":"synthetic_reader","relation":"knows"}'}]
+    except (CathedralsError, ValueError, TypeError):
+        pass
+    schema = {"type": "object", "additionalProperties": False, "required": ["proposition", "subject", "relation"],
+        "properties": {"proposition": {"const": "The synthetic token is blue."},
+            "subject": {"const": "synthetic_reader"}, "relation": {"const": "knows"}}}
+    structured = {key: value for key, value in request.items() if key not in {"tools", "tool_choice"}}
+    structured["messages"] = messages + [{"role": "user", "content": "Extract exactly the stated proposition, subject and knowledge relation as JSON. No fiction."}]
+    structured["response_format"] = {"type": "json_schema", "json_schema": {"name": "syntheticMetadata", "strict": True, "schema": schema}}
+    _response, content = dispatch("preflight_metadata", structured)
+    validate_json_schema(parse_structured_content(content), schema)
+    output_fn(f"Retrieval mode: {mode} (synthetic structured metadata check passed).")
+    return {"bounded_planning": True, "scoped_sources": True, "retrieval_mode": mode,
+        "max_tool_rounds": 2, "max_tool_calls": 8}, artifacts
+
+
+def archive_preflight_probes(run_dir, artifacts):
+    for artifact in artifacts:
+        step = artifact["step_id"]
+        response = artifact.get("response", {})
+        parameters = {key: artifact["request"][key] for key in ("temperature", "max_tokens", "stream", "stream_options", "seed")}
+        meta = {"attempt": 1, "parameters": parameters,
+            "prompt_hash": sha256_bytes(canonical_json(artifact["request"])),
+            "context_hash": sha256_bytes(canonical_json(artifact["request"]["messages"]))}
+        write_json(run_dir / "raw" / f"{step}-attempt1.api.json", response | {"_cathedrals_request": meta}, mode=0o444, exclusive=True)
+        write_json(run_dir / "raw" / f"{step}.probe.json", artifact, mode=0o444, exclusive=True)
+        preserve_planning_result(run_dir, step, step, {"synthetic": True, "error": artifact.get("error")},
+            response | {"_cathedrals_request": meta, "_cathedrals_started_at": artifact["started_at"]}, kind="capability_probe", phase="preflight")
+
+
 def main(argv=None, *, input_fn=input, output_fn=print, transport=http_json) -> int:
     parser = argparse.ArgumentParser(description="Generate one complete static Cathedrals work through LM Studio.")
     parser.parse_args(argv)
@@ -9315,6 +10159,9 @@ def main(argv=None, *, input_fn=input, output_fn=print, transport=http_json) -> 
         if run_dir:
             launcher = snapshot_root(run_dir) / "cathedrals"
             if launcher.exists() and Path(__file__).resolve() != launcher.resolve():
+                if sha256_file(launcher) != sha256_file(Path(__file__)):
+                    output_fn("This run uses a different frozen engine snapshot. Installation updates do not apply when resuming.\n"
+                        "Start a new generation to use the installed engine.\n")
                 return run_snapshot_launcher(run_dir, argv, input_fn, output_fn, transport)
             ensure_resume_ready(run_dir, output_fn, transport, input_fn)
             brief = read_json(run_dir / "generation-brief.json")
@@ -9326,13 +10173,16 @@ def main(argv=None, *, input_fn=input, output_fn=print, transport=http_json) -> 
             base_url = configured_lm_studio_url()
             model = lm_studio_preflight(base_url, os.environ.get("CATHEDRALS_MODEL"), input_fn, output_fn, transport)
             model_context_window_tokens = preflight_model_capacity(base_url, model, output_fn, transport)
+            policy, probes = probe_execution_policy(base_url, model, transport, output_fn)
             run_dir = create_run(
                 frozen,
                 base_url,
                 model,
                 output_fn,
                 model_context_window_tokens=model_context_window_tokens,
+                execution_policy=policy,
             )
+            archive_preflight_probes(run_dir, probes)
             output_fn("[01] Preflight                     ✓")
             output_fn("[02] Engine snapshot              ✓")
         build_path, counts, brief = execute_run(run_dir, output_fn, transport)

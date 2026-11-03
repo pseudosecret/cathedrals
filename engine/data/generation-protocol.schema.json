@@ -250,7 +250,8 @@
             "runtime_generation_allowed": { "const": false },
             "playable_status": { "const": "READY_TO_PLAY" }
           }
-        }
+        },
+        "execution_policy": {"type": "object", "additionalProperties": false, "required": ["bounded_planning", "scoped_sources", "retrieval_mode", "max_tool_rounds", "max_tool_calls"], "properties": {"bounded_planning": {"type": "boolean"}, "scoped_sources": {"type": "boolean"}, "retrieval_mode": {"enum": ["tools", "automatic"]}, "max_tool_rounds": {"const": 2}, "max_tool_calls": {"const": 8}}}
       }
     },
     "workCanon": {
@@ -1334,7 +1335,8 @@
         "input_tokens": { "type": ["integer", "null"], "minimum": 0 },
         "output_tokens": { "type": ["integer", "null"], "minimum": 0 },
         "cost": { "type": ["number", "null"], "minimum": 0 },
-        "currency": { "type": ["string", "null"], "pattern": "^[A-Z]{3}$" }
+        "currency": { "type": ["string", "null"], "pattern": "^[A-Z]{3}$" },
+        "reasoning_tokens": { "type": ["integer", "null"], "minimum": 0 }
       }
     },
     "ledgerEntry": {

@@ -44,6 +44,8 @@ def planning_response(request, resolve):
             schema["properties"][item["key"]] | {"$defs": schema.get("$defs", {})}), schema["properties"][item["key"]]) for item in targets})
     path = prompt.split("FIELD PATH\n", 1)[1].split("\n", 1)[0]
     value = project(resolve(planning_path(path), schema), schema)
+    if request.get("response_format", {}).get("json_schema", {}).get("schema", {}).get("required") == ["value"]:
+        return api_response({"value": value})
     return api_response(value, text=isinstance(value, str))
 
 
@@ -72,7 +74,8 @@ class ReferenceResolutionTests(unittest.TestCase):
         with mock.patch.object(RUNNER, "RUNTIME_ROOT", self.root / ".cathedrals"), mock.patch.object(
             RUNNER, "RUNS_ROOT", self.root / ".cathedrals/runs"
         ):
-            self.run = RUNNER.create_run(RUNNER.FrozenInputs(possible_scene_count=20), "http://offline.invalid", "offline", output_fn=lambda _: None)
+            self.run = RUNNER.create_run(RUNNER.FrozenInputs(possible_scene_count=getattr(self, "scene_count", 20)), "http://offline.invalid", "offline",
+                output_fn=lambda _: None, execution_policy=getattr(self, "policy", None))
 
     def records(self):
         foundation, cast = genesis_foundation_fixture(), genesis_cast_fixture()
@@ -238,6 +241,26 @@ class ReferenceResolutionTests(unittest.TestCase):
         original_prose = {}
         normalization_counts = {}
 
+        bounded = bool(getattr(self, "policy", None))
+        def desired_core():
+            value = architecture_core_payload()
+            foundation = RUNNER.committed_record(self.run, "genesis_foundation")
+            value["obligation_graph"][0].update(created_by_ids=[foundation["commit_id"]], sources=[{
+                "artifact_type": "genesis", "artifact_id": foundation["commit_id"], "source_locator": "Synthetic foundation."}])
+            value["arcs"] = [copy.deepcopy(value["arcs"][0]) | {"arc_id": f"arc_draft_{index}"} for index in range(1, 5)]
+            record = RUNNER.build_architecture_core(self.run, value)
+            return {key: record[key] for key in ("arcs", "attractors", "obligation_graph", "topology")} | {
+                "saturation_rationale": value["saturation_rationale"]}
+
+        def annotations():
+            core = RUNNER.planning_core(self.run)
+            return {"packet_plans": [{"packet_slot_id": spec["packet_slot_id"], "initial_priority": index,
+                "depends_on_packet_slot_ids": [], "branch_path_relation": "Synthetic relation.",
+                "attractor_ids": [core["attractors"][0]["attractor_id"]] if spec["packet_kind"] == "ending" else [],
+                "relevance": {"technical_slot_ids": spec["scene_slot_ids"] + spec["ending_slot_ids"],
+                    "motif_ids": ["motif_pencil"], "state_keys": ["intro_phase"] if index == 1 else ["contamination"]},
+                "soft_guidance": []} for index, spec in enumerate(RUNNER.planned_packet_specs(core), 1)]}
+
         def transport(_method, _url, request, **_kwargs):
             name = request.get("response_format", {}).get("json_schema", {}).get("name", "reference")
             prompt = request["messages"][1]["content"]
@@ -249,8 +272,17 @@ class ReferenceResolutionTests(unittest.TestCase):
                 name = "semanticCorrectionCategory"
             calls.append(name)
             schema = request.get("response_format", {}).get("json_schema", {}).get("schema", {})
+            if name == "architectureLayout":
+                value = desired_core()
+                return api_response({key: len(value["topology"][key] if key in {"nodes", "edges"} else value[key])
+                    for key in ("arcs", "attractors", "obligation_graph", "nodes", "edges")})
             if name in {"planningValue", "planningBatchValues"}:
                 def resolve(path, node):
+                    if bounded and not any(isinstance(part, str) and part.startswith("$") for part in path) and path[0] in {"arcs", "attractors", "obligation_graph", "topology", "saturation_rationale", "packet_plans"}:
+                        value = annotations() if path[0] == "packet_plans" else desired_core()
+                        for part in path:
+                            value = value[part]
+                        return value
                     if "__NEW_ATTRACTOR__" in node.get("enum", []):
                         return "__NEW_ATTRACTOR__"
                     if "__NARRATIVE_HINT__" in node.get("enum", []):
@@ -318,6 +350,12 @@ class ReferenceResolutionTests(unittest.TestCase):
                 item = value[group][0]
                 item["artifacts"] = [copy.deepcopy(template["artifacts"][0]) for _ in range(properties["artifacts"]["minItems"])]
                 item["formal_compositions"] = [copy.deepcopy(template["formal_compositions"][0]) for _ in range(properties["formal_compositions"]["minItems"])]
+                if bounded and group == "scenes":
+                    number = int(slot.rsplit("_", 1)[1])
+                    target = f"scene_slot_{number + 1:04d}" if number < self.scene_count else "ending_slot_0001"
+                    item["choices"] = [{"destination": {"kind": "technical_slot", "id": target},
+                        "label": "Follow the synthetic evidence.", "kind": "progression", "availability": "playable",
+                        "major_decision": False, "state_conditions": [], "state_effects": []}]
                 original_prose[slot] = item["prose_mdx"]
             elif name == "semanticCorrectionCategory":
                 return api_response({"category": "obligation_updates"})
@@ -337,7 +375,8 @@ class ReferenceResolutionTests(unittest.TestCase):
                     self.assertIn("Continue ONLY motif_events", prompt)
                     value = {"items": [], "complete": True}
             elif name == "semanticDeltaPayload":
-                source = schema["$defs"]["semanticSource"]["properties"]["technical_slot_id"].get("enum", ["claimant_slot_01"])[0]
+                allowed_sources = schema["$defs"]["semanticSource"]["properties"]["technical_slot_id"].get("enum", ["claimant_slot_01"])
+                source = "claimant_slot_01" if "claimant_slot_01" in allowed_sources else allowed_sources[0]
                 value = genesis_semantic_payload(source)
                 normalization_counts[source] = normalization_counts.get(source, 0) + 1
                 if source == "claimant_slot_01":
@@ -374,7 +413,7 @@ class ReferenceResolutionTests(unittest.TestCase):
 
         with mock.patch.object(RUNNER, "ROOT", self.root):
             build_path, counts, _brief = RUNNER.execute_run(self.run, output_fn=lambda _: None, transport=transport)
-        self.assertEqual(counts["scenes"], 20)
+        self.assertEqual(counts["scenes"], getattr(self, "scene_count", 20))
         with RUNNER.index_connection(self.run) as db:
             kinds = {row[0] for row in db.execute("SELECT DISTINCT kind FROM search_documents")}
             profiles = db.execute("SELECT commit_id,pointer FROM search_documents WHERE source_id='claimant_01' AND kind='root'").fetchall()
@@ -393,15 +432,15 @@ class ReferenceResolutionTests(unittest.TestCase):
                 self.assertEqual(receipt["attempt"], meta["ledger_entry"]["attempt"])
         self.assertEqual(counts["endings"], 5)
         self.assertEqual(len(authored_slots), len(set(authored_slots)))
-        self.assertEqual(calls.count("reference"), 52)
-        self.assertEqual(calls.count("architectureCorePayload"), 1)
+        self.assertEqual(calls.count("reference"), 2 * getattr(self, "scene_count", 20) + 12)
+        self.assertEqual(calls.count("architectureCorePayload"), 0 if bounded else 1)
         self.assertGreater(calls.count("planningValue"), 0)
         self.assertGreater(calls.count("planningBatchValues"), 0)
         self.assertEqual(calls.count("architectureRepair"), 0)
         self.assertEqual(normalization_counts["scene_slot_0002"], 1)
         self.assertEqual(normalization_counts["scene_slot_0006"], 1)
         failures = [entry for entry in RUNNER.ledger_entries(self.run) if entry["commit_status"] == "FAILED_BEFORE_COMMIT"]
-        self.assertEqual(len(failures), 5)
+        self.assertEqual(len(failures), 4 if bounded else 5)
         self.assertEqual(calls.count("semanticCategoryPage"), 3)
         self.assertEqual(calls.count("semanticCorrectionCategory"), 1)
         self.assertEqual(calls.count("epistemicCorrection"), 1)
@@ -434,6 +473,9 @@ class ReferenceResolutionTests(unittest.TestCase):
         self.assertEqual(finalization["human_intervention_count"], 0)
         self.assertEqual(finalization["committed_regeneration_count"], 0)
         RUNNER.reconcile_run(self.run)
+        import os, shutil
+        if os.environ.get("CATHEDRALS_ACCEPTANCE_EXPORT"):
+            shutil.copytree(build_path, os.environ["CATHEDRALS_ACCEPTANCE_EXPORT"], dirs_exist_ok=True)
 
 
 if __name__ == "__main__":

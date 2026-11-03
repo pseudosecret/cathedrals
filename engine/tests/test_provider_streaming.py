@@ -209,6 +209,23 @@ class ProviderStreamingTests(unittest.TestCase):
         self.assertFalse(RUNNER.run_snapshot_launcher(run, [], None, None, transport))
         transport.assert_not_called()
 
+    def test_resume_explains_a_different_snapshot_without_changing_it(self):
+        run = self.root / "resume_snapshot"
+        launcher = run / "engine-snapshot/cathedrals"
+        launcher.parent.mkdir(parents=True)
+        for different in (True, False):
+            with self.subTest(different=different):
+                launcher.write_bytes(b"# Preserved older engine.\n" if different else Path(RUNNER.__file__).read_bytes())
+                before = launcher.read_bytes()
+                output = []
+                with mock.patch.object(RUNNER, "ensure_runtime_layout"), mock.patch.object(RUNNER, "choose_resume", return_value=run), mock.patch.object(
+                    RUNNER, "run_snapshot_launcher", return_value=2
+                ) as delegate:
+                    self.assertEqual(RUNNER.main([], output_fn=output.append), 2)
+                delegate.assert_called_once()
+                self.assertEqual(launcher.read_bytes(), before)
+                self.assertEqual(any("Installation updates do not apply" in line for line in output), different)
+
     def test_connection_failures_retry_the_identical_request(self):
         calls = []
 

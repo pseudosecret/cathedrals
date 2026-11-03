@@ -130,6 +130,121 @@ class PlanningRecoveryTests(unittest.TestCase):
         value = RUNNER.planning_value(self.run, "architecture_core", self.state({"accepted": "keep"}), ["pending"], schema, "Synthetic identity.", mock.Mock(side_effect=AssertionError("repeated")))
         self.assertEqual(value, "source_one")
 
+    def test_string_value_requests_a_strict_value_envelope_and_retains_raw_response(self):
+        state = self.state({"accepted": "unchanged"})
+        path = ["topology", "$connect", "node_target"]
+        schema = {"type": "string", "enum": ["node_origin", "node_other"]}
+        response = api_response({"value": "node_origin"})
+        transport = mock.Mock(return_value=response)
+        value = RUNNER.planning_value(self.run, "architecture_core", state, path, schema, "Choose a reachable predecessor.", transport)
+        self.assertEqual(value, "node_origin")
+        self.assertEqual(state["payload"], {"accepted": "unchanged"})
+        request = transport.call_args.args[2]
+        wire = request["response_format"]["json_schema"]["schema"]
+        self.assertEqual(wire["required"], ["value"])
+        self.assertFalse(wire["additionalProperties"])
+        self.assertEqual(wire["properties"]["value"], schema)
+        RUNNER.validate_json_schema({"value": value}, wire)
+        self.assertIn('Return exactly {"value":', request["messages"][1]["content"])
+        self.assertIn("not JSON properties", request["messages"][1]["content"])
+        audit = RUNNER.read_json(self.run / ".staging/architecture_core.repair.json")["history"]
+        self.assertEqual(audit[-1]["result"], "node_origin")
+        self.assertEqual(audit[-1]["api_response"]["choices"][0]["message"]["content"], response["choices"][0]["message"]["content"])
+        raw = self.run / "raw" / f"{audit[-1]['step_id']}-attempt1.api.json"
+        self.assertEqual(RUNNER.read_json(raw)["choices"], response["choices"])
+        self.assertEqual(transport.call_count, 1)
+
+    def test_string_value_accepts_only_exact_literal_or_single_target_wrappers(self):
+        path = ["topology", "$connect", "node_target"]
+        schema = {"type": "string", "enum": ["node_origin"]}
+        for index, content in enumerate((
+            "  node_origin\n", '"node_origin"', '```json\n"node_origin"\n```',
+            '{"value":"node_origin"}', '```json\n{"value":"node_origin"}\n```',
+            '{"topology":{"$connect":{"node_target":"node_origin"}}}',
+            '```json\n{"topology":{"$connect":{"node_target":"node_origin"}}}\n```',
+        )):
+            with self.subTest(content=content):
+                state = self.state({"accepted": "unchanged"})
+                transport = mock.Mock(return_value=api_response(content, text=True))
+                value = RUNNER.planning_value(self.run, "architecture_core", state, path, schema, f"Synthetic wrapper case {index}.", transport)
+                self.assertEqual(value, "node_origin")
+                self.assertEqual(transport.call_count, 1)
+                self.assertEqual(state["payload"], {"accepted": "unchanged"})
+
+    def test_string_value_rejects_graph_patches_extra_fields_duplicates_and_invalid_targets(self):
+        path = ["topology", "$connect", "node_target"]
+        schema = {"type": "string", "enum": ["node_origin"]}
+        for content in (
+            '{"topology":{"edges":[{"from_node_id":"node_origin","to_node_id":"node_target"}]}}',
+            '{"value":"node_origin","extra":"node_origin"}',
+            '{"topology":{"$connect":{"node_target":"node_origin","node_other":"node_origin"}}}',
+            '{"value":"node_origin","value":"node_origin"}',
+            '{"topology":{"$connect":{"node_target":"node_origin","node_target":"node_origin"}}}',
+            '["node_origin"]', '{"value":["node_origin"]}', '{"value":"node_unknown"}',
+            '{"topology":{"$connect":{"wrong_target":"node_origin"}}}',
+            'The predecessor is node_origin.',
+        ):
+            with self.subTest(content=content), self.assertRaises(RUNNER.SchemaError):
+                value = RUNNER.planning_string_value(content, schema, path)
+                RUNNER.validate_json_schema(value, schema)
+
+    def test_wrapped_value_still_runs_schema_and_domain_validation_before_acceptance(self):
+        state = self.state({"accepted": "unchanged"})
+        schema = {"type": "string", "enum": ["node_origin", "node_other"]}
+        transport = mock.Mock(side_effect=[api_response({"value": "node_unknown"}),
+            api_response({"value": "node_origin"}), api_response({"value": "node_other"})])
+
+        def domain(value):
+            if value == "node_origin":
+                raise RUNNER.SchemaError("Synthetic route restriction.")
+
+        value = RUNNER.planning_value(self.run, "architecture_core", state, ["topology", "$connect", "node_target"],
+            schema, "Synthetic validation.", transport, validator=domain)
+        self.assertEqual(value, "node_other")
+        self.assertEqual(transport.call_count, 3)
+        self.assertEqual(state["payload"], {"accepted": "unchanged"})
+        entries = [item for item in RUNNER.ledger_entries(self.run) if item["step_type"] == "analysis"]
+        self.assertEqual([item["commit_status"] for item in entries], ["FAILED_BEFORE_COMMIT", "FAILED_BEFORE_COMMIT", "COMMITTED"])
+        self.assertEqual(sum(item["token_accounting"]["output_tokens"] for item in entries), 21)
+
+    def test_wrapped_string_response_replays_after_checkpoint_interruption_without_another_call(self):
+        payload = {"accepted": "unchanged"}
+        path = ["topology", "$connect", "node_target"]
+        schema = {"type": "string", "enum": ["node_origin"]}
+        transport = mock.Mock(return_value=api_response({"topology": {"$connect": {"node_target": "node_origin"}}}))
+        with mock.patch.object(RUNNER, "save_planning_draft", side_effect=RUNNER.PausedError("test", "checkpoint interrupted")):
+            with self.assertRaises(RUNNER.PausedError):
+                RUNNER.planning_value(self.run, "architecture_core", self.state(payload), path, schema, "Synthetic replay.", transport)
+        raw = next((self.run / "raw").glob("architecture_core_value_*-attempt1.api.json"))
+        original = raw.read_bytes()
+        restored = self.state(payload)
+        forbidden = mock.Mock(side_effect=AssertionError("saved model choice must not be regenerated"))
+        self.assertEqual(RUNNER.planning_value(self.run, "architecture_core", restored, path, schema, "Synthetic replay.", forbidden), "node_origin")
+        forbidden.assert_not_called()
+        self.assertEqual(raw.read_bytes(), original)
+        self.assertEqual(restored["payload"], payload)
+        entries = [item for item in RUNNER.ledger_entries(self.run) if item["step_type"] == "analysis"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["token_accounting"]["output_tokens"], 7)
+
+    def test_freeform_string_value_preserves_whitespace_and_literal_json_text(self):
+        for index, value in enumerate(('  Preserved wording.\n\n  ', '{"value":"literal text, not another wrapper"}')):
+            with self.subTest(value=value):
+                transport = mock.Mock(return_value=api_response({"value": value}))
+                actual = RUNNER.planning_value(self.run, "architecture_core", self.state({}), ["description"],
+                    {"type": "string"}, f"Synthetic wording {index}.", transport)
+                self.assertEqual(actual, value)
+
+    def test_string_value_envelope_keeps_schema_definition_references_at_the_root(self):
+        schema = {"type": "string", "$ref": "#/$defs/choice", "$defs": {"choice": {"enum": ["node_origin"]}}}
+        transport = mock.Mock(return_value=api_response({"value": "node_origin"}))
+        self.assertEqual(RUNNER.planning_value(self.run, "architecture_core", self.state({}), ["pending"], schema,
+            "Synthetic reference schema.", transport), "node_origin")
+        wire = transport.call_args.args[2]["response_format"]["json_schema"]["schema"]
+        RUNNER.validate_json_schema({"value": "node_origin"}, wire)
+        with self.assertRaises(RUNNER.SchemaError):
+            RUNNER.validate_json_schema({"value": "node_unknown"}, wire)
+
     def test_interrupted_initial_draft_pauses_then_resumes_only_missing_values(self):
         schema = {"type": "object", "required": ["accepted", "missing"], "properties": {
             "accepted": {"type": "string"}, "missing": {"type": "integer"}}, "additionalProperties": False}

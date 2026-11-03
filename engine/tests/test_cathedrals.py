@@ -1009,7 +1009,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(
             {item["subject_id"] for item in repaired["knowledge_changes"]}, {"character_001"}
         )
-        self.assertEqual(repaired["knowledge_changes"][0]["proposition_id"], "p001")
+        self.assertEqual(repaired["knowledge_changes"][0]["proposition_id"], "fact_01")
         self.assertEqual(
             {item["proposition_id"] for item in repaired["knowledge_changes"][1:]}, {"fact_01"}
         )
@@ -1155,7 +1155,9 @@ class CathedralsRunnerTests(unittest.TestCase):
                     RUNNER.build_semantic_delta(run, "genesis_constraints", payload, content_ids)
 
     def test_genesis_constraints_schema_bounds_raw_normalization(self):
-        schema = RUNNER.genesis_constraints_schema(Path("/offline"))
+        records = {"genesis_foundation": genesis_foundation_fixture(), "genesis_cast": genesis_cast_fixture()}
+        with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: records[kind]):
+            schema = RUNNER.genesis_constraints_schema(Path("/offline"))
         self.assertEqual(set(schema["$defs"]), {
             "id", "idList", "nonEmptyString", "relevanceTags", "semanticFact",
             "semanticKnowledge", "semanticMotif", "semanticSource", "stringList",
@@ -1189,7 +1191,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             }],
         }
         RUNNER.validate_json_schema(payload, schema)
-        self.assertEqual(schema["properties"]["canonical_facts"]["maxItems"], 24)
+        self.assertEqual(schema["properties"]["canonical_facts"]["maxItems"], 12)
         self.assertEqual(schema["properties"]["knowledge_changes"]["maxItems"], 24)
         self.assertEqual(schema["properties"]["new_soft_obligations"]["maxItems"], 0)
         self.assertNotIn("items", schema["properties"]["new_soft_obligations"])
@@ -1236,7 +1238,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         captured = {}
 
         def committed(_run, kind):
-            return {"commit_id": f"commit_{kind}"} if kind in {"genesis_foundation", "genesis_cast"} else None
+            return {"genesis_foundation": genesis_foundation_fixture(), "genesis_cast": genesis_cast_fixture()}.get(kind)
 
         def stop_after_request(_run, **kwargs):
             captured.update(kwargs)
@@ -1667,7 +1669,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             captured["response_schema"] = schema
             raise RuntimeError("captured")
 
-        with mock.patch.object(RUNNER, "verify_engine_snapshot"), mock.patch.object(
+        with mock.patch.object(RUNNER, "execution_policy", return_value={}), mock.patch.object(RUNNER, "verify_engine_snapshot"), mock.patch.object(
             RUNNER, "ensure_frozen_geomancy"
         ), mock.patch.object(RUNNER, "committed_record", side_effect=committed), mock.patch.object(
             RUNNER, "architecture_core_prompt", return_value=("prompt", "context")
@@ -3435,7 +3437,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             "may_satisfy_obligation_ids": [],
             "branch_path_relation": "branch",
         }
-        with mock.patch.object(
+        with mock.patch.object(RUNNER, "execution_policy", return_value={}), mock.patch.object(
             RUNNER, "packet_prompt", return_value=("prompt", "context")
         ), mock.patch.object(
             RUNNER, "committed_record", return_value={"arcs": [{"arc_id": "arc_one"}]}
