@@ -1235,12 +1235,9 @@ def read_search_source(run_dir, hit, cache=None):
             raise IntegrityError(f"Search source disappeared: {hit['commit_id']}")
         path = run_dir / row[0] / "record.json"
         verify_immutable_file(path, row[1])
-        cache[hit["commit_id"]] = (read_json(path), row[1])
-    record, digest = cache[hit["commit_id"]]
-    value = record
-    for part in hit["pointer"].lstrip("/").split("/") if hit["pointer"] else []:
-        part = part.replace("~1", "/").replace("~0", "~")
-        value = value[int(part)] if isinstance(value, list) else value[part]
+        cache[hit["commit_id"]] = (read_json(path), row[1], str(path))
+    record, digest, archive = cache[hit["commit_id"]]
+    value = read_evidence_pointer(record, hit["pointer"], source_id=hit["source_id"], archive=archive)
     return {"source_id": hit["source_id"], "source_commit_id": hit["commit_id"], "source_hash": digest,
             "record_pointer": hit["pointer"], "authority": {"plan": "PLANNED INTENTION", "root": "GENERATED ROOT CANON",
                 "literary": "COMMITTED LITERARY MATERIAL", "composition": "COMMITTED COMPOSITION METADATA", "constraint": "CONSTRAINT HISTORY"}[hit["kind"]],
@@ -2119,6 +2116,7 @@ def commit_record(
     duplicate_ids = reused_generated_ids(run_dir, record)
     if duplicate_ids:
         raise SchemaError(f"Record reuses previously committed IDs: {', '.join(sorted(duplicate_ids))}")
+    validate_record_evidence(run_dir, record)
     record_bytes = canonical_json(record)
     record_hash = sha256_bytes(record_bytes)
     raw_bytes = raw_response.encode("utf-8")
@@ -2460,108 +2458,178 @@ def packet_from_chunks(plan: dict | None, chunks: list[dict]) -> dict | None:
     }
 
 
+def record_source_pointers(record):
+    pointers = {record["commit_id"]: ""} if record.get("commit_id") else {}
+    def group(parent, field, identity, prefix=""):
+        for index, unit in enumerate(parent.get(field, [])):
+            if unit.get(identity):
+                pointers[unit[identity]] = f"{prefix}/{field}/{index}"
+    kind = record.get("record_type")
+    if kind == "genesis_foundation":
+        group(record.get("work_canon", {}), "chronology", "event_id", "/work_canon")
+        group(record, "claimant_anchors", "claimant_id")
+    elif kind == "genesis_cast":
+        group(record, "characters", "character_id")
+    elif kind == "genesis_constraints":
+        for index, unit in enumerate(record.get("claimant_extensions", [])):
+            pointers[unit["anchor"]["claimant_id"]] = f"/claimant_extensions/{index}"
+    elif kind == "architecture_core":
+        for field, identity in (("arcs", "arc_id"), ("attractors", "attractor_id"), ("obligation_graph", "obligation_id")):
+            group(record, field, identity)
+        for field, identity in (("nodes", "node_id"), ("edges", "edge_id")):
+            group(record.get("topology", {}), field, identity, "/topology")
+    elif kind == "architecture_plan_batch":
+        group(record, "packet_plans", "packet_slot_id")
+    elif kind == "creative_packet":
+        for field, identity in (("scenes", "scene_id"), ("artifacts", "artifact_id"), ("endings", "ending_id"),
+                ("formal_compositions", "composition_id"), ("decision_edges", "edge_id")):
+            group(record, field, identity)
+    for field, identity in (("canonical_facts", "fact_id"), ("knowledge_changes", "knowledge_id"),
+            ("new_obligations", "obligation_id"), ("obligation_updates", "update_id"),
+            ("motif_events", "motif_event_id"), ("potential_foreclosures", "foreclosure_id")):
+        group(record.get("constraint_delta", {}), field, identity, "/constraint_delta")
+    return pointers
+
+
+def read_evidence_pointer(record, pointer, *, source_id, archive="in-memory record"):
+    value, traversed = record, ""
+    try:
+        if not isinstance(pointer, str) or pointer and not pointer.startswith("/") or re.search(r"~(?![01])", pointer):
+            raise ValueError("Expected an RFC 6901 JSON Pointer")
+        for raw in pointer[1:].split("/") if pointer else []:
+            part = raw.replace("~1", "/").replace("~0", "~")
+            if isinstance(value, list):
+                if not re.fullmatch(r"0|[1-9][0-9]*", part):
+                    raise ValueError("Array indices must be zero-based integers without leading zeroes")
+                value = value[int(part)]
+            elif isinstance(value, dict):
+                value = value[part]
+            else:
+                raise TypeError("Pointer continues past a scalar value")
+            traversed += "/" + raw
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise IntegrityError(
+            f"Evidence pointer does not resolve. Source ID: {source_id!r}; owner commit: {record.get('commit_id')!r}; "
+            f"record type: {record.get('record_type')!r}; pointer: {pointer!r}; resolved prefix: {traversed!r}; "
+            f"archive: {archive}; detail: {error}") from error
+    return value
+
+
+def record_evidence_references(record):
+    references = []
+    for identifier, pointer in record_source_pointers(record).items():
+        unit = read_evidence_pointer(record, pointer, source_id=identifier)
+        if isinstance(unit, dict) and (unit.get("sources") or unit.get("evidence_sources")):
+            references.append({"constraint_id": identifier, "sources": unit.get("sources", []) + unit.get("evidence_sources", [])})
+    return references
+
+
 def retrieve_original_sources(
     run_dir: Path,
     constraints: list[dict],
     limit: int = 24,
     records: list[dict] | None = None,
-    *, strict: bool = False,
+    *, strict: bool = False, local_record=None, follow_sources=True,
 ) -> list[dict]:
-    wanted = []
-    locators = {}
-    for constraint in constraints:
-        for source in constraint.get("sources", []):
-            identifier = source["artifact_id"]
-            if identifier not in wanted:
-                wanted.append(identifier)
-                locators[identifier] = []
-            if source["source_locator"] not in locators[identifier]:
-                locators[identifier].append(source["source_locator"])
-        if limit is not None and len(wanted) >= limit:
-            break
-    retrieved = []
-    catalog = {}
-    if records is None:
-        catalog = _source_index(run_dir, wanted)
-        if strict and set(wanted) - catalog.keys():
-            raise IntegrityError("Required evidence source does not resolve: " + ", ".join(sorted(set(wanted) - catalog.keys())))
-        records = []
-        with index_connection(run_dir) as db:
-            for commit_id in dict.fromkeys(item["commit_id"] for item in catalog.values()):
-                path, digest = db.execute("SELECT path,record_hash FROM records WHERE commit_id=?", (commit_id,)).fetchone()
-                source_path = run_dir / path / "record.json"
-                verify_immutable_file(source_path, digest)
-                records.append(read_json(source_path))
-    committed = list(reversed(records))
-    for identifier in wanted:
-        if limit is not None and len(retrieved) >= limit:
-            break
-        for record in committed:
-            candidates = []
-            if record.get("record_type") == "creative_packet":
-                candidates = record["scenes"] + record["artifacts"] + record["endings"] + record["formal_compositions"]
-            elif identifier in generated_ids(record):
-                candidates = [record]
-            source = next(
-                (
-                    item
-                    for item in candidates
-                    if identifier
-                    in {
-                        item.get("scene_id"),
-                        item.get("artifact_id"),
-                        item.get("ending_id"),
-                        item.get("composition_id"),
-                        item.get("commit_id"),
-                    }
-                ),
-                candidates[0] if len(candidates) == 1 else None,
-            )
-            if source is not None:
-                pointers = locators[identifier]
-                if record.get("record_type", "").startswith("genesis_") and all(pointer.startswith("/") for pointer in pointers):
-                    for pointer in pointers:
-                        unit = record
-                        try:
-                            for part in pointer[1:].split("/"):
-                                part = part.replace("~1", "/").replace("~0", "~")
-                                if isinstance(unit, list):
-                                    if not re.fullmatch(r"0|[1-9][0-9]*", part):
-                                        raise ValueError("Invalid array index")
-                                    unit = unit[int(part)]
-                                else:
-                                    unit = unit[part]
-                        except (KeyError, IndexError, TypeError, ValueError) as error:
-                            raise IntegrityError(f"Genesis evidence pointer does not resolve: {identifier}{pointer}") from error
-                        if limit is not None and len(retrieved) >= limit:
-                            break
-                        retrieved.append({"source_id": identifier, "source_locator": pointer,
-                            "source_commit_id": catalog.get(identifier, {}).get("commit_id", record.get("commit_id")),
-                            "source_hash": catalog.get(identifier, {}).get("hash"), "record_pointer": pointer,
-                            "authority": "COMMITTED SOURCE EVIDENCE", "immutable_source": unit})
-                    break
-                pointer = ""
-                if record.get("record_type") == "creative_packet":
-                    for field in ("scenes", "artifacts", "endings", "formal_compositions"):
-                        for index, unit in enumerate(record[field]):
-                            if unit is source:
-                                pointer = f"/{field}/{index}"
-                retrieved.append(
-                    {
-                        "source_id": identifier,
-                        "source_locator": locators[identifier][0],
-                        **({"source_locators": locators[identifier]} if len(locators[identifier]) > 1 else {}),
-                        "source_commit_id": catalog.get(identifier, {}).get("commit_id", record.get("commit_id")),
-                        "source_hash": catalog.get(identifier, {}).get("hash"),
-                        "record_pointer": pointer,
-                        "authority": "COMMITTED SOURCE EVIDENCE",
-                        "immutable_source": source,
-                    }
-                )
+    archives, owners, units = {}, {}, {}
+    supplied = records is not None
+    for record in (records or []) + ([local_record] if local_record is not None else []):
+        digest = sha256_bytes(canonical_json(record)) if record is local_record else None
+        entry = (record, digest, "uncommitted record" if record is local_record else "supplied record")
+        for identifier, pointer in record_source_pointers(record).items():
+            owners[identifier] = (entry, pointer)
+
+    def resolve(reference):
+        identifier = reference["artifact_id"]
+        if identifier not in owners:
+            if supplied:
+                return None
+            catalog = _source_index(run_dir, [identifier])
+            if identifier not in catalog:
+                return None
+            commit_id = catalog[identifier]["commit_id"]
+            if commit_id not in archives:
+                with index_connection(run_dir) as db:
+                    row = db.execute("SELECT path,record_hash FROM records WHERE commit_id=?", (commit_id,)).fetchone()
+                if row is None:
+                    raise IntegrityError(f"Evidence owner disappeared: {identifier!r}, commit {commit_id!r}")
+                path = run_dir / row[0] / "record.json"
+                verify_immutable_file(path, row[1])
+                record = read_json(path)
+                archives[commit_id] = (record, row[1], str(path))
+                for owned_id, pointer in record_source_pointers(record).items():
+                    owners[owned_id] = (archives[commit_id], pointer)
+            if identifier not in owners:
+                raise IntegrityError(f"Registered evidence ID {identifier!r} has no source unit in commit {commit_id!r}")
+        (record, digest, archive), canonical_pointer = owners[identifier]
+        for key, actual in (("source_commit_id", record.get("commit_id")), ("source_hash", digest)):
+            if actual is not None and reference.get(key) is not None and reference[key] != actual:
+                raise IntegrityError(f"Evidence {key} mismatch for {identifier!r}: supplied {reference[key]!r}, actual {actual!r}; archive: {archive}")
+        locator = reference.get("source_locator", "")
+        pointer = reference.get("record_pointer", canonical_pointer)
+        # Older engine-generated Genesis references used canonical record paths in source_locator.
+        if "record_pointer" not in reference and identifier == record.get("commit_id") and record.get("record_type", "").startswith("genesis_") and isinstance(locator, str) and locator.startswith(("/work_canon", "/format_composition_law", "/claimant_anchors/", "/claimants/", "/characters/")):
+            pointer = locator
+        if canonical_pointer and pointer != canonical_pointer and not (isinstance(pointer, str) and pointer.startswith(canonical_pointer + "/")):
+            raise IntegrityError(f"Evidence pointer targets a different source unit. Source ID: {identifier!r}; pointer: {pointer!r}; "
+                f"expected unit: {canonical_pointer!r}; owner commit: {record.get('commit_id')!r}; archive: {archive}")
+        value = read_evidence_pointer(record, pointer, source_id=identifier, archive=archive)
+        return {"source_id": identifier, "source_locator": locator,
+            "source_commit_id": record.get("commit_id"), "source_hash": digest, "record_pointer": pointer,
+            "source_record_type": record.get("record_type"), "authority": "COMMITTED SOURCE EVIDENCE", "immutable_source": value}
+
+    stack = [("enter", source, constraint.get("constraint_id", "requested evidence"))
+        for constraint in reversed(constraints) for source in reversed(constraint.get("sources", []))]
+    retrieved, active, complete = [], set(), set()
+    while stack:
+        action, reference, origin = stack.pop()
+        if action == "exit":
+            active.remove(reference)
+            complete.add(reference)
+            continue
+        try:
+            source = resolve(reference)
+        except IntegrityError as error:
+            raise IntegrityError(f"{error.reason}\nSource locator: {reference.get('source_locator')!r}; referenced by: {origin}") from error
+        if source is None:
+            if strict:
+                raise IntegrityError(f"Required evidence source does not resolve: {reference['artifact_id']!r}; locator: {reference.get('source_locator')!r}; referenced by: {origin}")
+            continue
+        key = (source["source_id"], source["source_commit_id"], source["record_pointer"])
+        if key in active:
+            raise IntegrityError(f"Cyclic evidence provenance: {reference['artifact_id']!r}; referenced by: {origin}")
+        if key in units:
+            entry = units[key]
+            locators = entry.setdefault("source_locators", [entry["source_locator"]])
+            if source["source_locator"] not in locators:
+                locators.append(source["source_locator"])
+        else:
+            if limit is not None and len(retrieved) >= limit:
+                if strict:
+                    raise PausedError("Evidence retrieval", f"Required provenance exceeds {limit} complete units; no prerequisite evidence was dropped", "budget_exhaustion")
                 break
-    if strict and set(wanted) - {item["source_id"] for item in retrieved}:
-        raise IntegrityError("Required evidence source could not be extracted")
+            units[key] = source
+            retrieved.append(source)
+        if key in complete:
+            continue
+        active.add(key)
+        stack.append(("exit", key, origin))
+        value = source["immutable_source"]
+        if follow_sources and isinstance(value, dict):
+            parents = value.get("sources", []) + value.get("evidence_sources", [])
+            stack.extend(("enter", parent, source["source_id"]) for parent in reversed(parents))
     return retrieved
+
+
+def validate_committed_evidence(run_dir):
+    return retrieve_original_sources(run_dir, constraint_events(run_dir), limit=None, strict=True)
+
+
+def validate_record_evidence(run_dir, record):
+    try:
+        retrieve_original_sources(run_dir, record_evidence_references(record), limit=None, strict=True, local_record=record)
+    except IntegrityError as error:
+        raise SchemaError(f"Uncommitted evidence reference failed validation: {error.reason}") from error
 
 
 def geomancy_figures(run_dir: Path | None = None) -> list[dict]:
@@ -2861,6 +2929,9 @@ def request_record(
     response_definition = response_definition or RECORD_DEFS[expected_record_type]
     schema = response_schema or definition_schema(response_definition, protocol)
     wire_schema = copy.deepcopy(schema)
+    for name in ("sourceRef", "hashedSourceRef"):
+        if name in wire_schema.get("$defs", {}):
+            wire_schema["$defs"][name]["properties"].pop("record_pointer", None)
     if expected_record_type == "genesis_constraints":
         wire_schema["$defs"]["relevanceTags"]["properties"]["technical_slot_ids"] = {"type": "array", "maxItems": 0}
     parameters = {"temperature": temperature, "max_tokens": max_tokens, "seed": seed,
@@ -2959,6 +3030,7 @@ def request_record(
             duplicate_ids = reused_generated_ids(run_dir, record)
             if duplicate_ids:
                 raise SchemaError(f"Record reuses previously committed IDs: {', '.join(sorted(duplicate_ids))}")
+            validate_record_evidence(run_dir, record)
             if precommit_validator:
                 precommit_validator(record)
             break
@@ -4023,7 +4095,6 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
     tool_records = []
     if tool_session.exists():
         tool_records = read_json(tool_session)["working_set"]
-        required.append(("MODEL REQUESTED VERIFIED RECORDS", tool_records))
     if plan["packet_kind"] == "ending":
         chain = [required_obligations[key] for key in sorted(prerequisite_ids)]
         required.extend([
@@ -4057,6 +4128,9 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
     # Check required inputs before doing optional searches or loading any optional original prose.
     try:
         pack_packet_context(required, [], ceiling, receipt)
+        # Optional discovery must leave room for a returned payload in correction feedback.
+        optional_ceiling = max(receipt["estimated_context_tokens"], ceiling - BASE_OUTPUT_TOKENS)
+        receipt["correction_headroom_tokens"] = ceiling - optional_ceiling
         recent = packet_records(run_dir, recent=2, verify=True)
         covered_commits = {record["commit_id"] for record in dependencies}
         covered_ids = {identifier for record in dependencies for identifier in generated_ids(record)} | {source["source_id"] for source in required_sources}
@@ -4108,13 +4182,14 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
             if reason:
                 historical.append({"authority": "CONSTRAINT HISTORY", "current_state_note": reason, "event": event})
         # Source identities are deduplicated before packing; soft continuity may be omitted, never required inputs.
-        optional = [("RETRIEVED ORIGINAL SOURCE EVIDENCE", chosen),
+        optional = [("MODEL REQUESTED VERIFIED RECORDS", tool_records),
+                    ("RETRIEVED ORIGINAL SOURCE EVIDENCE", chosen),
                     ("OTHER RELEVANT PAST CONSTRAINTS", [event for event in past if event["data"]["fact_id"] not in protected_fact_ids]),
                     ("OTHER RELEVANT CHARACTER KNOWLEDGE", optional_knowledge), ("HISTORICAL CONSTRAINT EVENTS", historical),
                     ("RELEVANT MOTIF PRESSURES", motifs), ("RECENT LOCAL SOURCE", [record for record in recent if record["commit_id"] not in covered_commits]),
                     ("SOFT FUTURE PRESSURES", soft)]
-        text = pack_packet_context(required, optional, ceiling, receipt)
-        for source in chosen:
+        text = pack_packet_context(required, optional, optional_ceiling, receipt)
+        for source in tool_records + chosen:
             metadata = {key: source.get(key) for key in ("source_id", "source_commit_id", "source_hash", "record_pointer")}
             if not any(item.get("source_id") == source["source_id"] and item.get("reason") == "prepared_context_budget" for item in receipt["omissions"]):
                 receipt["selected_sources"].append(metadata | ranks.get((source.get("source_commit_id"),source.get("record_pointer")), {}) | {"required": False})
@@ -4919,6 +4994,10 @@ def request_architecture_analysis(
             "properties": {"value": {key: value for key, value in schema.items() if key != "$defs"}}}
         if "$defs" in schema:
             response_schema["$defs"] = schema["$defs"]
+    response_schema = copy.deepcopy(response_schema)
+    for name in ("sourceRef", "hashedSourceRef"):
+        if name in response_schema.get("$defs", {}):
+            response_schema["$defs"][name]["properties"].pop("record_pointer", None)
     if planning_mode and context_purpose == "planning" and retrieval_task is not None:
         extra = retrieval_working_set(run_dir, step_id, retrieval_task["task"], transport,
             scope_id=retrieval_task["scope_id"], scope_step=retrieval_task["step_id"])
@@ -5157,7 +5236,7 @@ def genesis_source_catalog(run_dir: Path, extensions=()) -> dict:
         sources[handle] = {"technical_slot_id": handle, "description": description,
             "artifact_id": artifact_id or record["commit_id"],
             "source_ref": {"artifact_type": "genesis", "artifact_id": artifact_id or record["commit_id"],
-                "source_locator": pointer}}
+                "source_locator": pointer, "record_pointer": pointer}}
 
     canon = foundation.get("work_canon", {})
     if canon:
@@ -7588,7 +7667,12 @@ def read_retrieval_tool(run_dir, name, arguments):
                 f"SELECT payload FROM events WHERE id IN ({placeholders}) OR json_extract(payload,'$.data.fact_id') IN ({placeholders}) "
                 f"OR json_extract(payload,'$.data.obligation_id') IN ({placeholders}) ORDER BY sequence LIMIT 24", ids * 3)]
         rows = db.execute(f"SELECT commit_id,source_id,pointer,kind FROM search_documents WHERE source_id IN ({placeholders}) ORDER BY sequence,id LIMIT 24", ids).fetchall()
-    return [read_search_source(run_dir, dict(zip(("commit_id", "source_id", "pointer", "kind"), row))) for row in rows]
+    result = [read_search_source(run_dir, dict(zip(("commit_id", "source_id", "pointer", "kind"), row))) for row in rows]
+    missing = [identifier for identifier in ids if identifier not in {item["source_id"] for item in result}]
+    if missing and len(result) < SEARCH_SOURCE_LIMIT:
+        result.extend(retrieve_original_sources(run_dir, [{"sources": [{"artifact_id": identifier, "source_locator": "Record requested by ID"} for identifier in missing]}],
+            limit=SEARCH_SOURCE_LIMIT - len(result), follow_sources=False))
+    return result
 
 
 def compact_retrieval_prompt(run_dir, task):
@@ -8942,6 +9026,8 @@ def execute_creative_phases(run_dir: Path, output_fn=print, transport=http_json)
     batches = execute_planning_phases(run_dir, transport)
     validate_completed_architecture(run_dir)
     output_fn(f"[04] Architecture                  ✓ committed ({len(batches)} bounded plan batches)")
+    evidence = validate_committed_evidence(run_dir)
+    output_fn(f"      Evidence provenance             ✓ verified ({len(evidence)} complete source units)")
     architecture = committed_record(run_dir, "architecture")
     plans = architecture["packet_plans"]
     while True:

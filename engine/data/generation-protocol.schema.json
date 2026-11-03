@@ -385,7 +385,8 @@
           "enum": ["genesis", "architecture", "scene", "artifact", "ending", "formal_composition"]
         },
         "artifact_id": { "$ref": "#/$defs/id" },
-        "source_locator": { "$ref": "#/$defs/nonEmptyString" }
+        "source_locator": { "$ref": "#/$defs/nonEmptyString" },
+        "record_pointer": { "type": "string" }
       }
     },
     "hashedSourceRef": {
@@ -404,6 +405,7 @@
         },
         "artifact_id": { "$ref": "#/$defs/id" },
         "source_locator": { "$ref": "#/$defs/nonEmptyString" },
+        "record_pointer": { "type": "string" },
         "source_commit_id": { "$ref": "#/$defs/id" },
         "source_hash": { "$ref": "#/$defs/hash" }
       }

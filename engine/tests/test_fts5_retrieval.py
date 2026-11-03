@@ -201,6 +201,22 @@ class FTS5RetrievalTests(unittest.TestCase):
         self.assertEqual(len(RUNNER.retrieve_original_sources(self.run, events, limit=None, strict=True)), 27)
         self.assertLessEqual(len(RUNNER.retrieve_original_sources(self.run, events)), 24)
 
+    def test_tool_discovery_cannot_overflow_required_context_or_consume_correction_space(self):
+        self.commit(1, prose="Required complete predecessor.")
+        assignment = plan(depends_on_packet_slot_ids=["packet_000001"])
+        step = RUNNER.packet_step_id(assignment)
+        records = [{"source_id": "oversized_discovery", "immutable_source": "x" * 180000},
+                   {"source_id": "small_discovery", "immutable_source": "Useful additional background."}]
+        RUNNER.write_json(self.run / "raw" / f"{step}.retrieval-session.json", {"working_set": records})
+        receipt = {}
+        context = self.context(assignment, receipt=receipt)
+        decoded = decode_context(context)
+        self.assertIn("Required complete predecessor.", context)
+        self.assertEqual(decoded["MODEL REQUESTED VERIFIED RECORDS"], [records[1]])
+        self.assertTrue(any(item.get("source_id") == "oversized_discovery" and item["reason"] == "prepared_context_budget" for item in receipt["omissions"]))
+        self.assertEqual(receipt["correction_headroom_tokens"], RUNNER.BASE_OUTPUT_TOKENS)
+        self.assertLessEqual(receipt["estimated_context_tokens"] + RUNNER.BASE_OUTPUT_TOKENS, receipt["context_ceiling"])
+
     def test_retracted_knowledge_is_labeled_as_history(self):
         for number in range(1, 4):
             self.commit(number)

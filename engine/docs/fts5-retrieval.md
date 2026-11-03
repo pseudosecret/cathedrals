@@ -5,6 +5,12 @@ The engine can recover a detail in old prose even if metadata extraction never
 recorded it as a fact. This is SQLite full-text word search, using Python's existing
 `sqlite3` dependency; it adds no service or model requests.
 
+Registered evidence IDs resolve independently of FTS document coverage; see
+[evidence resolution](evidence-resolution.md) for source chains and pointer rules.
+Tool-discovered background uses optional context space, ahead of automatic search,
+with available space reserved for correction feedback. Required evidence remains
+mandatory, and omitted optional units are recorded in the retrieval receipt.
+
 ## Runtime behavior
 
 The root [launcher](../../cathedrals) keeps the implementation in the existing

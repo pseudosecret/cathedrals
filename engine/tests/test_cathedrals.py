@@ -1764,7 +1764,12 @@ class CathedralsRunnerTests(unittest.TestCase):
                     [source["source_locator"] for source in original["obligation_graph"][0]["sources"]],
                 )
                 raw = RUNNER.canonical_json(payload).decode()
-                with mock.patch.object(RUNNER, "reconcile_run"), mock.patch.object(RUNNER, "index_commit"):
+                retrieve = RUNNER.retrieve_original_sources
+                # The mocked source index above has no archive; supply its Genesis owner to the real evidence validator.
+                with mock.patch.object(RUNNER, "reconcile_run"), mock.patch.object(RUNNER, "index_commit"), mock.patch.object(
+                    RUNNER, "retrieve_original_sources", side_effect=lambda *args, **kwargs: retrieve(
+                        *args, **kwargs, records=[records["genesis_foundation"]])
+                ):
                     directory = RUNNER.commit_record(
                         run, record, raw, {}, planned_step_id="architecture_core", attempt=1,
                         step_phase="architecture", prompt="prompt", context="context",

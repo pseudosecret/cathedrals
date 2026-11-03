@@ -43,7 +43,8 @@ class GenesisReferencePreventionTests(unittest.TestCase):
             'claimant_slot_01', 'claimant_profile_slot_01', 'character_slot_001'}
         self.assertTrue(required.issubset(catalog))
         self.assertEqual(catalog['central_incident']['source_ref'], {'artifact_type': 'genesis',
-            'artifact_id': foundation['commit_id'], 'source_locator': '/work_canon/central_incident'})
+            'artifact_id': foundation['commit_id'], 'source_locator': '/work_canon/central_incident',
+            'record_pointer': '/work_canon/central_incident'})
         self.assertEqual(catalog['claimant_profile_slot_01']['source_ref']['artifact_id'], cast['commit_id'])
         schema = RUNNER.genesis_constraints_schema(self.run)
         for handle in required:
