@@ -273,6 +273,17 @@ an explicit completion flag. This bounds each response, not the total informatio
 important changes may span multiple pages. Accepted facts keep their order and aliases;
 references to new facts or motifs resolve after the full delta is assembled.
 
+Progress reports both accepted positions and distinct records. Truncated responses may
+contain exact repeats; accepted fact positions remain stable, while prompts show each
+repeated fact once and use `$fact_ref` aliases at its other positions. These aliases
+are prompt references only, never new metadata or a change to source evidence.
+When a valid continuation adds nothing and still claims more remains, the next request
+audits category completion instead of repeating the extraction instruction. It must
+return genuinely missing changes or explicitly declare completion. A valid page may
+finish with already accepted items and `complete=true`; those items are not appended
+again. A duplicate page with `complete=false` never silently completes a category.
+The completion check survives pause/resume and preserves the same correction limits.
+
 A truncated page retains its complete prefix and halves the next page size. A single
 oversized record may use up to the frozen 15,000-token analysis ceiling when context
 permits. Repeated pages that make no progress receive three correction attempts per

@@ -6117,6 +6117,7 @@ SEMANTIC_CATEGORIES = ("canonical_facts", "knowledge_changes", "new_soft_obligat
 SEMANTIC_INSTRUCTION = (
     "Extract only NEW continuity, evidence, knowledge, obligation, and motif CHANGES supported by the immutable content. "
     "Keep metadata concise; do not restate canon, inventory every descriptive detail, or create knowledge entries automatically for every fact. "
+    "Return each change once. Empty categories are valid; never pad an array or repeat records to fill a response. "
     "Preserve contested evidence and uncertainty. Never invent events, prose, or resolutions. New obligations must be soft. "
     "Unresolved obligations remain active automatically. Record additional evidence as facts or knowledge, not an active status update. "
     "For packets, update obligations only when satisfied or intentionally_unresolved by the authored content. "
@@ -6152,11 +6153,23 @@ def semantic_prompt(artistic: dict, context: str, instruction: str, accepted=Non
     prompt = ("IMMUTABLE ARTISTIC PAYLOAD\n" + canonical_json(artistic).decode() +
               "\nRELEVANT CANON AND CONSTRAINTS\n" + compact_semantic_context(context, run_dir) + "\n")
     if accepted is not None:
+        # Preserve fact positions while showing repeated accepted records only once.
+        seen, facts = {}, []
+        for index, fact in enumerate(accepted.get("canonical_facts", []), 1):
+            identity = canonical_json(fact)
+            if identity in seen:
+                facts.append({"$fact_ref": seen[identity]})
+            else:
+                seen[identity] = f"fact_{index:02d}"
+                facts.append(fact)
+        accepted = accepted | {"canonical_facts": facts}
         prompt += "ACCEPTED SEMANTIC METADATA\n" + canonical_json(accepted).decode()
     return prompt + "\nINSTRUCTION\n" + SEMANTIC_INSTRUCTION + " " + instruction + (
         " Retrieved PLANNED INTENTION describes future work, not events established by this payload. "
         "CONSTRAINT HISTORY may be superseded or retracted. Derive new assertions only from the immutable artistic payload. "
         "Each $context_ref expands to its complete object in SHARED SOURCE RECORDS or SHARED SOURCE METADATA. "
+        "In accepted metadata, $fact_ref repeats an earlier exact fact. Every array position keeps its original fact_NN alias; "
+        "a repeated alias adds no new information. Never emit $fact_ref in your response. "
         "Genesis foundation, cast, and constraints are complete original records; apply their anchors, profiles, and extensions together.")
 
 
@@ -6241,6 +6254,8 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
     state = read_json(path)
     if state["artistic_hash"] != sha256_bytes(canonical_json(artistic)):
         raise IntegrityError("Semantic recovery belongs to different immutable artistic content")
+    state.setdefault("completion_checks", {key: True for key, feedback in state["feedback"].items()
+        if feedback.startswith("A continuation page must")})
     if state.get("rejected"):
         reason = state["rejected"]
         categories = state.get("rejected_categories", [])
@@ -6268,6 +6283,7 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
                 state["pending"][key] = state["payload"][key] + state["pending"].get(key, [])
                 state["payload"][key] = []
             state["complete"][key] = False
+            state["completion_checks"].pop(key, None)
         state.pop("rejected")
         state.pop("rejected_categories", None)
         write_json(path, state)
@@ -6279,6 +6295,9 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
             size = state["page_size"][key]
             offset = len(state["payload"][key])
             query = f"{step_id}_semantic_{key}_{state['revision'].get(key, 0)}_{offset:04d}_{size}"
+            checking_completion = state["completion_checks"].get(key, False)
+            if checking_completion:
+                query += "_completion"
             category_schema = schema["properties"][key]
             page_limit = min(size, max(0, category_schema.get("maxItems", size + offset) - offset))
             page_schema = compact_planning_schema({"type": "object", "additionalProperties": False,
@@ -6289,13 +6308,24 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
                 "Never repeat accepted records or renumber accepted facts. An empty items array is allowed only with complete=true. "
                 "Complete partial candidates in their original order when supported. Partial candidates: " +
                 canonical_json(state["pending"].get(key, [])).decode() + " " + state["feedback"].get(key, ""))
+            if checking_completion:
+                instruction = (f"Audit completion of ONLY {key} against the immutable authored content and accepted metadata. "
+                    "The previous page made no progress. Stop repeating the extraction sequence. "
+                    'If all important supported changes are already recorded, return exactly {"items":[],"complete":true}. '
+                    f"Otherwise return up to {page_limit} genuinely missing records, with complete=true only if none remain afterward. "
+                    "Existing duplicates do not imply missing information. Preserve all accepted fact positions. "
+                    "Pending candidates (retain only supported changes not already accepted): " +
+                    canonical_json(state["pending"].get(key, [])).decode() + " " + state["feedback"].get(key, ""))
             prompt = semantic_prompt(artistic, context, instruction, state["payload"], run_dir=run_dir)
-            print(f"Semantic normalization: {key}, {offset} accepted records, up to {size} per page", file=sys.stderr)
+            distinct = len({canonical_json(item) for item in state["payload"][key]})
+            print(f"Semantic normalization: {key}, {offset} accepted positions ({distinct} distinct records), "
+                f"{'completion check' if checking_completion else f'up to {page_limit} per page'}", file=sys.stderr)
             response, error = None, None
             try:
                 result, response = request_architecture_analysis(run_dir, query, prompt, page_schema, transport,
-                    phase="validation", system_prompt="Extract concise changes from immutable authored content. Return JSON only.",
-                    response_name="semanticCategoryPage", pause_stage="Semantic normalization", initial_draft=True,
+                    phase="validation", system_prompt=("Audit accepted metadata against immutable authored content. Return missing changes or explicit completion as JSON only."
+                        if checking_completion else "Extract concise changes from immutable authored content. Return JSON only."),
+                    response_name="semanticCompletionCheck" if checking_completion else "semanticCategoryPage", pause_stage="Semantic normalization", initial_draft=True,
                     planning_mode=True, context_purpose="semantic normalization", max_tokens=15000 if size == 1 and state.get("expanded") == key else 8192)
                 incomplete = []
             except PausedError as paused:
@@ -6311,7 +6341,7 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
                 except SchemaError:
                     result, incomplete = parsed_planning_fragment(content)
             items = result.get("items", []) if isinstance(result, dict) else []
-            complete = isinstance(result, dict) and "items" in result and isinstance(items, list) and result.get("complete") is True and not any(p and p[0] == "items" for p in incomplete)
+            complete = error is None and isinstance(result, dict) and "items" in result and isinstance(items, list) and result.get("complete") is True and not any(p and p[0] == "items" for p in incomplete)
             before = len(state["payload"][key])
             consumed = 0
             if isinstance(items, list):
@@ -6326,9 +6356,15 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
             else:
                 complete = False
             added = len(state["payload"][key]) - before
-            if (items and not added) or not complete and not added:
-                error = error or SchemaError("A continuation page must add a new supported record or finish with empty items and complete=true")
+            if not complete and not added:
+                if error is None:
+                    state["completion_checks"][key] = True
+                error = error or SchemaError(f"A continuation page must add a new supported record or explicitly finish with complete=true. "
+                    f"Received {len(items) if isinstance(items, list) else 0} items; accepted {offset} positions "
+                    f"({len({canonical_json(item) for item in state['payload'][key]})} distinct records); added 0.")
                 complete = False
+            else:
+                state["completion_checks"].pop(key, None)
             if state["pending"].get(key):
                 complete = False
             state["complete"][key] = complete

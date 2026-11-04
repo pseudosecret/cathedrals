@@ -1,0 +1,11 @@
+# Repeated semantic continuation recovery
+
+Run `cathedrals_20261103_215316_12c740` reached its first literary packet and paused during metadata extraction. Its initial 8,192-token response truncated after 57 complete fact positions, containing only five exact distinct records. Continuations added thirteen distinct records. The resulting seventy positions contained eighteen exact distinct records; fifty-two positions were repeats. Three subsequent pages repeated accepted facts while declaring `complete=false`.
+
+Repeated fact positions already coalesce when the engine builds canonical constraints. Removing those positions earlier could change existing `fact_NN` references, so recovery retains their order. Prompt rendering now replaces repeated full records with references to their first exact occurrence. The same checkpoint's accepted metadata shrinks from 36,150 to 9,708 UTF-8 bytes, with every alias preserved. Initial extraction instructions also explicitly prohibit padding or repeating records.
+
+A valid page that adds no information and declines completion triggers a dedicated completion check. The check compares immutable content with accepted metadata and can return missing changes or explicitly finish. It uses a separate request identity and response name, preserving saved responses and accounting each provider attempt once. Newly found records resume ordinary paging; repeated failures retain the existing three-failure pause. Duplicate records with an explicit valid completion declaration can finish without another request. Invalid or interrupted envelopes cannot establish completion.
+
+Regression tests reproduce the seventy-position/eighteen-record case, check alias preservation and exact prompt expansion, exercise new information found during completion checks, and verify bounded failure, resume, response preservation and usage accounting. An offline replay also used the actual saved repeated response followed by deterministic completion responses. It preserved all seventy positions and left all ninety-three checked original archive, staging and state files unchanged. It made no live model requests and did not commit or generate fiction.
+
+These changes are in foundation for subsequent runs. The paused run's frozen launcher and original checkpoint remain unchanged; ordinary resume continues to use that frozen launcher.

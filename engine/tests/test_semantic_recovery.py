@@ -63,6 +63,14 @@ class SemanticRecoveryTests(unittest.TestCase):
         prefix = json.dumps(payload)[:-1] + ',"canonical_facts":['
         RUNNER.seed_semantic_recovery(self.run, self.step, self.artistic, self.response(prefix, truncated=True, text=True))
 
+    def seed_accepted_facts(self, facts):
+        self.seed_facts()
+        path = self.run / f".staging/{self.step}.semantic-recovery.json"
+        state = RUNNER.read_json(path)
+        state["payload"]["canonical_facts"] = facts
+        RUNNER.write_json(path, state)
+        return path
+
     def assert_prose_unchanged(self):
         for path, original in self.preserved.items():
             self.assertEqual(path.read_bytes(), original)
@@ -304,6 +312,89 @@ class SemanticRecoveryTests(unittest.TestCase):
         self.assertEqual(resume.call_count, 1)
         for path, original in preserved.items():
             self.assertEqual(path.read_bytes(), original)
+        self.assert_prose_unchanged()
+
+    def test_repeated_accepted_facts_compact_only_in_prompt_without_renumbering(self):
+        original = self.empty() | {"canonical_facts": [self.fact()] * 69 + [self.fact(1)]}
+        unchanged = copy.deepcopy(original)
+        prompt = RUNNER.semantic_prompt(self.artistic, "context", "Check completion.", original, run_dir=self.run)
+        accepted = json.loads(prompt.split("ACCEPTED SEMANTIC METADATA\n", 1)[1].split("\nINSTRUCTION", 1)[0])
+        self.assertEqual(accepted["canonical_facts"][1:69], [{"$fact_ref": "fact_01"}] * 68)
+        self.assertEqual(accepted["canonical_facts"][69], original["canonical_facts"][69])
+        expanded = [accepted["canonical_facts"][int(item['$fact_ref'].split('_')[1]) - 1] if '$fact_ref' in item else item
+                    for item in accepted["canonical_facts"]]
+        self.assertEqual(expanded, original["canonical_facts"])
+        self.assertLess(len(RUNNER.canonical_json(accepted)), len(RUNNER.canonical_json(original)) // 2)
+        self.assertEqual(original, unchanged)
+
+    def test_reported_seventy_positions_repeat_then_audit_completion_with_aliases_intact(self):
+        facts = [self.fact(0), self.fact(1), self.fact(2)] + [self.fact(3), self.fact(4)] * 27 + [self.fact(i) for i in range(5, 18)]
+        self.assertEqual(len(facts), 70)
+        self.assertEqual(len({RUNNER.canonical_json(item) for item in facts}), 18)
+        path = self.seed_accepted_facts(facts)
+        pages = iter(({"items": facts[3:11], "complete": False}, {"items": [], "complete": True}))
+        transport = mock.Mock(side_effect=lambda *args, **kwargs: self.response(next(pages)))
+        result = self.normalize(transport)
+        self.assertEqual(result["canonical_facts"], facts)
+        requests = [call.args[2] for call in transport.call_args_list]
+        self.assertEqual([request["response_format"]["json_schema"]["name"] for request in requests], ["semanticCategoryPage", "semanticCompletionCheck"])
+        self.assertIn("Audit completion of ONLY canonical_facts", requests[1]["messages"][1]["content"])
+        self.assertIn("70 positions (18 distinct records)", requests[1]["messages"][1]["content"])
+        self.assertTrue(RUNNER.read_json(path)["complete"]["canonical_facts"])
+        with_knowledge = result | {"knowledge_changes": [self.evidence()["knowledge_changes"][0] | {"proposition_id": "fact_70"}]}
+        delta = RUNNER.build_semantic_delta(self.run, self.step, with_knowledge, {"scene_slot_0001": ("scene", "scene_0001")})
+        self.assertEqual(delta["knowledge_changes"][0]["proposition_id"], delta["canonical_facts"][-1]["fact_id"])
+        self.assertEqual(len(delta["canonical_facts"]), 18)
+        self.assert_prose_unchanged()
+
+    def test_completion_check_can_find_missing_changes_and_continue_paging(self):
+        path = self.seed_accepted_facts([self.fact(0)])
+        pages = iter(({"items": [self.fact(0)], "complete": False},
+                      {"items": [self.fact(1)], "complete": False}, {"items": [self.fact(2)], "complete": True}))
+        transport = mock.Mock(side_effect=lambda *args, **kwargs: self.response(next(pages)))
+        result = self.normalize(transport)
+        self.assertEqual(result["canonical_facts"], [self.fact(i) for i in range(3)])
+        self.assertEqual([call.args[2]["response_format"]["json_schema"]["name"] for call in transport.call_args_list],
+                         ["semanticCategoryPage", "semanticCompletionCheck", "semanticCategoryPage"])
+        self.assertNotIn("canonical_facts", RUNNER.read_json(path)["completion_checks"])
+        self.assert_prose_unchanged()
+
+    def test_explicit_completion_with_valid_repeated_items_needs_no_extra_request(self):
+        self.seed_accepted_facts([self.fact(0)])
+        transport = mock.Mock(return_value=self.response({"items": [self.fact(0)], "complete": True}))
+        self.assertEqual(self.normalize(transport)["canonical_facts"], [self.fact(0)])
+        transport.assert_called_once()
+        self.assert_prose_unchanged()
+
+    def test_invalid_page_envelope_cannot_declare_completion_after_adding_a_fact(self):
+        path = self.seed_accepted_facts([self.fact(0)])
+        transport = mock.Mock(return_value=self.response({"items": [self.fact(1)], "complete": True, "unexpected": "invalid"}))
+        with self.assertRaises(RUNNER.PausedError):
+            self.normalize(transport)
+        state = RUNNER.read_json(path)
+        self.assertFalse(state["complete"]["canonical_facts"])
+        self.assertEqual(state["payload"]["canonical_facts"], [self.fact(0), self.fact(1)])
+        self.assert_prose_unchanged()
+
+    def test_duplicate_checks_still_pause_and_resume_without_silently_finishing(self):
+        path = self.seed_accepted_facts([self.fact(0)])
+        transport = mock.Mock(return_value=self.response({"items": [self.fact(0)], "complete": False}))
+        with self.assertRaisesRegex(RUNNER.PausedError, "3 provider attempts"):
+            self.normalize(transport)
+        self.assertEqual(transport.call_count, 3)
+        state = RUNNER.read_json(path)
+        self.assertFalse(state["complete"]["canonical_facts"])
+        self.assertTrue(state["completion_checks"]["canonical_facts"])
+        self.assertEqual(state["payload"]["canonical_facts"], [self.fact(0)])
+        preserved = {p: p.read_bytes() for p in (self.run / "raw").glob("*.api.json")}
+        resume = mock.Mock(return_value=self.response({"items": [], "complete": True}))
+        self.assertEqual(self.normalize(resume)["canonical_facts"], [self.fact(0)])
+        self.assertEqual(resume.call_count, 1)
+        self.assertEqual(resume.call_args.args[2]["response_format"]["json_schema"]["name"], "semanticCompletionCheck")
+        for p, value in preserved.items():
+            self.assertEqual(p.read_bytes(), value)
+        entries = [entry for entry in RUNNER.ledger_entries(self.run) if entry["step_type"] == "analysis"]
+        self.assertEqual(sum(entry["token_accounting"]["output_tokens"] for entry in entries), 28)
         self.assert_prose_unchanged()
 
     def test_interrupted_page_preserves_complete_records_before_pausing(self):
