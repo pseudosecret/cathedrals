@@ -205,17 +205,66 @@ class FTS5RetrievalTests(unittest.TestCase):
         self.commit(1, prose="Required complete predecessor.")
         assignment = plan(depends_on_packet_slot_ids=["packet_000001"])
         step = RUNNER.packet_step_id(assignment)
-        records = [{"source_id": "oversized_discovery", "immutable_source": "x" * 180000},
-                   {"source_id": "small_discovery", "immutable_source": "Useful additional background."}]
+        provenance = {"source_id": "shared_discovery", "source_commit_id": "commit_discovery", "source_hash": "a" * 64}
+        records = [provenance | {"record_pointer": "/large", "immutable_source": "x" * 180000},
+                   provenance | {"record_pointer": "/small", "immutable_source": "Useful additional background."}]
         RUNNER.write_json(self.run / "raw" / f"{step}.retrieval-session.json", {"working_set": records})
         receipt = {}
         context = self.context(assignment, receipt=receipt)
         decoded = decode_context(context)
         self.assertIn("Required complete predecessor.", context)
         self.assertEqual(decoded["MODEL REQUESTED VERIFIED RECORDS"], [records[1]])
-        self.assertTrue(any(item.get("source_id") == "oversized_discovery" and item["reason"] == "prepared_context_budget" for item in receipt["omissions"]))
+        self.assertTrue(any(item.get("source_id") == "shared_discovery" and item.get("record_pointer") == "/large"
+                            and item["reason"] == "prepared_context_budget" for item in receipt["omissions"]))
+        self.assertTrue(any(item.get("source_id") == "shared_discovery" and item["record_pointer"] == "/small"
+                            for item in receipt["selected_sources"]))
         self.assertEqual(receipt["correction_headroom_tokens"], RUNNER.BASE_OUTPUT_TOKENS)
         self.assertLessEqual(receipt["estimated_context_tokens"] + RUNNER.BASE_OUTPUT_TOKENS, receipt["context_ceiling"])
+
+    def test_packet_context_accepts_sources_constraints_and_tentative_plan_items(self):
+        self.commit(1, prose="Complete source unit for mixed retrieval.")
+        source = RUNNER.read_retrieval_tool(self.run, "get_records", {"ids": ["scene_000001"]})[0]
+        event = RUNNER.constraint_events(self.run)[0]
+        RUNNER.save_planning_draft(self.run, "future_plan", {"payload": {"arcs": [{"arc_id": "arc_future", "purpose": "Tentative future intention."}]}})
+        tentative = RUNNER.read_retrieval_tool(self.run, "get_plan_items", {"ids": ["arc_future"]})[0]
+        records = [source, event, tentative]
+        self.assertEqual(RUNNER.current_retrieval_records(self.run, records), records)
+        self.assertNotIn("source_id", event)
+        self.assertNotIn("source_id", tentative)
+        assignment = plan()
+        RUNNER.write_json(self.run / "raw" / f"{RUNNER.packet_step_id(assignment)}.retrieval-session.json", {"working_set": records})
+        receipt = {}
+        decoded = decode_context(self.context(assignment, receipt=receipt))
+        self.assertEqual(decoded["MODEL REQUESTED CONSTRAINT HISTORY"], [event])
+        self.assertEqual(decoded["MODEL REQUESTED TENTATIVE PLAN ITEMS"], [tentative])
+        self.assertTrue(any(item["source_id"] == source["source_id"] for item in receipt["selected_sources"]))
+        self.assertTrue(any(item["constraint_id"] == event["constraint_id"] and item["event_sequence"] == event["constraint_event_sequence"]
+                            for item in receipt["selected_constraints"]))
+        self.assertEqual(receipt["selected_plan_items"], [{"step_id": tentative["step_id"], "revision": tentative["revision"],
+            "record_pointer": tentative["record_pointer"], "required": False}])
+
+    def test_malformed_retrieval_record_reports_missing_fields(self):
+        with self.assertRaisesRegex(RUNNER.IntegrityError, "missing source_id"):
+            RUNNER.retrieval_record_metadata({"immutable_source": {}, "source_commit_id": "commit_fixture",
+                "source_hash": "a" * 64, "record_pointer": ""})
+        with self.assertRaisesRegex(RUNNER.IntegrityError, "Unknown retrieval record shape"):
+            RUNNER.retrieval_record_metadata({"unexpected": "shape"})
+
+    def test_shared_retrieval_validation_rejects_changed_hashes(self):
+        self.commit(1)
+        source = RUNNER.read_retrieval_tool(self.run, "get_records", {"ids": ["scene_000001"]})[0]
+        source["source_hash"] = "0" * 64
+        with self.assertRaisesRegex(RUNNER.IntegrityError, "Cached retrieval evidence changed"):
+            RUNNER.current_retrieval_records(self.run, [source])
+
+    def test_shared_tentative_retrieval_rejects_stale_items_and_noncanonical_pointers(self):
+        state = {"payload": {"arcs": [{"arc_id": "arc_future", "purpose": "Original intention."}]}}
+        RUNNER.save_planning_draft(self.run, "future_plan", state)
+        item = RUNNER.read_retrieval_tool(self.run, "get_plan_items", {"ids": ["arc_future"]})[0]
+        self.assertIsNone(RUNNER.current_retrieval_records(self.run, [item | {"record_pointer": "/arcs/00"}]))
+        state["payload"]["arcs"][0]["purpose"] = "Updated intention."
+        RUNNER.save_planning_draft(self.run, "future_plan", state)
+        self.assertIsNone(RUNNER.current_retrieval_records(self.run, [item]))
 
     def test_retracted_knowledge_is_labeled_as_history(self):
         for number in range(1, 4):

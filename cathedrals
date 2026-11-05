@@ -26,6 +26,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import traceback
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -3860,6 +3861,33 @@ def predecessor_contracts(run_dir, records):
         for record in records]
 
 
+def context_item_identity(item):
+    if not isinstance(item, dict):
+        return {}
+    identity = {key: item[key] for key in ("source_id", "source_commit_id", "source_hash", "record_pointer",
+        "constraint_id", "step_id", "revision") if key in item}
+    if "constraint_event_sequence" in item:
+        identity["event_sequence"] = item["constraint_event_sequence"]
+    return identity
+
+
+def retrieval_record_metadata(record):
+    if not isinstance(record, dict):
+        raise IntegrityError(f"Retrieval record must be an object; received {type(record).__name__}")
+    if record.get("authority") == "TENTATIVE PLAN":
+        group, required = "selected_plan_items", ("step_id", "revision", "record_pointer", "item")
+    elif "immutable_source" in record:
+        group, required = "selected_sources", ("source_id", "source_commit_id", "source_hash", "record_pointer")
+    elif record.get("record_type") == "constraint_event":
+        group, required = "selected_constraints", ("constraint_id", "constraint_event_sequence", "data", "sources")
+    else:
+        raise IntegrityError(f"Unknown retrieval record shape; keys: {', '.join(sorted(record))}")
+    missing = [key for key in required if key not in record]
+    if missing:
+        raise IntegrityError(f"Retrieval {group} record is missing {', '.join(missing)}; keys: {', '.join(sorted(record))}")
+    return group, context_item_identity(record)
+
+
 def pack_packet_context(required, optional, max_tokens, receipt):
     def render(sections, compact, details=None):
         sources, records = {}, {}
@@ -3957,7 +3985,7 @@ def pack_packet_context(required, optional, max_tokens, receipt):
         for item in items:
             identity = canonical_json(item)
             if identity in seen:
-                receipt["omissions"].append({"section": label, "reason": "duplicate_optional_item"})
+                receipt["omissions"].append({"section": label, **context_item_identity(item), "reason": "duplicate_optional_item"})
                 continue
             trial = packed + [(label, [item])]
             candidate = render(trial, True)
@@ -3966,7 +3994,7 @@ def pack_packet_context(required, optional, max_tokens, receipt):
                 text = candidate
                 seen.add(identity)
             else:
-                receipt["omissions"].append({"section": label, "source_id": item.get("source_id") if isinstance(item, dict) else None, "reason": "prepared_context_budget"})
+                receipt["omissions"].append({"section": label, **context_item_identity(item), "reason": "prepared_context_budget"})
     packed_details = {}
     text = render(packed, True, packed_details)
     packed_details["context_components"] = packed_details.pop("required_components")
@@ -4095,6 +4123,10 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
     tool_records = []
     if tool_session.exists():
         tool_records = read_json(tool_session)["working_set"]
+    tool_groups = {"selected_sources": [], "selected_constraints": [], "selected_plan_items": []}
+    for record in tool_records:
+        group, _metadata = retrieval_record_metadata(record)
+        tool_groups[group].append(record)
     if plan["packet_kind"] == "ending":
         chain = [required_obligations[key] for key in sorted(prerequisite_ids)]
         required.extend([
@@ -4182,17 +4214,22 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
             if reason:
                 historical.append({"authority": "CONSTRAINT HISTORY", "current_state_note": reason, "event": event})
         # Source identities are deduplicated before packing; soft continuity may be omitted, never required inputs.
-        optional = [("MODEL REQUESTED VERIFIED RECORDS", tool_records),
+        optional = [("MODEL REQUESTED VERIFIED RECORDS", tool_groups["selected_sources"]),
+                    ("MODEL REQUESTED CONSTRAINT HISTORY", tool_groups["selected_constraints"]),
+                    ("MODEL REQUESTED TENTATIVE PLAN ITEMS", tool_groups["selected_plan_items"]),
                     ("RETRIEVED ORIGINAL SOURCE EVIDENCE", chosen),
                     ("OTHER RELEVANT PAST CONSTRAINTS", [event for event in past if event["data"]["fact_id"] not in protected_fact_ids]),
                     ("OTHER RELEVANT CHARACTER KNOWLEDGE", optional_knowledge), ("HISTORICAL CONSTRAINT EVENTS", historical),
                     ("RELEVANT MOTIF PRESSURES", motifs), ("RECENT LOCAL SOURCE", [record for record in recent if record["commit_id"] not in covered_commits]),
                     ("SOFT FUTURE PRESSURES", soft)]
         text = pack_packet_context(required, optional, optional_ceiling, receipt)
-        for source in tool_records + chosen:
-            metadata = {key: source.get(key) for key in ("source_id", "source_commit_id", "source_hash", "record_pointer")}
-            if not any(item.get("source_id") == source["source_id"] and item.get("reason") == "prepared_context_budget" for item in receipt["omissions"]):
-                receipt["selected_sources"].append(metadata | ranks.get((source.get("source_commit_id"),source.get("record_pointer")), {}) | {"required": False})
+        for record in tool_records + chosen:
+            group, metadata = retrieval_record_metadata(record)
+            omitted = any(item.get("reason") == "prepared_context_budget" and all(item.get(key) == value for key, value in metadata.items())
+                for item in receipt["omissions"])
+            entries = receipt.setdefault(group, [])
+            if not omitted and not any(all(entry.get(key) == value for key, value in metadata.items()) for entry in entries):
+                entries.append(metadata | ranks.get((record.get("source_commit_id"), record.get("record_pointer")), {}) | {"required": False})
         return text
     finally:
         write_json(receipt_path, receipt)
@@ -7754,8 +7791,11 @@ def retrieval_scope_revision(run_dir, scope_step, groups=()):
 
 
 def current_retrieval_records(run_dir, records):
+    if not isinstance(records, list):
+        raise IntegrityError(f"Retrieval working_set must be an array; received {type(records).__name__}")
     result, checkpoints, archives = copy.deepcopy(records), {}, {}
     for record in result:
+        retrieval_record_metadata(record)
         if record.get("authority") == "TENTATIVE PLAN":
             step = record["step_id"]
             path = run_dir / ".staging" / f"{step}.planning.json"
@@ -7764,12 +7804,9 @@ def current_retrieval_records(run_dir, records):
             if step not in checkpoints:
                 checkpoints[step] = read_json(path)
             state = checkpoints[step]
-            value = state.get("payload", {})
             try:
-                for part in record["record_pointer"].strip("/").split("/") if record["record_pointer"] else []:
-                    part = part.replace("~1", "/").replace("~0", "~")
-                    value = value[int(part)] if isinstance(value, list) else value[part]
-            except (KeyError, IndexError, ValueError, TypeError):
+                value = read_evidence_pointer(state.get("payload", {}), record["record_pointer"], source_id=step, archive=str(path))
+            except IntegrityError:
                 return None
             if value != record["item"]:
                 return None
@@ -10181,6 +10218,27 @@ def execute_run(run_dir: Path, output_fn=print, transport=http_json) -> tuple[Pa
     return build_path, counts, read_json(run_dir / "generation-brief.json")
 
 
+def unexpected_generator_error(run_dir: Path | None, error: Exception) -> CathedralsError:
+    frames = traceback.extract_tb(error.__traceback__)
+    origin = frames[-1] if frames else None
+    stage = f"Generator: {origin.name}" if origin else "Generator"
+    reason = f"{type(error).__name__}: {error}"
+    if origin:
+        reason += f"\nLocation: {origin.filename}:{origin.lineno} in {origin.name}"
+    if run_dir is not None:
+        path = run_dir / "logs" / f"generator-error-{secrets.token_hex(4)}.json"
+        try:
+            write_json(path, {"generation_id": run_dir.name, "timestamp": utc_now(), "stage": stage,
+                "exception_type": type(error).__name__, "message": str(error),
+                "traceback": "".join(traceback.format_exception(error)),
+                "frames": [{"file": frame.filename, "line": frame.lineno, "function": frame.name} for frame in frames]},
+                exclusive=True)
+            reason += f"\nDiagnostic: {path}"
+        except (OSError, CathedralsError) as diagnostic_error:
+            reason += f"\nDiagnostic could not be saved: {type(diagnostic_error).__name__}: {diagnostic_error}"
+    return CathedralsError(stage, reason)
+
+
 def print_failure(run_dir: Path | None, error: CathedralsError, output_fn=print) -> None:
     output_fn("\nFAILED_GENERATION\n")
     output_fn(f"Generation:\n{run_dir.name if run_dir else 'not created'}\n")
@@ -10188,7 +10246,7 @@ def print_failure(run_dir: Path | None, error: CathedralsError, output_fn=print)
     output_fn(f"Reason:\n{error.reason}\n")
     diagnostic = run_dir / "projection/web/dist" if run_dir else None
     if diagnostic and (diagnostic / "index.html").exists():
-        output_fn(f"A diagnostic static build was preserved at:\n{diagnostic.relative_to(ROOT)}\n")
+        output_fn(f"A diagnostic static build was preserved at:\n{diagnostic}\n")
     output_fn("Committed work was not rewritten.\nNo partial game is playable.")
 
 
@@ -10337,12 +10395,13 @@ def main(argv=None, *, input_fn=input, output_fn=print, transport=http_json) -> 
         print_failure(run_dir, error, output_fn)
         return 1
     except Exception as error:
-        wrapped = CathedralsError("Generator", str(error) or error.__class__.__name__)
+        wrapped = unexpected_generator_error(run_dir, error)
         if run_dir and state_path(run_dir).exists():
             try:
                 finalize_failure(run_dir, wrapped)
-            except Exception:
-                pass
+            except Exception as finalization_error:
+                wrapped = CathedralsError(wrapped.stage, f"{wrapped.reason}\nFailure finalization also failed: "
+                    f"{type(finalization_error).__name__}: {finalization_error}", wrapped.failure_class)
         print_failure(run_dir, wrapped, output_fn)
         return 1
 

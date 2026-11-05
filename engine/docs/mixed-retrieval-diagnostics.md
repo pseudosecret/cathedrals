@@ -1,0 +1,11 @@
+# Mixed retrieval results and unexpected error diagnostics
+
+Run `cathedrals_20261105_175937_1f5ad9` committed Architecture and completed two read-tool rounds before failing with the reason `'source_id'`. Inspection of its saved retrieval session found seven verified source units and five native constraint events. Those events correctly use `constraint_id`. Packet context packing finished, but the receipt loop then assumed every tool result contained `source_id`, producing a `KeyError` before the literary prompt could be completed.
+
+Packet preparation now validates and handles source units, constraint history and tentative plan items explicitly. The latter also lacks `source_id` and would trigger the same failure. Context labels and receipts preserve each type rather than relabeling metadata as original source evidence. Optional omissions now include full record identity; omitting one claimant profile or anchor no longer suppresses another unit merely because both share a claimant ID.
+
+The adjacent shared-cache validator now checks record shapes explicitly. Missing retrieval fields report their names, changed archived evidence fails integrity checks, and stale plan items invalidate shared reuse. Tentative pointers use the strict evidence pointer reader. Per-step saved sessions preserve the original observations associated with saved responses, including earlier tentative plans.
+
+Unexpected exceptions now report the exception type, originating function, source file and line. A unique `logs/generator-error-*.json` stores the full traceback and frame locations. Diagnostic-write failures retain the original exception, and secondary failure-finalization errors remain visible. Printing a preserved diagnostic build also accepts a run outside the current installation directory.
+
+Regression cases were added for mixed result types, source identities, malformed records, cached hashes, stale tentative items, strict pointers, traceback reporting, failed diagnostic writes, external build paths and secondary finalization errors. Per the operator's instruction, neither the engine nor these tests were executed for this change. Review was limited to source, saved JSON, syntax parsing and diff checks. Existing run snapshots and committed output were not edited.

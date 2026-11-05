@@ -70,6 +70,18 @@ fictional chronology, reader knowledge, or whether a revelation feels earned.
 
 ## Durability and inspection
 
+Optional tool results retain three distinct forms: verified source units, historical
+constraint events, and tentative plan items. Packet context labels them separately;
+receipts track `selected_sources`, `selected_constraints`, and `selected_plan_items`.
+Constraint events use `constraint_id`, and tentative items use their checkpoint and
+pointer; neither requires an invented `source_id`. Budget omissions identify the
+complete unit, including its owner, hash and pointer where applicable.
+
+Shared-cache validation checks each record's required fields. Modified source
+evidence fails integrity checks; stale tentative items invalidate shared reuse.
+Tentative JSON Pointers use the same strict parser as archived evidence. Per-step
+saved sessions retain the original observations used by their saved responses.
+
 Catalog entries, FTS postings, relevance tags, and the ordinary state checkpoint are
 updated in the same commit transaction. Archives remain authoritative. Startup and
 recovery verify the catalog against archive extraction and run FTS integrity checking
