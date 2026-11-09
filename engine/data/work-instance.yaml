@@ -439,10 +439,13 @@ format_selection:
   renpy_bootstrap_active: false
 
 generation_budget:
-  calculation_version: 11
+  calculation_version: 12
   primary_scale_input: possible_scene_count
   words_per_token_assumption: 0.75
-  max_prepared_context_tokens: 49152
+  max_prepared_context_tokens: 49152 # Legacy cap; normal input target for completion-contract v1.
+  normal_prepared_context_tokens: 49152
+  completion_contract_version: 1
+  completion_contract_hard_input_allowance: verified_loaded_window_minus_output_and_safety
   max_planning_context_tokens: derived_per_run
   minimum_planning_output_tokens: 256
   max_retrieved_source_tokens: 12288

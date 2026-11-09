@@ -45,6 +45,13 @@ for a literary ID already committed or authored in this packet. Never invent the
 future literary ID of an unwritten scene or ending. The deterministic projector later
 resolves technical slots without changing this packet.
 
+When the assignment includes `required_navigation`, author a playable choice to every
+listed target for your scene. Write the choice labels and narrative transitions
+yourself. Do not replace the contract with an empty choices array, reserved-only
+links, or generic reading controls. Keep the planned completion route traversable
+under its actual state conditions and effects. A missing required exit fails before
+the artistic payload is preserved.
+
 Use the active web composition fields for navigational purpose, document behavior,
 path trace, and state-sensitive presentation. Do not write visual-novel staging or
 assume runtime generation. Avoid generic ominous prose, faux profundity, lore dumping, therapist-speak,
@@ -56,6 +63,9 @@ A valid response is preserved even if later normalization must pause. Invalid ou
 including a literary-word overrun, receives bounded correction attempts before prose
 preservation and then pauses the run if still invalid.
 Account for the supplied constraints. Do not merely remember or summarize them.
+An obligation listed as eligible for satisfaction is not a requirement to close it
+now. Preserve long-range pressure until the authored work actually earns its payoff;
+ongoing uncertainty produces no terminal resolution update.
 
 Retrieved material is author working memory. PLANNED INTENTION describes future
 work; it does not establish that an event has occurred. CONSTRAINT HISTORY may be

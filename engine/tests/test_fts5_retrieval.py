@@ -22,7 +22,7 @@ def decode_context(text):
     sections = {}
     parts = re.split(r"^===== (.*?) =====\n", text, flags=re.MULTILINE)
     for label, body in zip(parts[1::2], parts[2::2]):
-        if label in {"SHARED SOURCE METADATA", "SHARED SOURCE RECORDS"}:
+        if label in {"SHARED SOURCE METADATA", "SHARED SOURCE RECORDS", "SHARED CONTEXT VALUES"}:
             body = body.split("\n", 1)[1]
         values = []
         decoder = json.JSONDecoder()
@@ -38,6 +38,7 @@ def decode_context(text):
         sections.setdefault(label, []).extend(values)
     shared = sections.pop("SHARED SOURCE METADATA", [{}])[0]
     shared.update(sections.pop("SHARED SOURCE RECORDS", [{}])[0])
+    shared.update(sections.pop("SHARED CONTEXT VALUES", [{}])[0])
 
     def expand(value):
         if isinstance(value, dict):

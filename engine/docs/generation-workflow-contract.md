@@ -201,6 +201,11 @@ and `intentionally_unresolved`. Active obligations persist without an update; ex
 evidence belongs in facts or knowledge. Deliberate ambiguous resolution is distinct
 from ongoing uncertainty. New soft obligations still begin active. Foreclosure and
 impossibility retain their separate scoped-candidate requirements.
+In completion-contract v1, an ending prerequisite offers only supported satisfaction.
+A source-grounded resolution audit may remove an uncommitted ongoing or unsupported
+update; it never invents satisfaction or changes prose. Long-range hard payoffs retain
+their active pressure before their final literary deadline rather than forcing a
+terminal update in the opening packet. Soft pressure does not become a binding task.
 
 Truncation preserves complete records and closed categories, then switches remaining
 work to pages of at most eight records with an explicit completion flag. Facts precede
@@ -364,8 +369,8 @@ no more than 2. FTS rank replaces metadata word-overlap scoring with a bounded
 history. Thus Scene 130 may retrieve Scene 12 even when its relevant detail was
 never extracted into a constraint.
 
-Required inputs include applicable engine law, brief, full generated root canon, the local
-packet plan, whole predecessor packets, assigned obligations and their recursive
+Required inputs include applicable engine law, brief, generated root source units, the local
+packet plan, predecessor interfaces, binding obligations and their recursive
 prerequisites, cited proof, and the selected current facts/knowledge tied to that
 evidence. These bypass optional retrieval limits. Ending-specific prerequisite,
 reader-state, and residue roles remain explicit. If required context cannot fit,
@@ -378,10 +383,16 @@ coverage is deduplicated; optional constraints, knowledge, historical state, mot
 recent prose, and soft pressure fill remaining prepared-context space. No unit is
 clipped. JSON uses compact separators and repeated source-reference metadata can
 use exact `$context_ref` objects; authored strings and literary units stay complete.
-The three original Genesis records appear once in SHARED SOURCE RECORDS, with root
+Required original Genesis units appear in SHARED SOURCE RECORDS, with root
 canon and prerequisite roles referencing their complete objects. Sources share only
 when owning commit, source hash, JSON Pointer, and payload agree. Conflicting payloads
 fail integrity checking. The merged Genesis view remains internal to entity lookup.
+SHARED CONTEXT VALUES also factors exact repeated metadata objects and strings across
+roles. Expanding every reference reproduces the complete included values. No summary
+or inferred equivalence substitutes for evidence. New completion-contract runs use
+49,152 tokens as the normal input target, with mandatory-input headroom bounded by
+the verified frozen/loaded model window, complete request envelope, output and safety
+reserves. Genuine capacity shortfalls still pause before a provider request.
 
 Packet instructions retain full ontology, style, grammar, claimant/state, constitution,
 branching, and web law, plus exact binding sections of the frozen work-instance and

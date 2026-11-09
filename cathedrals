@@ -30,6 +30,8 @@ import traceback
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from html.parser import HTMLParser
+from urllib.parse import unquote, urlsplit
 from contextlib import closing, contextmanager
 from pathlib import Path
 
@@ -1642,6 +1644,9 @@ def create_run(
     derived = derive_scope(frozen.possible_scene_count)
     derived["budgets"]["model_context_window_tokens"] = model_context_window_tokens
     budgets = derived["budgets"]
+    if (execution_policy or {}).get("completion_contract_version") == 1:
+        budgets["normal_prepared_context_tokens"] = 49152
+        budgets["max_prepared_context_tokens"] = model_context_window_tokens - budgets["context_safety_reserve_tokens"]
     budgets["max_planning_context_tokens"] = model_context_window_tokens - budgets["context_safety_reserve_tokens"] - MIN_PLANNING_OUTPUT_TOKENS
     budgets["max_cumulative_input_tokens"] = (2 * budgets["max_creative_step_count"] + budgets["max_analysis_step_count"]) * max(
         budgets["max_prepared_context_tokens"], budgets["max_planning_context_tokens"])
@@ -2743,6 +2748,16 @@ def packet_input_limit(run_dir: Path, output_tokens=BASE_OUTPUT_TOKENS) -> int:
     return int(min(budgets["max_prepared_context_tokens"], window - output_tokens - budgets.get("context_safety_reserve_tokens", 4096)))
 
 
+def provider_input_tokens(payload):
+    # Count content without JSON transport escaping, plus schema/tool/message envelopes.
+    parts = [canonical_json({key: value for key, value in payload.items() if key != "messages"}).decode()]
+    for message in payload.get("messages", []):
+        content = message.get("content", "")
+        parts.append(content if isinstance(content, str) else canonical_json(content).decode())
+        parts.append(canonical_json({key: value for key, value in message.items() if key != "content"}).decode())
+    return estimated_prompt_tokens("\n".join(parts)) + 32 * len(payload.get("messages", []))
+
+
 def render_prompt(run_dir: Path, name: str, replacements: dict[str, str]) -> str:
     value = (engine_root(run_dir) / "prompts" / name).read_text(encoding="utf-8")
     for key, replacement in replacements.items():
@@ -2955,6 +2970,11 @@ def request_record(
             **parameters,
             "response_format": {"type": "json_schema", "json_schema": {"name": response_definition, "strict": True, "schema": wire_schema}},
         }
+        if execution_policy(run_dir).get("completion_contract_version") == 1:
+            prompt_tokens = provider_input_tokens(payload)
+            if prompt_tokens > capacity:
+                raise PausedError("Context assembly", f"Complete provider envelope for {step_id} needs approximately {prompt_tokens:,} input tokens; "
+                    f"ceiling {capacity:,} after output and safety reserves. No request was sent.", "budget_exhaustion")
         request_hash = sha256_bytes(canonical_json(payload))
         attempts = [entry["attempt"] for entry in step_entries(run_dir, step_id)]
         attempt = max(attempts, default=0) + 1
@@ -3658,6 +3678,140 @@ def resolve_cross_packet_links(scenes: list[dict], endings: list[dict], edges: l
     return resolved_edges, resolved_endings
 
 
+def navigation_contract_route(architecture):
+    plans = architecture["packet_plans"]
+    scenes = {slot for plan in plans for slot in plan["scene_slot_ids"]}
+    endings = {slot for plan in plans for slot in plan["ending_slot_ids"]}
+    all_slots, graph = scenes | endings, {}
+    for plan in plans:
+        routes = plan.get("required_navigation", {})
+        if not isinstance(routes, dict) or set(routes) != set(plan["scene_slot_ids"]):
+            raise SchemaError(f"Navigation contract for {plan['packet_slot_id']} must cover exactly its scene slots")
+        for slot, destinations in routes.items():
+            if not isinstance(destinations, list) or not destinations or len(destinations) > 16 or any(not isinstance(target, str) for target in destinations) or len(set(destinations)) != len(destinations) or not set(destinations).issubset(all_slots):
+                raise SchemaError(f"Navigation contract has missing, duplicate, or unknown destinations at {slot}")
+            graph[slot] = destinations
+    if not scenes or not endings:
+        raise SchemaError("Navigation contract needs an opening scene and an ending")
+    opening = min(scenes)
+    queue, parents = [opening], {opening: None}
+    for slot in queue:
+        for destination in sorted(graph.get(slot, [])):
+            if destination not in parents:
+                parents[destination] = slot
+                queue.append(destination)
+    if all_slots - parents.keys():
+        raise SchemaError("Navigation contract leaves unreachable slots: " + ", ".join(sorted(all_slots - parents.keys())[:12]))
+    reverse = {slot: [] for slot in all_slots}
+    for slot, destinations in graph.items():
+        for destination in destinations:
+            reverse[destination].append(slot)
+    escape, seen = sorted(endings), set(endings)
+    for slot in escape:
+        for previous in reverse[slot]:
+            if previous not in seen:
+                seen.add(previous)
+                escape.append(previous)
+    if scenes - seen:
+        raise SchemaError("Navigation contract contains scenes with no route to an ending: " + ", ".join(sorted(scenes - seen)[:12]))
+    terminal = next(slot for slot in queue if slot in endings)
+    route = []
+    while terminal is not None:
+        route.append(terminal)
+        terminal = parents[terminal]
+    return list(reversed(route))
+
+
+def reader_equal(left, right):
+    if isinstance(left, (dict, list)) or isinstance(right, (dict, list)):
+        return False
+    return left == right and (type(left) is type(right) or type(left) in (int, float) and type(right) in (int, float))
+
+
+def reader_conditions_hold(conditions, values):
+    missing = object()
+    def number(value):
+        if value is missing:
+            return float("nan")
+        if value is None or isinstance(value, str) and not value.strip():
+            return 0
+        return float(value)
+    for condition in conditions:
+        current, expected, operator = values.get(condition["key"], missing), condition["value"], condition["operator"]
+        equal = reader_equal(current, expected)
+        contains = isinstance(current, list) and any(reader_equal(item, expected) for item in current)
+        try:
+            valid = {"equals": lambda: equal, "not_equals": lambda: not equal,
+                "contains": lambda: contains, "not_contains": lambda: not contains,
+                "gte": lambda: current >= expected if isinstance(current, str) and isinstance(expected, str) else number(current) >= number(expected),
+                "lte": lambda: current <= expected if isinstance(current, str) and isinstance(expected, str) else number(current) <= number(expected)}[operator]()
+        except (ValueError, TypeError, KeyError):
+            valid = False
+        if not valid:
+            return False
+    return True
+
+
+def apply_reader_effects(effects, values):
+    for effect in effects:
+        key, value = effect["key"], effect["value"]
+        current = values.get(key)
+        if effect["operation"] == "set":
+            values[key] = value
+        elif effect["operation"] == "increment":
+            if not isinstance(current or 0, (int, float)) or not isinstance(value, (int, float)):
+                raise SchemaError(f"Completion route has a nonnumeric increment for {key}")
+            values[key] = (current or 0) + value
+        else:
+            if current is not None and not isinstance(current, list):
+                raise SchemaError(f"Completion route has a collection effect on non-array state {key}")
+            items = list(current or [])
+            if effect["operation"] == "add" and not any(reader_equal(item, value) for item in items):
+                items.append(value)
+            elif effect["operation"] == "remove":
+                items = [item for item in items if not reader_equal(item, value)]
+            values[key] = items
+
+
+def validate_navigation_payload(run_dir, architecture, plan, payload):
+    if execution_policy(run_dir).get("completion_contract_version") != 1:
+        return
+    content, id_to_slot = {}, {}
+    for record in committed_records(run_dir, "creative_packet"):
+        for item in record["scenes"] + record["endings"]:
+            identifier = item.get("scene_id", item.get("ending_id"))
+            id_to_slot[identifier] = item["technical_slot_id"]
+            content[item["technical_slot_id"]] = item | {"choices": [edge for edge in record["decision_edges"] if edge["from_content_id"] == identifier]}
+    for item in payload["scenes"] + payload["endings"]:
+        content[item["technical_slot_id"]] = item
+        identifier = item.get("scene_id", item.get("ending_id"))
+        if identifier:
+            id_to_slot[identifier] = item["technical_slot_id"]
+    def destination(choice):
+        target = choice["destination"]
+        return target["id"] if target["kind"] == "technical_slot" else id_to_slot.get(target["id"])
+    for scene in payload["scenes"]:
+        required = set(plan.get("required_navigation", {}).get(scene["technical_slot_id"], []))
+        actual = {destination(choice) for choice in scene["choices"] if choice["availability"] == "playable"}
+        if not required or not required.issubset(actual):
+            raise SchemaError(f"Scene {scene['technical_slot_id']} must author playable exits to: {', '.join(sorted(required - actual)) or 'its frozen navigation targets'}")
+    route, values = navigation_contract_route(architecture), {}
+    for index, slot in enumerate(route):
+        if slot not in content:
+            return
+        item = content[slot]
+        if not reader_conditions_hold(item.get("entry_conditions", []), values):
+            raise SchemaError(f"Completion route cannot enter {slot} under its authored state conditions")
+        apply_reader_effects(item["state_effects"], values)
+        if index + 1 == len(route):
+            return
+        choices = [choice for choice in item["choices"] if choice["availability"] == "playable" and destination(choice) == route[index + 1]
+            and reader_conditions_hold(choice["state_conditions"], values)]
+        if not choices:
+            raise SchemaError(f"Completion route is blocked at {slot} -> {route[index + 1]}; correct the uncommitted navigation or state effects")
+        apply_reader_effects(choices[0]["state_effects"], values)
+
+
 def _read_state_map(run_dir: Path, name: str) -> dict:
     ensure_index(run_dir)
     with index_connection(run_dir) as db:
@@ -3854,11 +4008,49 @@ def scoped_root_sources(run_dir, plan):
 def predecessor_contracts(run_dir, records):
     return [{"authority": "COMMITTED PREDECESSOR CONTRACT", "source_commit_id": record["commit_id"],
         "source_hash": _source_index(run_dir, [record["commit_id"]])[record["commit_id"]]["hash"],
-        "packet_slot_id": record["packet_slot_id"], "constraint_delta": record["constraint_delta"],
-        "decision_edges": record["decision_edges"],
+        "packet_slot_id": record["packet_slot_id"],
+        "constraint_ids": [identifier for identifier in record_source_pointers(record)
+            if identifier not in {record["commit_id"]} | {item["scene_id"] for item in record["scenes"]}
+            | {item["artifact_id"] for item in record["artifacts"]} | {item["ending_id"] for item in record["endings"]}],
+        "decision_edges": [{key: edge[key] for key in ("edge_id", "from_content_id", "destination", "availability")} for edge in record["decision_edges"]],
+        "state_exports": [{"scene_id": scene["scene_id"], "state_effects": scene["state_effects"]} for scene in record["scenes"] if scene["state_effects"]],
         "content_ids": {key: [value[identity] for value in record[key]]
             for key, identity in (("scenes", "scene_id"), ("artifacts", "artifact_id"), ("endings", "ending_id"))}}
         for record in records]
+
+
+def shared_context_values(values):
+    counts, originals = {}, {}
+    def collect(value):
+        if isinstance(value, (dict, list, str)):
+            key = canonical_json(value)
+            if len(key) >= 192:
+                counts[key] = counts.get(key, 0) + 1
+                originals[key] = value
+        if isinstance(value, dict):
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+    for items in values:
+        for item in items:
+            collect(item)
+    references = {key: f"value_{index:04d}" for index, key in enumerate(sorted(
+        key for key, count in counts.items() if count > 1 and (count - 1) * len(key) > count * 48 + 64), 1)}
+    def encode(value, own=None):
+        key = canonical_json(value) if isinstance(value, (dict, list, str)) else None
+        if key in references and key != own:
+            return {"$context_ref": references[key]}
+        if isinstance(value, dict):
+            return {name: encode(child) for name, child in value.items()}
+        if isinstance(value, list):
+            return [encode(child) for child in value]
+        return value
+    packed = [[encode(item) for item in items] for items in values]
+    table = {reference: encode(originals[key], key) for key, reference in references.items()}
+    saved = len(canonical_json(values)) - len(canonical_json(packed)) - len(canonical_json(table)) - 160
+    return (packed, table, saved) if saved > 0 else (values, {}, 0)
 
 
 def context_item_identity(item):
@@ -3935,25 +4127,31 @@ def pack_packet_context(required, optional, max_tokens, receipt):
                 return [encode(child) for child in value]
             return value
 
-        rendered, components = [], {}
+        rendered, components, blocks = [], {}, []
         if records:
-            block = "===== SHARED SOURCE RECORDS =====\nEach $context_ref expands to its complete original source unit below.\n" + compact_context_value(
-                {record_refs[identity]: entry[0] for identity, entry in sorted(records.items())}) + "\n"
-            rendered.append(block)
-            components["SHARED SOURCE RECORDS"] = len(block.encode())
+            blocks.append(("SHARED SOURCE RECORDS", [{record_refs[identity]: entry[0] for identity, entry in sorted(records.items())}],
+                "Each $context_ref expands to its complete original source unit below.\n"))
         if shared:
-            block = "===== SHARED SOURCE METADATA =====\nEach $context_ref expands to the exact source metadata object below.\n" + compact_context_value({reference: sources[key][0] for key, reference in shared.items()}) + "\n"
-            rendered.append(block)
-            components["SHARED SOURCE METADATA"] = len(block.encode())
+            blocks.append(("SHARED SOURCE METADATA", [{reference: sources[key][0] for key, reference in shared.items()}],
+                "Each $context_ref expands to the exact source metadata object below.\n"))
         for label, items in sections:
             if items:
-                block = f"===== {label} =====\n" + "\n\n".join(
-                    compact_context_value(encode(item)) if compact else item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, indent=2)
-                    for item in items) + "\n"
-                rendered.append(block)
-                components[label] = components.get(label, 0) + len(block.encode())
+                blocks.append((label, [encode(item) for item in items] if compact else items, ""))
+        values, table, saved = shared_context_values([items for _label, items, _note in blocks]) if compact else (
+            [items for _label, items, _note in blocks], {}, 0)
+        if table:
+            block = "===== SHARED CONTEXT VALUES =====\nEach $context_ref expands losslessly; references may occur inside other shared objects.\n" + compact_context_value(table) + "\n"
+            rendered.append(block)
+            components["SHARED CONTEXT VALUES"] = len(block.encode())
+        for (label, _items, note), items in zip(blocks, values):
+            block = f"===== {label} =====\n" + note + "\n\n".join(
+                compact_context_value(item) if compact else item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, indent=2)
+                for item in items) + "\n"
+            rendered.append(block)
+            components[label] = components.get(label, 0) + len(block.encode())
         if details is not None:
             details.update({"required_components": components,
+                "shared_value_bytes_saved": saved, "shared_value_count": len(table),
                 "shared_source_count": len(records), "source_reference_count": sum(entry[2] for entry in records.values()),
                 "source_payload_bytes_saved": sum(len(entry[1].encode()) * (entry[2] - 1) for entry in records.values()),
                 "shared_source_coverage": [{"context_ref": record_refs[identity], "source_commit_id": identity[0],
@@ -3978,8 +4176,12 @@ def pack_packet_context(required, optional, max_tokens, receipt):
     maximum = max(0, max_tokens * 3)
     if len(text.encode()) > maximum:
         receipt["capacity_failure"] = True
+        receipt["largest_required_units"] = sorted([
+            {"section": label, **context_item_identity(item), "bytes_before_sharing": len(canonical_json(item))}
+            for label, items in original_required for item in items], key=lambda item: -item["bytes_before_sharing"])[:10]
         raise PausedError("Packet context", f"Required whole-source context needs approximately {estimated_prompt_tokens(text):,} tokens; ceiling {max_tokens:,}. "
-            + "Components (UTF-8 bytes; shared records counted once): " + canonical_json(receipt["required_components"]).decode().strip(), "budget_exhaustion")
+            + "Components (UTF-8 bytes; shared records counted once): " + canonical_json(receipt["required_components"]).decode().strip()
+            + " Largest required units before sharing: " + canonical_json(receipt["largest_required_units"]).decode().strip(), "budget_exhaustion")
     packed = filtered
     for label, items in optional:
         for item in items:
@@ -4079,12 +4281,11 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
     dependency_ids = set() if scoped else {identifier for record in dependencies for identifier in generated_ids(record)}
     uncovered_proofs = [event | {"sources": [source for source in event["sources"] if source["artifact_id"] not in dependency_ids]} for event in proof_events]
     required_sources = retrieve_original_sources(run_dir, uncovered_proofs, limit=None, strict=True) if uncovered_proofs else []
-    required_ids = {identifier for record in dependencies for identifier in generated_ids(record)} | {source["source_id"] for source in required_sources}
+    required_ids = (set() if scoped else {identifier for record in dependencies for identifier in generated_ids(record)}) | {source["source_id"] for source in required_sources}
     mandatory_tags = {key: set(plan.get("relevance", {}).get(key, []))
-        for key in ("claimant_ids", "character_ids", "object_ids", "location_ids", "state_keys")}
+        for key in ("object_ids", "location_ids", "state_keys", "technical_slot_ids")}
     protected_past = [event for event in past if any(source["artifact_id"] in required_ids for source in event["sources"])
-        or scoped and (event["data"].get("subject") in subjects or any(values.intersection(
-            event["data"].get("relevance", {}).get(key, [])) for key, values in mandatory_tags.items()))]
+        or scoped and any(values.intersection(event["data"].get("relevance", {}).get(key, [])) for key, values in mandatory_tags.items())]
     protected_fact_ids = {event["data"]["fact_id"] for event in protected_past}
     protected_knowledge, optional_knowledge = [], []
     for subject in knowledge:
@@ -4094,7 +4295,7 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
                 continue
             required_relations[relation], optional_relations[relation] = {}, {}
             for proposition, event in propositions.items():
-                target = required_relations if scoped and subject["subject_id"] in subjects or proposition in protected_fact_ids or any(source["artifact_id"] in required_ids for source in event["sources"]) else optional_relations
+                target = required_relations if (relation == "explicitly_does_not_know" and subject["subject_id"] in subjects) or proposition in protected_fact_ids or any(source["artifact_id"] in required_ids for source in event["sources"]) else optional_relations
                 target[relation][proposition] = event
         if any(required_relations.values()):
             protected_knowledge.append({"subject_id": subject["subject_id"], **required_relations})
@@ -4157,12 +4358,18 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
     ceiling = packet_input_limit(run_dir) - prompt_overhead_tokens
     receipt["prepared_input_ceiling"] = packet_input_limit(run_dir)
     receipt["context_ceiling"] = ceiling
+    receipt["mandatory_inclusion_reasons"] = {"obligations": sorted(required_obligations),
+        "evidence": [{"source_id": source["source_id"], "record_pointer": source["record_pointer"]} for source in required_sources],
+        "continuity_fact_ids": sorted(protected_fact_ids)}
     # Check required inputs before doing optional searches or loading any optional original prose.
     try:
         pack_packet_context(required, [], ceiling, receipt)
         # Optional discovery must leave room for a returned payload in correction feedback.
-        optional_ceiling = max(receipt["estimated_context_tokens"], ceiling - BASE_OUTPUT_TOKENS)
+        normal = manifest["budgets"].get("normal_prepared_context_tokens", manifest["budgets"]["max_prepared_context_tokens"])
+        optional_ceiling = max(receipt["estimated_context_tokens"], min(ceiling, normal - prompt_overhead_tokens) - BASE_OUTPUT_TOKENS)
         receipt["correction_headroom_tokens"] = ceiling - optional_ceiling
+        receipt["normal_input_target"] = normal
+        receipt["using_loaded_headroom"] = receipt["estimated_context_tokens"] + prompt_overhead_tokens > normal
         recent = packet_records(run_dir, recent=2, verify=True)
         covered_commits = {record["commit_id"] for record in dependencies}
         covered_ids = {identifier for record in dependencies for identifier in generated_ids(record)} | {source["source_id"] for source in required_sources}
@@ -4331,6 +4538,15 @@ def build_prospective_plan(run_dir: Path, architecture: dict, recomputed_after_c
     committed = completed_packet_slots(architecture, all_committed_records(run_dir))
     uncommitted_plans = [plan for plan in architecture["packet_plans"] if plan["packet_slot_id"] not in committed]
     literary_pending = any(plan["packet_kind"] == "literary" for plan in uncommitted_plans)
+    if execution_policy(run_dir).get("completion_contract_version") == 1:
+        live = architecture | {"attractors": [item for item in architecture["attractors"] if feasibility_by_id[item["attractor_id"]] != "foreclosed"]}
+        required = ending_prerequisite_ids(live, obligations)
+        invalid = sorted(identifier for identifier in required if obligations[identifier]["data"]["status"] not in {"active", "satisfied"})
+        if invalid:
+            raise CathedralsError("Forward feasibility", "Ending prerequisites were resolved without satisfaction: " + ", ".join(invalid), "continuity_impossibility")
+        pending = sorted(identifier for identifier in required if obligations[identifier]["data"]["status"] != "satisfied")
+        if pending and not literary_pending:
+            raise PausedError("Ending prerequisites", "No remaining literary plan can establish: " + ", ".join(pending))
     obligation_assignments = []
     for obligation_id, event in obligations.items():
         obligation = event["data"]
@@ -4449,8 +4665,16 @@ def select_next_packet(run_dir: Path, architecture: dict) -> dict | None:
         if item["packet_slot_id"] == packet_slot_id
     ]
     obligations = _read_state_map(run_dir, "obligations.json")
+    if execution_policy(run_dir).get("completion_contract_version") == 1:
+        assignments = [identifier for identifier in assignments if obligations[identifier]["data"]["hardness"] == "hard"]
+    eligible_assignments = list(assignments)
+    if execution_policy(run_dir).get("completion_contract_version") == 1:
+        completed = completed_packet_slots(architecture, all_committed_records(run_dir))
+        remaining = [plan for plan in architecture["packet_plans"] if plan["packet_kind"] == "literary" and plan["packet_slot_id"] not in completed]
+        # A long-range payoff is pressure before its deadline, not a demand to close it in the opening.
+        assignments = [identifier for identifier in assignments if obligations[identifier]["data"]["range"] != "long_range" or len(remaining) <= 1]
     may_satisfy = [
-        item for item in assignments
+        item for item in eligible_assignments
         if all(obligations[required]["data"]["status"] == "satisfied" for required in obligations[item]["data"]["requires"])
     ]
     return plans[packet_slot_id] | {
@@ -6077,6 +6301,7 @@ def validate_packet_payload_for_run(payload: dict, run_dir: Path, plan: dict) ->
                 problems.append(f"unknown committed content destination {destination['id']}")
     if problems:
         raise SchemaError("Packet payload contains unresolved join keys: " + "; ".join(problems))
+    validate_navigation_payload(run_dir, architecture, plan, payload)
 
 
 def semantic_source_ref(slot: str, content_ids: dict) -> dict:
@@ -6204,7 +6429,7 @@ def semantic_prompt(artistic: dict, context: str, instruction: str, accepted=Non
     return prompt + "\nINSTRUCTION\n" + SEMANTIC_INSTRUCTION + " " + instruction + (
         " Retrieved PLANNED INTENTION describes future work, not events established by this payload. "
         "CONSTRAINT HISTORY may be superseded or retracted. Derive new assertions only from the immutable artistic payload. "
-        "Each $context_ref expands to its complete object in SHARED SOURCE RECORDS or SHARED SOURCE METADATA. "
+        "Each $context_ref expands losslessly through SHARED SOURCE RECORDS, SHARED SOURCE METADATA, or SHARED CONTEXT VALUES. "
         "In accepted metadata, $fact_ref repeats an earlier exact fact. Every array position keeps its original fact_NN alias; "
         "a repeated alias adds no new information. Never emit $fact_ref in your response. "
         "Genesis foundation, cast, and constraints are complete original records; apply their anchors, profiles, and extensions together.")
@@ -6446,6 +6671,54 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
     return state["payload"], assembled
 
 
+def audit_ending_resolutions(run_dir, step_id, artistic, normalized, transport):
+    if execution_policy(run_dir).get("completion_contract_version") != 1:
+        return normalized
+    if not isinstance(normalized, dict) or not isinstance(normalized.get("obligation_updates"), list):
+        return normalized  # The normal schema/category recovery must diagnose malformed metadata.
+    obligations = _read_state_map(run_dir, "obligations.json")
+    strict = ending_prerequisite_ids(committed_record(run_dir, "architecture") or {}, obligations)
+    sources = {item["technical_slot_id"]: [item["prose_mdx"]] + [artifact["body_mdx"] for artifact in item["artifacts"]]
+        for item in artistic["scenes"] + artistic["endings"]}
+    choices = {item["technical_slot_id"]: item["choices"] for item in artistic["scenes"] + artistic["endings"]}
+    for slot, items in choices.items():
+        sources[slot].extend(item["label"] for item in items)
+    accepted = []
+    for update in normalized["obligation_updates"]:
+        if not isinstance(update, dict) or not isinstance(update.get("obligation_id"), str) or not isinstance(update.get("status"), str) or update["obligation_id"] not in strict:
+            accepted.append(update)
+            continue
+        schema = {"type": "object", "additionalProperties": False, "required": ["outcome", "reason", "evidence_quotes"],
+            "properties": {"outcome": {"enum": ["satisfied", "ongoing", "unsupported"]}, "reason": {"type": "string", "minLength": 1},
+                "evidence_quotes": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+                    "required": ["technical_slot_id", "quote"], "properties": {"technical_slot_id": {"enum": sorted(sources)},
+                        "quote": {"type": "string", "minLength": 1}}}}}}
+        def validate(result):
+            if result["outcome"] == "satisfied" and not result["evidence_quotes"]:
+                raise SchemaError("A hard prerequisite resolution needs exact authored evidence")
+            for evidence in result["evidence_quotes"]:
+                if not any(evidence["quote"] in text for text in sources[evidence["technical_slot_id"]]):
+                    raise SchemaError("Resolution audit must quote the immutable authored source exactly")
+        prompt = ("Audit ONLY whether this ending prerequisite is actually satisfied by immutable authored content. "
+            "A newly posed question, an ongoing demand for judgment, partial progress or future resolution is ongoing, not satisfaction. "
+            "Choice labels and effects are authored affordances, not evidence that a reader has already selected them. "
+            "They may satisfy an obligation to provide a decision, but cannot establish an unperformed fictional event. "
+            "Thematic ambiguity may be a completed payoff only if the obligation's required transformation actually occurs here. "
+            "Do not change prose or invent a resolution. Return satisfied, ongoing or unsupported, with reason and exact quotes.\nOBLIGATION\n" +
+            canonical_json(obligations[update["obligation_id"]]["data"]).decode() + "\nPROPOSED UPDATE\n" + canonical_json(update).decode() +
+            "\nIMMUTABLE AUTHORED CONTENT\n" + canonical_json(sources).decode() + "\nAUTHORED CHOICE AFFORDANCES\n" + canonical_json(choices).decode())
+        query = f"{step_id}_resolution_{sha256_bytes(prompt.encode())[:12]}"
+        result, response = request_architecture_analysis(run_dir, query, prompt, schema, transport, validator=validate,
+            phase="validation", response_name="endingResolutionAudit", pause_stage="Ending resolution audit", max_tokens=4096,
+            system_prompt="Audit source support for a proposed metadata update. Return JSON only.", planning_mode=True, context_purpose="semantic normalization")
+        preserve_planning_result(run_dir, step_id, query, result, response, kind="ending_resolution", phase="validation")
+        if result["outcome"] == "satisfied":
+            if update["status"] != "satisfied":
+                raise SchemaError("A proposed ambiguous prerequisite update cannot be coerced into satisfaction", paths=["$.obligation_updates"])
+            accepted.append(update)
+    return normalized | {"obligation_updates": accepted}
+
+
 def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload: dict, context: str, transport=http_json, *, plan=None) -> dict:
     target = run_dir / ".staging" / f"{step_id}.semantic.json"
     pending_path = run_dir / ".staging" / f"{step_id}.semantic-pending.json"
@@ -6531,6 +6804,7 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
             write_json(pending_path, {"attempt": attempt, "payload": normalized, "response": response})
             normalized = repair_named_references(run_dir, step_id, normalized, "semanticDeltaPayload", schema, transport,
                 plan=reference_plan, source_context=artistic_payload)
+            normalized = audit_ending_resolutions(run_dir, step_id, artistic_payload, normalized, transport)
             validate_json_schema(normalized, schema)
             validate_normalized(normalized)
             semantic_event_capacity(run_dir, normalized)
@@ -6968,6 +7242,8 @@ def validate_completed_architecture(run_dir: Path) -> None:
     if not architecture:
         raise SchemaError("Architecture plan batches are incomplete")
     validate_architecture(architecture, read_json(run_dir / "run-manifest.json"), set(_source_index(run_dir)))
+    if execution_policy(run_dir).get("completion_contract_version") == 1:
+        navigation_contract_route(architecture)
 
 
 def validate_ending_prerequisites(
@@ -7069,6 +7345,9 @@ def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
         if update["obligation_id"] not in obligations:
             raise SchemaError("Obligation update references an unknown obligation")
         original = obligation_state[update["obligation_id"]]["data"]
+        if execution_policy(run_dir).get("completion_contract_version") == 1 and update["obligation_id"] in ending_prerequisite_ids(architecture, obligation_state) and update["status"] == "intentionally_unresolved":
+            raise SchemaError("An ending prerequisite must remain active until supported satisfaction; ambiguous ongoing work is not a terminal resolution",
+                paths=["$.constraint_delta.obligation_updates"])
         if update["status"] == "foreclosed" and original["universality"] == "universal" and original["hardness"] == "hard":
             raise SchemaError("A universal hard obligation cannot be foreclosed")
         if update["status"] in {"foreclosed", "impossible"}:
@@ -7090,6 +7369,15 @@ def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
         raise EpistemicDependencyError(conflicts)
     prospective = _read_state_map(run_dir, "prospective-plan.json")
     feasibility = {item["attractor_id"]: item["status"] for item in prospective.get("feasibility", [])}
+    if execution_policy(run_dir).get("completion_contract_version") == 1:
+        effective = {identifier: event["data"]["status"] for identifier, event in obligation_state.items()}
+        effective.update({update["obligation_id"]: update["status"] for update in changes["obligation_updates"]})
+        active_architecture = architecture | {"attractors": [item for item in architecture["attractors"] if feasibility.get(item["attractor_id"]) != "foreclosed"]}
+        pending = sorted(identifier for identifier in ending_prerequisite_ids(active_architecture, obligation_state) if effective.get(identifier) != "satisfied")
+        filled = {scene["technical_slot_id"] for packet in committed_records(run_dir, "creative_packet") + [record] for scene in packet["scenes"]}
+        remaining = {slot for item in architecture["packet_plans"] for slot in item["scene_slot_ids"]} - filled
+        if pending and not remaining:
+            raise SchemaError("No remaining literary slot can establish these ending prerequisites: " + ", ".join(pending), paths=["$.constraint_delta.obligation_updates"])
     satisfaction_evidence = {
         key: {source["artifact_id"] for source in value["resolution_event"]["sources"]}
         for key, value in obligation_state.items()
@@ -7141,6 +7429,11 @@ def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
     ):
         raise SchemaError("Packet changed its frozen threshold geomancy")
     validate_packet_against_plan(record, plan)
+    if execution_policy(run_dir).get("completion_contract_version") == 1:
+        candidate = {field: [item | {"choices": [edge for edge in record["decision_edges"]
+            if edge["from_content_id"] == item.get("scene_id", item.get("ending_id"))]} for item in record[field]]
+            for field in ("scenes", "endings")}
+        validate_navigation_payload(run_dir, architecture, plan, candidate)
 
 
 def compact_schema(run_dir: Path, record_type: str) -> str:
@@ -7158,6 +7451,12 @@ def packet_dependency_schema(allowed):
 
 def architecture_plan_batch_schema(run_dir: Path, specs: list[dict], *, prior_packet_ids=()) -> dict:
     schema = copy.deepcopy(definition_schema("architecturePlanBatchPayload", load_protocol(run_dir)))
+    navigation = execution_policy(run_dir).get("completion_contract_version") == 1
+    if navigation:
+        schema["$defs"]["navigationDestination"] = {"enum": [slot for item in planned_packet_specs(planning_core(run_dir))
+            for slot in item["scene_slot_ids"] + item["ending_slot_ids"]]}
+    else:
+        schema["$defs"]["packetPlanAnnotation"]["properties"].pop("required_navigation", None)
     packet_ids = [item["packet_slot_id"] for item in specs]
     schema["properties"]["packet_plans"] |= {
         "minItems": len(packet_ids), "maxItems": len(packet_ids)
@@ -7168,6 +7467,11 @@ def architecture_plan_batch_schema(run_dir: Path, specs: list[dict], *, prior_pa
     variants = []
     for index, spec in enumerate(specs):
         node = copy.deepcopy(schema["$defs"]["packetPlanAnnotation"])
+        if navigation:
+            node["required"].append("required_navigation")
+            node["properties"]["required_navigation"] = {"type": "object", "additionalProperties": False,
+                "required": spec["scene_slot_ids"], "properties": {slot: {"type": "array", "minItems": 1, "maxItems": 16,
+                    "uniqueItems": True, "items": {"$ref": "#/$defs/navigationDestination"}} for slot in spec["scene_slot_ids"]}}
         node["properties"]["packet_slot_id"] = {"const": spec["packet_slot_id"]}
         node["properties"]["depends_on_packet_slot_ids"] = packet_dependency_schema(list(prior_packet_ids) + packet_ids[:index])
         variants.append(node)
@@ -7179,6 +7483,10 @@ def architecture_plan_annotation_schema(
     run_dir: Path, spec: dict, allowed_dependencies: list[str]
 ) -> dict:
     schema = architecture_plan_batch_schema(run_dir, [spec], prior_packet_ids=allowed_dependencies)
+    if execution_policy(run_dir).get("completion_contract_version") == 1:
+        navigation = schema["properties"]["packet_plans"]["items"]["anyOf"][0]["properties"]["required_navigation"]
+        schema["$defs"]["packetPlanAnnotation"]["required"].append("required_navigation")
+        schema["$defs"]["packetPlanAnnotation"]["properties"]["required_navigation"] = navigation
     properties = schema["$defs"]["packetPlanAnnotation"]["properties"]
     properties["depends_on_packet_slot_ids"] = packet_dependency_schema(allowed_dependencies)
     core = planning_core(run_dir)
@@ -7192,6 +7500,20 @@ def architecture_plan_annotation_schema(
     }
     schema["properties"]["packet_plans"]["items"]["anyOf"] = [copy.deepcopy(schema["$defs"]["packetPlanAnnotation"])]
     return schema
+
+
+def ending_prerequisite_ids(architecture, obligations):
+    pending = [identifier for attractor in architecture.get("attractors", []) if attractor["kind"] == "ending"
+        for identifier in attractor["prerequisite_obligation_ids"]]
+    required = set()
+    while pending:
+        identifier = pending.pop()
+        if identifier in required:
+            continue
+        required.add(identifier)
+        if identifier in obligations:
+            pending.extend(obligations[identifier]["data"]["requires"])
+    return required
 
 
 def semantic_delta_schema(run_dir: Path, source_slots, *, plan=None) -> dict:
@@ -7212,6 +7534,18 @@ def semantic_delta_schema(run_dir: Path, source_slots, *, plan=None) -> dict:
             "enum": [status for status in protocol["$defs"]["obligationUpdate"]["properties"]["status"]["enum"]
                      if status not in {"foreclosed", "impossible"}]
         }
+        if obligations and execution_policy(run_dir).get("completion_contract_version") == 1:
+            strict = ending_prerequisite_ids(committed_record(run_dir, "architecture") or {}, _read_state_map(run_dir, "obligations.json")) & set(obligations)
+            if strict:
+                base = schema["$defs"]["semanticObligationUpdate"]
+                variants = []
+                for identifiers, statuses in ((strict, ["satisfied"]), (set(obligations) - strict, ["satisfied", "intentionally_unresolved"])):
+                    if identifiers:
+                        variant = copy.deepcopy(base)
+                        variant["properties"]["obligation_id"] = {"enum": sorted(identifiers)}
+                        variant["properties"]["status"] = {"enum": statuses}
+                        variants.append(variant)
+                schema["$defs"]["semanticObligationUpdate"] = {"type": "object", "anyOf": variants}
     return schema
 
 
@@ -7440,6 +7774,10 @@ def packet_prompt(run_dir: Path, architecture: dict, plan: dict, *, step_id=None
         }
     envelope = render_prompt(run_dir, name, replacements)
     overhead = estimated_prompt_tokens(RECORD_SYSTEM_PROMPT + envelope)
+    if execution_policy(run_dir).get("completion_contract_version") == 1:
+        overhead = provider_input_tokens({"messages": [{"role": "system", "content": RECORD_SYSTEM_PROMPT}, {"role": "user", "content": envelope}],
+            "response_format": {"type": "json_schema", "json_schema": {"name": "creativePacketPayload", "strict": True,
+                "schema": packet_payload_schema(run_dir, plan)}}}) + 128
     context = relevant_packet_context(run_dir, architecture, plan, receipt=receipt, step_id=actual_step, prompt_overhead_tokens=overhead)
     replacements["PACKET_CONTEXT" if plan["packet_kind"] == "literary" else "ENDING_PACKET_CONTEXT"] = context
     prompt = render_prompt(run_dir, name, replacements)
@@ -7474,7 +7812,7 @@ def packet_step_id(plan: dict, expanded: bool = False) -> str:
     return f"packet_{plan['packet_slot_id']}_{sha256_bytes(identity)[:12]}{'_expanded' if expanded else ''}"
 
 
-def expanded_output_limit(run_dir: Path, prompt: str, base_step_id: str) -> int:
+def expanded_output_limit(run_dir: Path, prompt: str, base_step_id: str, schema=None) -> int:
     manifest = read_json(run_dir / "run-manifest.json")
     state = load_state(run_dir)
     observed = max(
@@ -7485,6 +7823,10 @@ def expanded_output_limit(run_dir: Path, prompt: str, base_step_id: str) -> int:
         default=0,
     )
     prompt_tokens = max(observed, math.ceil(len(prompt.encode("utf-8")) / 3))
+    if execution_policy(run_dir).get("completion_contract_version") == 1:
+        prompt_tokens = max(prompt_tokens, provider_input_tokens({"messages": [
+            {"role": "system", "content": RECORD_SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
+            "response_format": {"type": "json_schema", "json_schema": {"schema": schema or {}}}}) + 128)
     available = (
         min(
             manifest["budgets"]["model_context_window_tokens"],
@@ -7506,7 +7848,7 @@ def request_bounded_record(run_dir: Path, **arguments) -> dict:
     expanded_id = f"{step_id}_expanded"
     if step_was_truncated(run_dir, expanded_id):
         raise TruncationError(f"Bounded step {step_id} was truncated after its context-safe expanded retry")
-    maximum = expanded_output_limit(run_dir, arguments["prompt"], step_id)
+    maximum = expanded_output_limit(run_dir, arguments["prompt"], step_id, arguments.get("response_schema"))
     if maximum <= BASE_OUTPUT_TOKENS:
         raise TruncationError(f"Bounded step {step_id} was truncated and the model context has no safe expansion headroom")
     return request_record(run_dir, **(arguments | {"step_id": expanded_id, "max_tokens": maximum}))
@@ -7549,6 +7891,11 @@ def packet_payload_schema(run_dir: Path, plan: dict) -> dict:
         if not architecture:
             raise IntegrityError("Creative packet schema requires committed Architecture")
         properties["arc_id"] = {"enum": [item["arc_id"] for item in architecture["arcs"]]}
+        if execution_policy(run_dir).get("completion_contract_version") == 1:
+            targets = plan.get("required_navigation", {}).get(slots[0], [])
+            if not targets:
+                raise IntegrityError(f"Frozen navigation targets are absent for {slots[0]}")
+            properties["choices"]["minItems"] = len(targets)
     properties["artifacts"] |= {
         "minItems": plan["artifact_count"], "maxItems": plan["artifact_count"]
     }
@@ -7572,7 +7919,7 @@ def request_packet_slice(run_dir: Path, architecture: dict, plan: dict, transpor
         if step_was_truncated(run_dir, expanded_id):
             raise TruncationError("A single-content packet was truncated after its context-safe expanded retry")
         prompt, context = packet_prompt(run_dir, architecture, plan, step_id=expanded_id)
-        maximum = expanded_output_limit(run_dir, prompt, step_id)
+        maximum = expanded_output_limit(run_dir, prompt, step_id, packet_payload_schema(run_dir, plan))
         if maximum <= BASE_OUTPUT_TOKENS:
             raise TruncationError("A single-content packet was truncated and the model context has no safe expansion headroom")
         request_record(
@@ -8089,6 +8436,9 @@ def planning_retrieval_task(step_id, state, paths, *, context=None):
 def planning_output_limit(run_dir: Path, prompt: str, schema: dict, requested: int, stage: str, *, purpose="planning") -> int:
     budgets = read_json(run_dir / "run-manifest.json")["budgets"]
     prompt_tokens = math.ceil(len(prompt.encode()) / 3)
+    if execution_policy(run_dir).get("completion_contract_version") == 1:
+        prompt_tokens = provider_input_tokens({"messages": [{"role": "user", "content": prompt}],
+            "response_format": {"type": "json_schema", "json_schema": {"schema": schema}}}) + 256
     reserve = budgets.get("context_safety_reserve_tokens", 4096)
     window = min(budgets.get("model_context_window_tokens", float("inf")),
                  load_state(run_dir).get("model_context_window_tokens", float("inf")))
@@ -8994,6 +9344,52 @@ def place_planning_setups(run_dir: Path, core: dict, records: list[dict], transp
     save_planning_draft(run_dir, "architecture_core", state)
 
 
+def prepare_navigation_contract(run_dir, core, records, transport):
+    if execution_policy(run_dir).get("completion_contract_version") != 1:
+        return
+    architecture = architecture_from_parts(core, records)
+    try:
+        navigation_contract_route(architecture)
+        return
+    except SchemaError as error:
+        reason = error.reason
+    if committed_records(run_dir, "architecture_plan_batch"):
+        raise PausedError("Navigation planning", "Committed navigation cannot be changed: " + reason)
+    plans = architecture["packet_plans"]
+    scenes = sorted(slot for plan in plans for slot in plan["scene_slot_ids"])
+    slots = sorted(slot for plan in plans for slot in plan["scene_slot_ids"] + plan["ending_slot_ids"])
+    allocations = {plan["packet_slot_id"]: plan["scene_slot_ids"] for plan in plans}
+    schema = {"type": "object", "additionalProperties": False, "required": ["routes"], "properties": {
+        "routes": {"type": "object", "additionalProperties": False, "required": scenes,
+            "properties": {slot: {"$ref": "#/$defs/targets"} for slot in scenes}}}, "$defs": {
+        "targets": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": True, "items": {"enum": slots}}}}
+    def apply_routes(candidate, routes):
+        for plan in candidate["packet_plans"]:
+            plan["required_navigation"] = {slot: routes[slot] for slot in allocations[plan["packet_slot_id"]]}
+    def validate(result):
+        candidate = copy.deepcopy(architecture)
+        apply_routes(candidate, result["routes"])
+        navigation_contract_route(candidate)
+    prompt = ("Author ONLY navigation targets for this uncommitted work. Preserve all other planning and source material. "
+        "Every scene needs playable exits. All planned scenes and endings must be reachable from the opening, and every scene must have a route to an ending. "
+        "Reader loops and reconvergence are allowed. Use allocated technical slots only. The later scene author will write the actual choice labels and transitions. "
+        "Do not write prose, generic fallback links, or metadata about committed events.\nPROBLEM\n" + reason +
+        "\nPLAN INTERFACES\n" + canonical_json([{key: plan.get(key) for key in ("packet_slot_id", "scene_slot_ids", "ending_slot_ids",
+            "branch_path_relation", "attractor_ids", "required_navigation")} for plan in plans]).decode())
+    query = "architecture_navigation_" + sha256_bytes(prompt.encode())[:12]
+    result, response = request_architecture_analysis(run_dir, query, prompt, schema, transport, validator=validate,
+        response_name="navigationContract", pause_stage="Navigation planning", system_prompt="Plan only the requested uncommitted navigation graph. Return JSON only.",
+        planning_mode=True)
+    preserve_planning_result(run_dir, "architecture_core", query, result, response, kind="navigation_contract")
+    for record in records:
+        apply_routes(record, result["routes"])
+        step = f"architecture_plan_batch_{record['batch_sequence']:04d}"
+        state = read_json(run_dir / ".staging" / f"{step}.planning.json")
+        apply_routes(state["payload"], result["routes"])
+        state["record"] = record
+        save_planning_draft(run_dir, step, state)
+
+
 def execute_planning_phases(run_dir: Path, transport=http_json) -> list[dict]:
     core = prepare_core_draft(run_dir, transport)
     batches = plan_batches(core)
@@ -9003,6 +9399,7 @@ def execute_planning_phases(run_dir: Path, transport=http_json) -> list[dict]:
                if not next((item for item in committed_records(run_dir, "architecture_plan_batch") if item["batch_sequence"] == index), None)
                else next(item for item in committed_records(run_dir, "architecture_plan_batch") if item["batch_sequence"] == index)
                for index in range(1, len(batches) + 1)]
+    prepare_navigation_contract(run_dir, core, records, transport)
     protocol = load_protocol(run_dir)
     for record in [core] + records:
         validate_json_schema(record, protocol["$defs"][RECORD_DEFS[record["record_type"]]], protocol)
@@ -9313,6 +9710,12 @@ def validate_complete_work(run_dir: Path) -> dict:
     by_slot = {packet["packet_slot_id"]: packet for packet in packets}
     reasons = []
     warnings = []
+    if execution_policy(run_dir).get("completion_contract_version") == 1:
+        try:
+            navigation_contract_route(architecture)
+            validate_navigation_payload(run_dir, architecture, {}, {"scenes": [], "endings": []})
+        except SchemaError as error:
+            reasons.append(error.reason)
 
     def warn(code: str, message: str) -> None:
         warnings.append({"stage": "mechanical_validation", "code": code, "message": message})
@@ -9503,15 +9906,15 @@ def validate_complete_work(run_dir: Path) -> dict:
     project = run_dir / "projection/web"
     for scene in scenes:
         source = project / "public/source" / f"{scene['scene_id']}.md"
-        if not source.exists() or source.read_text(encoding="utf-8") != scene["prose_mdx"]:
+        if not source.exists() or source.read_bytes() != scene["prose_mdx"].encode():
             reasons.append(f"Projection changed immutable scene source {scene['scene_id']}.")
     for artifact in artifacts:
         source = project / "public/source" / f"{artifact['artifact_id']}.md"
-        if not source.exists() or source.read_text(encoding="utf-8") != artifact["body_mdx"]:
+        if not source.exists() or source.read_bytes() != artifact["body_mdx"].encode():
             reasons.append(f"Projection changed immutable artifact source {artifact['artifact_id']}.")
     for ending in endings:
         source = project / "public/source" / f"{ending['ending_id']}.md"
-        if not source.exists() or source.read_text(encoding="utf-8") != ending["prose_mdx"]:
+        if not source.exists() or source.read_bytes() != ending["prose_mdx"].encode():
             reasons.append(f"Projection changed immutable ending source {ending['ending_id']}.")
     if any(state[name] != 0 for name in ("human_intervention_count", "committed_rewrite_count", "committed_regeneration_count", "backtrack_count")):
         reasons.append("An irreversibility counter is nonzero.")
@@ -9725,6 +10128,8 @@ def project_web(run_dir: Path) -> tuple[Path, dict]:
     architecture = committed_record(run_dir, "architecture")
     packets = [record for record in all_committed_records(run_dir) if record.get("record_type") == "creative_packet"]
     scenes = sorted([item for packet in packets for item in packet["scenes"]], key=lambda item: item["technical_slot_id"])
+    if not scenes:
+        raise CathedralsError("Web projection", "No committed scene is available for the site's opening")
     artifacts = [item for packet in packets for item in packet["artifacts"]]
     endings = [item for packet in packets for item in packet["endings"]]
     edges = [item for packet in packets for item in packet["decision_edges"]]
@@ -9854,6 +10259,8 @@ def build_static_baseline(project: Path) -> None:
     destination.mkdir(parents=True)
     for name in ("work.json", "style.css", "state.js", "theme.js"):
         shutil.copy2(project / "public" / name, destination / name)
+    if (project / "public/source").exists():
+        shutil.copytree(project / "public/source", destination / "source")
 
     def page(title: str, body: str, *, current=None, effects=None) -> str:
         attributes = ""
@@ -9941,14 +10348,80 @@ def ensure_node(output_fn=print) -> tuple[Path, Path]:
     return node, npm
 
 
+class RenderedProse(HTMLParser):
+    def __init__(self, css_class):
+        super().__init__(convert_charrefs=True)
+        self.css_class, self.depth, self.text, self.links = css_class, 0, [], []
+
+    def handle_starttag(self, tag, attributes):
+        attributes = dict(attributes)
+        if tag == "a" and attributes.get("href"):
+            self.links.append(attributes["href"])
+        if tag in {"br", "hr", "img", "input", "meta", "link", "source", "wbr"}:
+            return
+        if self.depth:
+            self.depth += 1
+        elif self.css_class in (attributes.get("class") or "").split():
+            self.depth = 1
+
+    def handle_endtag(self, tag):
+        if self.depth and tag not in {"br", "hr", "img", "input", "meta", "link", "source", "wbr"}:
+            self.depth -= 1
+
+    def handle_data(self, data):
+        if self.depth:
+            self.text.append(data)
+
+
+def static_build_problems(project, work):
+    dist, reasons = project / "dist", []
+    for name in ("index.html", "work.json", "style.css", "state.js", "theme.js"):
+        if not (dist / name).is_file():
+            reasons.append(f"Missing static build output: {name}")
+    for name in ("style.css", "state.js", "theme.js"):
+        if (dist / name).is_file() and (dist / name).read_bytes() != (project / "public" / name).read_bytes():
+            reasons.append(f"Published reader asset changed: {name}")
+    if (dist / "work.json").exists() and (dist / "work.json").read_bytes() != (project / "public/work.json").read_bytes():
+        reasons.append("Published work.json changed the immutable projected work")
+    pages = [(dist / "index.html", None, None)]
+    for group, identifier, field, css in (("scenes", "scene_id", "prose_mdx", "prose"),
+            ("endings", "ending_id", "prose_mdx", "prose"), ("artifacts", "artifact_id", "body_mdx", "artifact-body")):
+        for item in work[group]:
+            path = dist / group / item[identifier] / "index.html"
+            pages.append((path, item[field], css))
+            source = dist / "source" / f"{item[identifier]}.md"
+            if not source.exists() or source.read_bytes() != item[field].encode():
+                reasons.append(f"Published source changed or disappeared: {item[identifier]}")
+    for path, original, css in pages:
+        if not path.exists():
+            reasons.append(f"Missing static build output: {path.relative_to(dist)}")
+            continue
+        parsed = RenderedProse(css)
+        parsed.feed(path.read_text(encoding="utf-8"))
+        if original is not None:
+            expected = RenderedProse(css)
+            expected.feed(f'<div class="{css}">{baseline_markdown(original)}</div>')
+            if not parsed.text or re.findall(r"\w+", " ".join(parsed.text)) != re.findall(r"\w+", " ".join(expected.text)):
+                reasons.append(f"Rendered prose is missing or changed: {path.relative_to(dist)}")
+        for link in parsed.links:
+            target = urlsplit(link)
+            if target.scheme or target.netloc or not target.path.startswith("/"):
+                continue
+            destination = dist / unquote(target.path).lstrip("/")
+            if not destination.resolve().is_relative_to(dist.resolve()):
+                reasons.append(f"Published link escapes the site: {link}")
+                continue
+            if destination.is_dir():
+                destination = destination / "index.html"
+            if not destination.is_file():
+                reasons.append(f"Published link has no target: {link}")
+    return reasons
+
+
 def build_web(run_dir: Path, project: Path, output_fn=print) -> dict:
     build_static_baseline(project)
     work = read_json(project / "public/work.json")
-    required = [project / "dist/index.html", project / "dist/work.json"]
-    required += [project / "dist/scenes" / item["scene_id"] / "index.html" for item in work["scenes"]]
-    required += [project / "dist/endings" / item["ending_id"] / "index.html" for item in work["endings"]]
-    required += [project / "dist/artifacts" / item["artifact_id"] / "index.html" for item in work["artifacts"]]
-    reasons = [f"Missing static build output: {path.relative_to(project / 'dist')}" for path in required if not path.exists()]
+    reasons = static_build_problems(project, work)
     verdict = {"result": "FAIL" if reasons else "PASS", "reasons": reasons or ["The dependency-free static baseline emitted a complete reader and immutable work data."]}
     write_json(run_dir / "validation/build.json", verdict)
     if reasons:
@@ -9968,11 +10441,18 @@ def build_web(run_dir: Path, project: Path, output_fn=print) -> dict:
             else:
                 build = run_command([npm, "run", "build"], cwd=project, env=environment)
                 write_atomic(run_dir / "logs/astro-build.log", (build.stdout + build.stderr).encode())
-                enhancement = {"result": "PASS", "reasons": ["Locked optional Astro enhancement built successfully."]} if not build.returncode else {"result": "WARNING", "reasons": ["Optional Astro enhancement failed; baseline retained."]}
-                if build.returncode:
+                problems = static_build_problems(project, work) if not build.returncode else ["Astro build failed"]
+                enhancement = {"result": "PASS", "reasons": ["Locked optional Astro enhancement built and validated successfully."]} if not problems else {"result": "WARNING", "reasons": problems}
+                if problems:
                     build_static_baseline(project)
-        except CathedralsError as error:
-            enhancement = {"result": "WARNING", "reasons": [f"Optional npm enhancement unavailable: {error.reason}"]}
+        except Exception as error:
+            enhancement = {"result": "WARNING", "reasons": [f"Optional npm enhancement unavailable: {type(error).__name__}: {error}"]}
+            build_static_baseline(project)
+    reasons = static_build_problems(project, work)
+    verdict = {"result": "FAIL" if reasons else "PASS", "reasons": reasons or ["Final static pages, prose, links, assets, and immutable sources are complete."]}
+    write_json(run_dir / "validation/build.json", verdict)
+    if reasons:
+        raise CathedralsError("Static build validation", reasons[0], "build_failure")
     write_json(run_dir / "validation/npm-enhancement.json", enhancement)
     append_deterministic_step(run_dir, "static_baseline_build", "build_validation", sha256_bytes(canonical_json(verdict)))
     return verdict
@@ -10312,7 +10792,7 @@ def probe_execution_policy(base_url, model, transport, output_fn=print):
     validate_json_schema(parse_structured_content(content), schema)
     output_fn(f"Retrieval mode: {mode} (synthetic structured metadata check passed).")
     return {"bounded_planning": True, "scoped_sources": True, "retrieval_mode": mode,
-        "max_tool_rounds": 2, "max_tool_calls": 8}, artifacts
+        "max_tool_rounds": 2, "max_tool_calls": 8, "completion_contract_version": 1}, artifacts
 
 
 def archive_preflight_probes(run_dir, artifacts):

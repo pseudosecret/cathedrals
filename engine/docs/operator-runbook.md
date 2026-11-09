@@ -97,9 +97,12 @@ entity names, and guidance; there is no search CLI or extra model request. Pytho
 SQLite build must include FTS5. A missing FTS5 module pauses database initialization
 with the SQLite error rather than silently disabling retrieval.
 
-Required predecessor packets, assigned obligations, prerequisite chains, and their
-proof cannot be omitted for search limits. If their complete compact context is too
-large, the run pauses before a writing request, reporting required component sizes.
+Required source evidence, binding assignments, prerequisite chains, and relevant
+continuity cannot be omitted for search limits. Scoped predecessor contracts export
+IDs, provenance, state effects and link interfaces instead of their entire metadata
+delta. A predecessor dependency does not make all its historical facts mandatory.
+If complete compact mandatory context is too large, the run pauses before a writing
+request, reporting component sizes, inclusion reasons and the largest units.
 Optional search uses the frozen retrieval/prepared-context budgets and returns whole
 units. Plans and historical constraints are labelled separately from committed events.
 
@@ -113,8 +116,8 @@ their own implementation. Details and measured limits are in
 [FTS5 retrieval](fts5-retrieval.md).
 
 Packet capacity checks use exact shared source records and phase-specific instruction
-profiles from frozen engine inputs. The whole Genesis foundation, cast, and constraints
-appear once; prerequisite references point to those objects. Narrative doctrine and
+profiles from frozen engine inputs. Required Genesis units and repeated metadata
+appear through lossless shared references. Narrative doctrine and
 mechanics remain required. Development milestones and unrelated workflow instructions
 are excluded from the packet profile. Normalization has its own extraction profile,
 preserving complete artistic/source content and relevant state.
@@ -221,9 +224,27 @@ Architecture drafts, recovery batches, and isolated planning values use this sam
 ceiling. Each request still allocates output within the smaller frozen/loaded model
 window, preserving existing output caps and headroom fitting. For example, an
 80,384-token window can fit a 49,255-token estimated prompt, 15,000 output tokens,
-and the 4,096-token safety reserve. Other phases keep their 49,152 prepared-input
-ceiling. Cumulative input headroom reflects the larger frozen planning allowance;
+and the 4,096-token safety reserve. Completion-contract v1 runs retain 49,152 as
+the normal input target and use verified loaded headroom for larger mandatory inputs.
+The complete provider envelope, response schema, output allowance and safety reserve
+must fit; correction and expanded-output requests are checked again. Older policies
+retain their original ceilings. Cumulative input headroom reflects frozen allowances;
 actual response usage remains charged exactly once.
+
+New CLI runs freeze `completion_contract_version: 1`. Architecture plans include
+authored `required_navigation` targets for every scene. Combined reachability and
+escape-to-ending checks run before Architecture commits; scene exits and the state
+conditions along a deterministic completion route are checked before literary commits.
+The engine does not add generic reading fallback links. Long-range hard payoffs are
+optional pressure until the final literary deadline, while soft pressures remain
+advisory. Ending prerequisites cannot be closed by `intentionally_unresolved`; a
+focused audit verifies exact source support for proposed satisfaction. Ongoing work
+produces no resolution update and retains the existing obligation.
+
+The final static build is checked for actual prose, routes, assets and exact source
+exports. Optional Astro output undergoes the same checks; failed or incomplete
+enhancements restore the dependency-free baseline. See
+[completion-contract implementation](completion-contract.md).
 
 Older manifests without the optional planning ceiling use their existing prepared
 limit. Existing run snapshots and frozen manifests are not upgraded; use the updated

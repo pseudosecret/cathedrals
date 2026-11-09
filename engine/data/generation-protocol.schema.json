@@ -203,6 +203,7 @@
           ],
           "properties": {
             "max_prepared_context_tokens": { "type": "integer", "minimum": 1 },
+            "normal_prepared_context_tokens": { "type": "integer", "minimum": 1 },
             "max_planning_context_tokens": { "type": "integer", "minimum": 1 },
             "max_creative_packet_output_tokens": { "type": "integer", "minimum": 1 },
             "max_expanded_output_tokens": { "type": "integer", "minimum": 1 },
@@ -251,7 +252,7 @@
             "playable_status": { "const": "READY_TO_PLAY" }
           }
         },
-        "execution_policy": {"type": "object", "additionalProperties": false, "required": ["bounded_planning", "scoped_sources", "retrieval_mode", "max_tool_rounds", "max_tool_calls"], "properties": {"bounded_planning": {"type": "boolean"}, "scoped_sources": {"type": "boolean"}, "retrieval_mode": {"enum": ["tools", "automatic"]}, "max_tool_rounds": {"const": 2}, "max_tool_calls": {"const": 8}}}
+        "execution_policy": {"type": "object", "additionalProperties": false, "required": ["bounded_planning", "scoped_sources", "retrieval_mode", "max_tool_rounds", "max_tool_calls"], "properties": {"bounded_planning": {"type": "boolean"}, "scoped_sources": {"type": "boolean"}, "retrieval_mode": {"enum": ["tools", "automatic"]}, "max_tool_rounds": {"const": 2}, "max_tool_calls": {"const": 8}, "completion_contract_version": {"const": 1}}}
       }
     },
     "workCanon": {
@@ -847,6 +848,10 @@
         "state_effects": { "type": "array", "items": { "$ref": "#/$defs/stateEffect" } }
       }
     },
+    "requiredNavigation": {
+      "type": "object",
+      "additionalProperties": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
+    },
     "packetPlan": {
       "type": "object",
       "additionalProperties": false,
@@ -876,7 +881,8 @@
         "branch_path_relation": { "$ref": "#/$defs/nonEmptyString" },
         "attractor_ids": { "$ref": "#/$defs/idList" },
         "relevance": { "$ref": "#/$defs/relevanceTags" },
-        "soft_guidance": { "$ref": "#/$defs/stringList" }
+        "soft_guidance": { "$ref": "#/$defs/stringList" },
+        "required_navigation": { "$ref": "#/$defs/requiredNavigation" }
       },
       "allOf": [
         {
@@ -1590,7 +1596,8 @@
         "branch_path_relation": { "$ref": "#/$defs/nonEmptyString" },
         "attractor_ids": { "$ref": "#/$defs/idList" },
         "relevance": { "$ref": "#/$defs/relevanceTags" },
-        "soft_guidance": { "$ref": "#/$defs/stringList" }
+        "soft_guidance": { "$ref": "#/$defs/stringList" },
+        "required_navigation": { "$ref": "#/$defs/requiredNavigation" }
       }
     },
     "architecturePlanBatchPayload": {

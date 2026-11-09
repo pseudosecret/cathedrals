@@ -87,6 +87,7 @@ class BoundedExecutionTests(unittest.TestCase):
             transport = mock.Mock(side_effect=[first, api_response(metadata)])
             policy, artifacts = RUNNER.probe_execution_policy("http://offline.invalid", "offline", transport, lambda _: None)
             self.assertEqual(policy["retrieval_mode"], mode)
+            self.assertEqual(policy["completion_contract_version"], 1)
             self.assertEqual(len(artifacts), 2)
             self.assertNotIn("tools", transport.call_args.args[2])
         RUNNER.archive_preflight_probes(self.run, artifacts)
