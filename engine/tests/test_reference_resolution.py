@@ -330,23 +330,29 @@ class ReferenceResolutionTests(unittest.TestCase):
                         "intended_change": "Synthetic development.", "entry_cases": [{"requirements": [] if seed else ["Synthetic committed premise."]}],
                         "guarantees": ["Synthetic terminal change."] if seed else [], "preserves": []}
                         for index in range(count)]
+                    if getattr(self, "scene_count", 20) == 8:
+                        if seed:
+                            for item in declarations:
+                                item["entry_cases"] = [{"requirements": ["The transfer receipt is displayed."]}]
+                        else:
+                            declarations[0]["guarantees"] = [requirement["description"]
+                                for target in context["successor_interfaces"] if target["kind"] == "ending"
+                                for case in target["entry_cases"] for requirement in case["requirements"]]
+                            declarations[0]["guarantees"] = list(dict.fromkeys(declarations[0]["guarantees"]))
                     if seed:
                         for item in declarations:
                             item.update(terminal_role="final", attractor_id=fields["nodes"]["items"]["properties"]["attractor_id"]["enum"][0],
                                 prerequisite_obligation_ids=[])
                     value = {"nodes": declarations} | ({"complete": offset + count == ending_count} if seed else {})
-                elif "connections" in fields:
+                elif "bindings" in fields:
                     context = json.loads(prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
-                    targets = context["successor_interfaces"]
-                    scenes = [target for target in targets if target["kind"] == "scene"]
-                    chosen = scenes[-1:] if scenes else targets
-                    value = {"connections": {target["node_id"]: {"entry_case_id": target["entry_cases"][0]["case_id"], "supports": {r["requirement_id"]: {"evidence_ids": [next(iter(context["genesis_sources"]))], "reason": "Synthetic premise support."} for r in target["entry_cases"][0]["requirements"]}}
-                        for target in chosen}}
+                    value = {"bindings": {identifier: {"evidence_ids": [next(iter(context["genesis_sources"]))],
+                        "reason": "Synthetic premise support."} for identifier in context["requirements"]}}
                 elif "opening" in fields:
                     context = json.loads(prompt.split("\n", 1)[1])
                     value = {"opening": None if context["remaining_scenes"] else {"supports": {r["requirement_id"]: {"evidence_ids": [next(iter(context["genesis_sources"]))], "reason": "Synthetic premise support."} for r in context["opening"]["entry_cases"][0]["requirements"]}}}
-                elif "supported" in fields:
-                    value = {"supported": True, "reason": "Synthetic plan review.", "contract_repairs": {}, "connection_repairs": {}}
+                elif "issues" in fields:
+                    value = {"issues": {}}
                 elif "tasks" in fields:
                     context = json.loads(prompt.split("LOCAL AUDIT CONTEXT\n\n", 1)[1])
                     value = {"tasks": {identifier: {"supported": True, "reason": "Synthetic evidence check.",
@@ -355,6 +361,7 @@ class ReferenceResolutionTests(unittest.TestCase):
                 else:
                     self.fail(f"Unexpected scaffold schema: {fields}")
             elif name == "creativePacketPayload":
+                self.assertIn("REACHABLE READER STATES ON ENTRY", prompt)
                 group = "scenes" if schema["properties"]["scenes"]["maxItems"] else "endings"
                 definition = "scenePayload" if group == "scenes" else "endingPayload"
                 properties = schema["$defs"][definition]["properties"]
@@ -374,7 +381,12 @@ class ReferenceResolutionTests(unittest.TestCase):
                 item["artifacts"] = [copy.deepcopy(template["artifacts"][0]) for _ in range(properties["artifacts"]["minItems"])]
                 item["formal_compositions"] = [copy.deepcopy(template["formal_compositions"][0]) for _ in range(properties["formal_compositions"]["minItems"])]
                 if group == "scenes":
-                    plan = next(plan for plan in RUNNER.committed_record(self.run, "architecture")["packet_plans"] if slot in plan["scene_slot_ids"])
+                    architecture = RUNNER.committed_record(self.run, "architecture")
+                    scaffold = architecture["causal_scaffold"]
+                    contract = next(node for node in scaffold["nodes"] if scaffold["slot_ids"][node["node_id"]] == slot)
+                    for guarantee in contract["guarantees"]:
+                        item["prose_mdx"] += "\n\n" + guarantee["description"]
+                    plan = next(plan for plan in architecture["packet_plans"] if slot in plan["scene_slot_ids"])
                     item["choices"] = [{"destination": {"kind": "technical_slot", "id": target},
                         "label": "Follow the synthetic evidence.", "kind": "progression", "availability": "playable",
                         "major_decision": False, "state_conditions": [], "state_effects": []}

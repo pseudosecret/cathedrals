@@ -1,4 +1,4 @@
-"""Operator-run v2 compiler regressions; no live model is required."""
+"""Scaffold compiler regressions; no live model is required."""
 import copy
 import json
 import tempfile
@@ -81,13 +81,13 @@ class ScaffoldCompilerTests(unittest.TestCase):
         declarations = [declaration(str(index)) for index in range(4)]
         declarations[1]["entry_cases"] = [{"requirements": [f"Synthetic case {case} condition {index}." for index in range(8)]} for case in range(5)]
         nodes = RUNNER.compile_scaffold_declarations(declarations, self.allocated)
-        schema = RUNNER.scaffold_connection_schema(nodes[0], nodes[1:], GENESIS, allow_amendment=True)
+        schema = RUNNER.scaffold_connection_schema(nodes[0], nodes[1:], GENESIS)
         self.assertEqual(json.dumps(schema).count('"commit_genesis"'), 1)
         RUNNER.validate_json_schema(selection(nodes[0], nodes[1:]), schema)
 
     def test_connection_errors_report_the_selected_shape_instead_of_requesting_an_amendment(self):
         source, target = RUNNER.compile_scaffold_declarations([declaration("source"), declaration("target")], self.allocated)
-        schema = RUNNER.scaffold_connection_schema(source, [target], GENESIS, allow_amendment=True)
+        schema = RUNNER.scaffold_connection_schema(source, [target], GENESIS)
         malformed = {"connections": {target["node_id"]: {"entry_case_id": source["entry_cases"][0]["case_id"],
             "supports": {"wrong_requirement": {"evidence_ids": [], "reason": ""}}}}}
         with self.assertRaises(RUNNER.SchemaError) as error: RUNNER.validate_json_schema(malformed, schema)
@@ -107,42 +107,34 @@ class ScaffoldCompilerTests(unittest.TestCase):
             with self.subTest(text=text), self.assertRaisesRegex(RUNNER.SchemaError, "duplicate JSON property"):
                 RUNNER.parse_structured_content(text)
 
-    def provider(self, *, interrupt=None, contract_issue=None):
+    def provider(self, *, interrupt=None):
         calls, interrupted = [], [False]
         def request(_run, step, prompt, schema, _transport, **kwargs):
+            context = json.loads(prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
             if "_targets_" in step:
                 calls.append("targets")
-                context = json.loads(prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
                 earlier = [target for target in context["frontier_contracts"] if target["kind"] == "scene"]
                 chosen = earlier[-1:] if earlier else context["frontier_contracts"]
                 result = {"selection": {"targets": {target["node_id"]: target["entry_cases"][0]["case_id"] for target in chosen},
                     "causal_job": "Synthetic predecessor assignment."}}
             elif "_declare_" in step:
                 calls.append("declare")
-                context = json.loads(prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
-                result = {"nodes": [declaration(context["source_node_id"])]}
+                authored = declaration(context["source_node_id"], requirement="Synthetic entry premise.")
+                authored["guarantees"] += context["required_exit_guarantees"]
+                result = {"nodes": [authored]}
             elif "_connect_" in step:
-                context = json.loads(prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1]); source = context["predecessor"]
-                identifier = source["node_id"]; calls.append(identifier)
-                if identifier == interrupt and not interrupted[0]:
-                    interrupted[0] = True; raise RUNNER.PausedError("Scaffold connections", "Synthetic interruption")
-                if identifier == contract_issue and source["guarantees"][0]["description"] != "Synthetic amended guarantee.":
-                    result = {"contract_issue": {"fields": ["guarantees", "guarantees"], "reason": "Synthetic missing guarantee."}}
-                else:
-                    earlier = [target for target in context["successor_interfaces"] if target["kind"] == "scene"]
-                    chosen = earlier[-1:] if earlier else context["successor_interfaces"]
-                    # No successor is this source or any later node in the current batch.
-                    self.assertTrue(all(target["node_id"] < identifier for target in earlier))
-                    result = selection(source, chosen)
-            elif "_amend_" in step:
-                calls.append("amend")
-                result = {identifier: {"guarantees": ["Synthetic amended guarantee."]} for identifier in schema["properties"]}
+                owner = context["predecessor"]["node_id"]
+                calls.append(owner)
+                if owner == interrupt and not interrupted[0]:
+                    interrupted[0] = True
+                    raise RUNNER.PausedError("Scaffold connections", "Synthetic interruption")
+                result = {"bindings": {identifier: {"evidence_ids": ["commit_genesis"],
+                    "reason": "Synthetic premise support."} for identifier in context["requirements"]}}
             else:
                 raise AssertionError("Unexpected provider request: " + step)
-            if kwargs.get("result_normalizer"):
-                result = kwargs["result_normalizer"](result)
             RUNNER.validate_json_schema(result, schema)
-            if kwargs.get("validator"): kwargs["validator"](result)
+            if kwargs.get("validator"):
+                kwargs["validator"](result)
             return result, {}
         return calls, request
 
@@ -152,16 +144,15 @@ class ScaffoldCompilerTests(unittest.TestCase):
 
     def test_connections_resume_without_redeclaring_or_repeating_accepted_work(self):
         calls, provider = self.provider(interrupt=self.allocated[2])
-        review = {"supported": True, "reason": "Synthetic supported plan.", "contract_repairs": {}, "connection_repairs": {}}
+        review = []
         with mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=provider), mock.patch.object(
                 RUNNER, "review_scaffold_connections", return_value=review):
             with self.assertRaisesRegex(RUNNER.PausedError, "Synthetic interruption"): self.expand(None)
             checkpoint = RUNNER.read_json(self.run / ".staging/scaffold_expand_00001.contracts.json")
             self.assertEqual(len(checkpoint["declarations"]), 3); self.assertEqual(len(checkpoint["assignments"]), 3)
-            self.assertEqual(len(checkpoint["connections"]), 2)
+            self.assertEqual(sum(bool(value) for value in checkpoint["bindings"].values()), 1)
             result = self.expand(None)
-        self.assertEqual(Counter(calls), Counter({"targets": 4, "declare": 4, self.allocated[0]: 1,
-            self.allocated[1]: 1, self.allocated[2]: 2, self.allocated[3]: 1}))
+        self.assertEqual(Counter(calls), Counter({"targets": 4, "declare": 4, self.allocated[1]: 1, self.allocated[2]: 2, self.allocated[3]: 1}))
         self.assertFalse(result["complete"])
         with mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=AssertionError("Repeated accepted request")), mock.patch.object(
                 RUNNER, "review_scaffold_connections", side_effect=AssertionError("Repeated accepted review")):
@@ -170,54 +161,7 @@ class ScaffoldCompilerTests(unittest.TestCase):
             changed = copy.deepcopy(self.state); changed["nodes"][0]["purpose"] = "Changed checkpoint input."
             RUNNER.prepare_scaffold_expansion(self.run, changed, self.core, [node["node_id"] for node in self.outcomes], self.allocated, None)
 
-    def test_amendment_invalidates_only_the_owner_and_direct_consumers(self):
-        calls, provider = self.provider()
-        reviews = [{"supported": False, "reason": "Synthetic guarantee requires amendment.",
-            "contract_repairs": {self.allocated[0]: ["guarantees"]}, "connection_repairs": {}},
-            {"supported": True, "reason": "Synthetic supported plan.", "contract_repairs": {}, "connection_repairs": {}}]
-        with mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=provider), mock.patch.object(
-                RUNNER, "review_scaffold_connections", side_effect=reviews):
-            result = self.expand(None)
-        counts = Counter(calls)
-        self.assertEqual(counts["declare"], 4); self.assertEqual(counts["targets"], 4); self.assertEqual(counts["amend"], 1)
-        self.assertEqual([counts[identifier] for identifier in self.allocated], [2, 2, 1, 1])
-        saved = RUNNER.read_json(self.run / ".staging/scaffold_expand_00001.contracts.json")
-        self.assertEqual(saved["history"][0]["invalidated_connections"], self.allocated[:2])
-        self.assertEqual(result["nodes"][0]["purpose"], declaration(self.allocated[0])["purpose"])
-        self.assertEqual(result["nodes"][0]["guarantees"][0]["description"], "Synthetic amended guarantee.")
-
-    def test_binding_can_report_a_missing_contract_without_fabricating_evidence(self):
-        calls, provider = self.provider(contract_issue=self.allocated[0])
-        review = {"supported": True, "reason": "Synthetic supported plan.", "contract_repairs": {}, "connection_repairs": {}}
-        with mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=provider), mock.patch.object(
-                RUNNER, "review_scaffold_connections", return_value=review):
-            result = self.expand(None)
-        self.assertEqual(Counter(calls)["declare"], 4); self.assertEqual(Counter(calls)["amend"], 1)
-        self.assertEqual(result["nodes"][0]["guarantees"][0]["description"], "Synthetic amended guarantee.")
-
-    def test_faulty_edge_repair_locks_other_destinations_from_same_predecessor(self):
-        calls, provider = self.provider()
-        source = self.allocated[0]; faulty = self.outcomes[0]["node_id"]; preserved = self.outcomes[1]["node_id"]
-        reviews = [{"supported": False, "reason": "Synthetic repair of one destination.", "contract_repairs": {},
-            "connection_repairs": {source: [faulty]}},
-            {"supported": True, "reason": "Synthetic supported plan.", "contract_repairs": {}, "connection_repairs": {}}]
-        locked_values = []
-        def inspect_request(run, step, prompt, schema, transport, **kwargs):
-            if "_connect_" in step:
-                context = json.loads(prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
-                if context["predecessor"]["node_id"] == source and source in calls:
-                    locked = schema["anyOf"][0]["properties"]["connections"]
-                    self.assertEqual(set(locked["required"]), {faulty, preserved})
-                    locked_values.append(locked["properties"][preserved]["const"])
-            return provider(run, step, prompt, schema, transport, **kwargs)
-        with mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=inspect_request), mock.patch.object(
-                RUNNER, "review_scaffold_connections", side_effect=reviews):
-            self.expand(None)
-        self.assertEqual(len(locked_values), 1)
-        self.assertEqual(Counter(calls)[source], 2)
-        self.assertEqual([Counter(calls)[identifier] for identifier in self.allocated[1:]], [1, 1, 1])
-
-    def test_v3_outcomes_targets_declarations_connections_and_opening_compile_together(self):
+    def test_outcomes_targets_declarations_connections_and_opening_compile_together(self):
         RUNNER.write_json(self.run / ".staging/architecture_core.planning.json", {"record": self.core, "payload": {}})
         calls, base_provider = self.provider()
         def provider(run, step, prompt, schema, transport, **kwargs):
@@ -234,7 +178,7 @@ class ScaffoldCompilerTests(unittest.TestCase):
             if kwargs.get("validator"): kwargs["validator"](result)
             return result, {}
         def save(run, step, draft): RUNNER.write_json(run / ".staging" / f"{step}.planning.json", draft)
-        review = {"supported": True, "reason": "Synthetic supported plan.", "contract_repairs": {}, "connection_repairs": {}}
+        review = []
         with mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=provider), mock.patch.object(
                 RUNNER, "review_scaffold_connections", return_value=review), mock.patch.object(RUNNER, "save_planning_draft", side_effect=save):
             compiled = RUNNER.prepare_causal_scaffold(self.run, self.core, None)

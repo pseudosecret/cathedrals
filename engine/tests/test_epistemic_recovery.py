@@ -172,7 +172,7 @@ class EpistemicRecoveryTests(unittest.TestCase):
         self.assertEqual(len(result["knowledge_changes"]), 2)
         self.assertEqual(calls, ["semanticDeltaPayload", "epistemicCorrection", "semanticCategoryPage", "semanticCategoryPage"])
 
-    def test_genuine_contradiction_pauses_without_category_guess_or_metadata_bypass(self):
+    def test_genuine_contradiction_fails_after_one_evidence_reconsideration(self):
         self.artistic["scenes"][0]["prose_mdx"] = "Lila accuses Elias using the hidden seal time; she has not read the correction."
         saved = self.preserve()
         calls = []
@@ -181,13 +181,26 @@ class EpistemicRecoveryTests(unittest.TestCase):
             calls.append(name)
             return api_response(self.empty if name == "semanticDeltaPayload" else {"decisions": [
                 self.decision("unresolved", reason="The text requires Lila's unavailable seal time without showing acquisition.")]})
-        with self.assertRaisesRegex(RUNNER.PausedError, "unresolved knowledge contradiction"):
+        with self.assertRaisesRegex(RUNNER.CathedralsError, "unresolved knowledge contradiction") as error:
             self.normalize(transport)
-        self.assertEqual(calls, ["semanticDeltaPayload", "epistemicCorrection"])
-        with self.assertRaises(RUNNER.PausedError):
+        self.assertEqual(error.exception.failure_class, "continuity_impossibility")
+        self.assertEqual(calls, ["semanticDeltaPayload", "epistemicCorrection", "epistemicCorrection"])
+        with self.assertRaises(RUNNER.CathedralsError):
             self.normalize(transport)
         self.assertEqual(calls, ["semanticDeltaPayload", "epistemicCorrection", "epistemicCorrection"])
         self.assertEqual(RUNNER.apply_epistemic_repairs(self.run, self.step, self.artistic), self.artistic)
+        for path, value in saved.items():
+            self.assertEqual(path.read_bytes(), value)
+
+    def test_reconsideration_can_correct_metadata_and_preserve_original_text(self):
+        saved = self.preserve()
+        first = {"decisions": [self.decision("unresolved", reason="The reliance could not be resolved.")]}
+        repaired = {"decisions": [self.decision()]}
+        provider = mock.Mock(side_effect=[api_response(first), api_response(repaired)])
+        self.assertEqual(self.repair(provider), [])
+        self.assertEqual(provider.call_count, 2)
+        self.assertFalse(RUNNER.epistemic_conflicts(
+            RUNNER.apply_epistemic_repairs(self.run, self.step, self.artistic)["scenes"], self.knowledge, self.empty))
         for path, value in saved.items():
             self.assertEqual(path.read_bytes(), value)
 

@@ -1,6 +1,6 @@
 # Backward causal scaffold
 
-New preflight policies freeze `scaffold_planning_version: 3`. The saved causal
+New preflight policies freeze `scaffold_planning_version: 4`. The saved causal
 scaffold remains version 1; the planning response interface is separately versioned. These runs seed
 terminal outcomes in pages of at most four, then expand predecessors in groups of
 at most four. The existing derived ending ceiling remains in force; there is no
@@ -14,53 +14,28 @@ IDs. These are planned contracts, separate from committed facts and character
 knowledge. Endings can be premature or final, with one or multiple incoming paths.
 They are terminal under this policy. Browser history and `start_over` are separate.
 
-Version 3 selects targets before drafting each predecessor. A closed-schema mapping
-selects one to five known destination/entry-case pairs and a concise causal job.
-The engine/model chooses these automatically; there is no human target-selection
-step. It then authors one contract, assigns its IDs, and binds evidence to exactly
-those selected cases. These stages interleave for up to four scenes, so a later
-predecessor can target an earlier declaration in the same batch. The model can end
-a batch after its first scene rather than fill unused capacity.
+Version 4 selects up to five known successor cases before drafting a predecessor.
+The engine reserves earlier scene slots from all uncovered cases, including cases
+introduced or admitted by tentative assignments in the current batch. This sets
+the maximum number of entry cases for each new declaration. The final slot must
+cover every remaining destination case and leave one explicit opening condition.
 
-Contracts contain no authored declaration IDs. The engine assigns IDs by owner,
-ordinal and revision. Binding schemas fix destination keys and the selected entry
-case, and accept only predecessor guarantee IDs or supplied Genesis sources for
-its requirements. The shared evidence definition remains bounded. Future and self
-references cannot be selected; duplicate JSON keys remain invalid.
+The engine compiles unconditional bindings and exact matches to declared exit
+guarantees. For other requirements, the model selects evidence IDs or names the
+condition that needs a guarantee. Review addresses individual proofs, contract
+compatibility with each entry case, and opening evidence. Capacity is checked
+before semantic review.
 
-Target assignments, declarations and connections are separate checkpoints in
-`.staging/scaffold_expand_NNNNN.contracts.json` (checkpoint version 3). Each request
-is keyed by its actual prompt and schema. Interruptions replay completed responses
-without repeating their usage. Old checkpoint formats use their saved launcher;
-there is no in-process migration.
+Each predecessor can receive one focused rebind, one replacement declaration, and
+one different feasible assignment. A rebind must change the evidence IDs. A
+replacement for missing support must include the named exit condition. Unchanged
+entry cases and proofs are remapped when their engine IDs change. The engine keeps
+unrelated bindings and checks dependent assignments against revised cases.
 
-An unchanged or whitespace-only amendment cannot advance a revision. A requested
-repair of missing guarantees cannot leave those guarantees empty while changing
-other fields. Punctuation-only clauses, serialized engine fields inside clauses,
-and identical alternative entry cases are rejected before acceptance, including
-in terminal outcomes. Empty guarantees still remain valid for scenes whose work
-needs no new hard fact.
-
-Causal review can amend only flagged fields or rebind faulty connections, preserving
-unrelated destinations. When focused repair is ineffective, one bounded local
-re-declaration per failed node per invocation can choose new targets and replace
-that uncommitted contract. Its node ID stays fixed. Only a validated change creates
-a revision. Unchanged successor conditions can be remapped to new engine-owned case
-IDs without redrafting consumers; changed conditions require affected consumers to
-reselect and redeclare. Other contracts and raw responses remain unchanged.
-
-Four repair cycles per invocation and the existing frozen request/cumulative budgets
-bound recovery. The final cycle does not issue another unreviewed amendment. Pause
-diagnostics identify the last evaluated revisions and any pending declarations.
-No committed contract or literary bytes are changed by these draft repairs.
-
-Repair field/destination selectors are treated as sets: exact repeated strings are
-removed before schema validation, preserving their first-occurrence order. This
-also applies to `contract_issue.fields`. The original raw response stays unchanged;
-the planning audit and ledger retain the canonical selection. Unknown names,
-malformed values, duplicate JSON keys and contradictory support verdicts still fail.
-Causal review receives accepted successor interfaces without their outgoing edges,
-so its evidence bundle covers the new patch rather than unrelated older routes.
+Assignments, declarations, bindings and repair usage are checkpointed in
+`.staging/scaffold_expand_NNNNN.contracts.json` (version 4). Replay uses the
+original model responses and token accounting. Exhausted repairs identify the
+blocked contract and available capacity. Provider interruptions remain resumable.
 
 Closure is a separate request, offered only after one opening reaches all nodes,
 all alternative entries are supported, eight scenes exist, and the opening has one
@@ -111,7 +86,8 @@ requirements, and directly fetched immutable evidence. It never receives the ful
 scaffold merely to write one scene. Linear chapter assignments require exactly one
 authored exit. Ending assignments allow no story choices or redirects. Reader-state
 verification follows all distinct reachable states, including both sides of a merge;
-more than 128 states at a node pauses verification without dropping paths.
+the verifier reports budget exhaustion if a node exceeds 128 distinct states.
+Writing prompts include the reachable states for the assigned content.
 
 Source audits continue to use engine-owned task IDs. Each task fixes one guarantee
 or preserved condition, entry case, incoming route, and permitted source list.
@@ -155,7 +131,7 @@ duplicate usage. The selector/context repair passed all 323 offline tests with
 network access blocked; no live generation or existing run archive was changed.
 
 Offline imports and synthetic tests are authorized for engine cleanup, with network
-access blocked. The acceptance suite exercises a current version 3 generation,
+access blocked. The earlier version 3 acceptance suite exercised generation,
 interruption/resume and complete static publication using a synthetic provider.
 It makes no claim of live-model literary success. Older runs require their original
 saved launcher; the current engine does not migrate their records or fall back to

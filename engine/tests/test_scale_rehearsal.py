@@ -360,7 +360,7 @@ class ScaleRehearsalTests(unittest.TestCase):
                 for number, record in enumerate(records, 1):
                     committed.append(record)
                     if number == len(records):
-                        with self.assertRaisesRegex(RUNNER.PausedError, "No remaining literary plan"):
+                        with self.assertRaisesRegex(RUNNER.CathedralsError, "No remaining literary plan"):
                             RUNNER.recompute_prospective_plan(run, f"commit_scale_{number:03d}")
                     else:
                         RUNNER.recompute_prospective_plan(run, f"commit_scale_{number:03d}")

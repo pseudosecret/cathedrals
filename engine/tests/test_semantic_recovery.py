@@ -30,6 +30,46 @@ class SemanticRecoveryTests(unittest.TestCase):
         return copy.deepcopy(genesis_semantic_payload("scene_slot_0001")["canonical_facts"][0]) | {
             "predicate": f"observed_{index}", "value": index}
 
+    def test_interrupted_artistic_archive_finishes_from_the_same_bytes(self):
+        step = "interrupted_archive"
+        response = fixtures.api_response(self.artistic)
+        text = json.dumps(self.artistic, indent=2).replace("\n", "\r\n")
+        write = RUNNER.write_atomic
+        def interrupt(path, data, **kwargs):
+            if path.name.endswith(".artistic.json"):
+                raise KeyboardInterrupt()
+            return write(path, data, **kwargs)
+        with mock.patch.object(RUNNER, "write_atomic", side_effect=interrupt), self.assertRaises(KeyboardInterrupt):
+            RUNNER.preserve_artistic_payload(self.run, step, self.artistic, text, response)
+        base = self.run / ".staging" / step
+        self.assertFalse(base.with_suffix(".artistic.json").exists())
+        RUNNER.preserve_artistic_payload(self.run, step, self.artistic, text, response)
+        self.assertEqual(base.with_suffix(".artistic.txt").read_bytes(), text.encode())
+        self.assertEqual(RUNNER.read_json(base.with_suffix(".artistic.json")), self.artistic)
+        with self.assertRaises(RUNNER.IntegrityError):
+            RUNNER.preserve_artistic_payload(self.run, step, self.artistic, "Different prose.", response)
+
+    def test_saved_normalization_response_survives_interruption_before_pending_checkpoint(self):
+        provider = mock.Mock(return_value=self.response(self.empty()))
+        write = RUNNER.write_json
+        def interrupt(path, value, **kwargs):
+            if path.name.endswith(".semantic-pending.json"):
+                raise KeyboardInterrupt()
+            return write(path, value, **kwargs)
+        with mock.patch.object(RUNNER, "write_json", side_effect=interrupt), self.assertRaises(KeyboardInterrupt):
+            self.normalize(provider)
+        self.assertEqual(self.normalize(provider), self.empty())
+        provider.assert_called_once()
+        self.assert_prose_unchanged()
+
+    def test_resume_revalidates_cached_metadata_without_reauditing_accepted_evidence(self):
+        provider = mock.Mock(return_value=self.response(self.empty()))
+        with mock.patch.object(RUNNER, "audit_ending_resolutions", wraps=RUNNER.audit_ending_resolutions) as audit:
+            self.assertEqual(self.normalize(provider), self.empty())
+            self.assertEqual(self.normalize(provider), self.empty())
+        audit.assert_called_once()
+        provider.assert_called_once()
+
     def empty(self):
         return {key: [] for key in RUNNER.SEMANTIC_CATEGORIES}
 

@@ -184,6 +184,8 @@ class BackwardScaffoldTests(unittest.TestCase):
         left, right, merge = [slots[f"scaffold_scene_{index:05d}"] for index in (3, 4, 5)]
         content[left]["state_effects"] = [{"key": "path", "operation": "set", "value": "left"}]
         content[right]["state_effects"] = [{"key": "path", "operation": "set", "value": "right"}]
+        arrivals = RUNNER.validate_scaffold_reader_states(core, content, destination)
+        self.assertEqual({state["path"] for state in arrivals[merge].values()}, {"left", "right"})
         content[merge]["state_inputs"] = [{"key": "path", "operator": "equals", "value": "left"}]
         with self.assertRaisesRegex(RUNNER.SchemaError, "rejects a reachable incoming state"):
             RUNNER.validate_scaffold_reader_states(core, content, destination)

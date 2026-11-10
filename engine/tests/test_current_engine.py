@@ -20,7 +20,7 @@ class CurrentEngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             with mock.patch.object(RUNNER, "RUNTIME_ROOT", root), mock.patch.object(RUNNER, "RUNS_ROOT", root / "runs"):
-                for policy in ({"scaffold_planning_version": 1}, {"scaffold_planning_version": 2}, {"bounded_planning": False},
+                for policy in ({"scaffold_planning_version": 1}, {"scaffold_planning_version": 2}, {"scaffold_planning_version": 3}, {"bounded_planning": False},
                         {"scoped_sources": False}, {"completion_contract_version": True}):
                     with self.subTest(policy=policy), self.assertRaisesRegex(RUNNER.CathedralsError, "current engine requires"):
                         RUNNER.create_run(RUNNER.FrozenInputs(), "http://offline.invalid", "offline", execution_policy=policy)

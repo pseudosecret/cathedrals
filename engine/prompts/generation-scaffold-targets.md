@@ -17,6 +17,9 @@ Their entry cases are alternatives, not a demand to read every path. Preserve an
 targets fixed by the schema. Do not choose the story's opening merely because this
 is the first expansion; the opening is discovered last, near Genesis conditions.
 
+Cover the uncovered cases on every required_targets node. Use remaining_earlier_scenes
+to leave room for the other pending cases.
+
 When the schema allows selection=null, it finishes only this batch. Use that to
 avoid unnecessary scenes; it does not finish the scaffold. The engine/model makes
 all choices automatically. No human assignment is required.

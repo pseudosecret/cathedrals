@@ -28,6 +28,12 @@ Each alternative must be distinct; do not repeat empty entry cases. Write real
 conditions and transformations, not punctuation placeholders or serialized JSON
 fields hidden inside strings. The engine supplies all declaration IDs.
 
+Use at most maximum_entry_cases. Include each required_exit_guarantees clause exactly
+and describe how the scene earns it. When opening_required is true, ground the sole
+entry case in supplied Genesis evidence.
+When the schema permits unworkable, use it with a concrete reason if this assignment
+cannot be earned within the available cases.
+
 Keep the scene cap and unresolved entry cases in view. Consolidate the frontier with
 earned causes while there is still capacity. The opening, planned last, needs one
 explicit entry case grounded entirely in Genesis. Do not declare a premature opening

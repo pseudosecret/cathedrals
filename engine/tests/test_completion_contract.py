@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 from test_cathedrals import RUNNER, static_reader_fixture
+from test_reference_resolution import api_response
 from test_fts5_retrieval import decode_context
 from benchmark_storage import packet
 from test_scale_rehearsal import scale_web_fixture
@@ -234,8 +235,34 @@ class CompletionContractTests(unittest.TestCase):
                 self.obligations() if name == "obligations.json" else {}), mock.patch.object(
                 RUNNER, "evaluate_feasibility", return_value=[{"attractor_id": "attractor_001", "status": "viable"}]), mock.patch.object(
                 RUNNER, "completed_packet_slots", return_value=set()), mock.patch.object(RUNNER, "all_committed_records", return_value=[]):
-            with self.assertRaisesRegex(RUNNER.PausedError, "No remaining literary plan"):
+            with self.assertRaisesRegex(RUNNER.CathedralsError, "No remaining literary plan"):
                 RUNNER.build_prospective_plan(self.run, planned, "commit_fixture")
+
+    def test_final_scene_can_supply_omitted_metadata_or_fail_with_its_unsupported_condition(self):
+        slot = "scene_slot_0001"
+        scene = scene_payload(slot, "ending_slot_0001")
+        scene["prose_mdx"] = "The judgment is complete."
+        artistic = {"scenes": [scene], "endings": []}
+        before = RUNNER.canonical_json(artistic)
+        normalized = {key: [] for key in RUNNER.SEMANTIC_CATEGORIES}
+        planned = architecture(1)
+        plan = planned["packet_plans"][0]
+        with mock.patch.object(RUNNER, "committed_record", return_value=planned), mock.patch.object(
+                RUNNER, "committed_records", return_value=[]), mock.patch.object(RUNNER, "_read_state_map", side_effect=lambda _run, name:
+                    self.obligations() if name == "obligations.json" else {}):
+            provider = mock.Mock(return_value=api_response({"outcome": "satisfied", "reason": "Judgment occurred.",
+                "evidence_quotes": [{"technical_slot_id": slot, "quote": scene["prose_mdx"]}]}))
+            result = RUNNER.audit_ending_resolutions(self.run, "final_scene", artistic, normalized, provider, plan=plan)
+            self.assertEqual(result["obligation_updates"], [{"obligation_id": "obligation_one", "status": "satisfied",
+                "reason": "Judgment occurred.", "source": {"technical_slot_id": slot}}])
+            self.assertEqual(RUNNER.audit_ending_resolutions(self.run, "final_scene", artistic, normalized, provider, plan=plan), result)
+            provider.assert_called_once()
+            provider = mock.Mock(return_value=api_response({"outcome": "unsupported", "reason": "Judgment never occurs.", "evidence_quotes": []}))
+            with self.assertRaisesRegex(RUNNER.CathedralsError, "obligation_one: Judgment never occurs") as error:
+                RUNNER.audit_ending_resolutions(self.run, "unsupported_final", artistic, normalized, provider, plan=plan)
+            self.assertEqual(error.exception.failure_class, "continuity_impossibility")
+            provider.assert_called_once()
+        self.assertEqual(RUNNER.canonical_json(artistic), before)
 
     def test_long_range_payoff_is_optional_until_deadline_and_soft_pressure_stays_advisory(self):
         planned = architecture()

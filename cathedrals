@@ -40,7 +40,7 @@ DEFAULT_LM_STUDIO_URL = "http://127.0.0.1:1234"
 PROTOCOL_VERSION = "6.0"
 CURRENT_EXECUTION_POLICY = {
     "bounded_planning": True, "scoped_sources": True, "completion_contract_version": 1,
-    "scaffold_planning_version": 3, "retrieval_mode": "automatic", "max_tool_rounds": 2, "max_tool_calls": 8,
+    "scaffold_planning_version": 4, "retrieval_mode": "automatic", "max_tool_rounds": 2, "max_tool_calls": 8,
 }
 BASE_OUTPUT_TOKENS = 10900
 EXPANDED_OUTPUT_TOKENS = 21800
@@ -2961,7 +2961,7 @@ def request_record(
             preserved_payload = run_dir / ".staging" / f"{step_id}.artistic.json"
             if preserved_payload.exists():
                 authored = read_json(preserved_payload)
-                content = (run_dir / ".staging" / f"{step_id}.artistic.txt").read_text(encoding="utf-8")
+                content = (run_dir / ".staging" / f"{step_id}.artistic.txt").read_bytes().decode("utf-8")
                 response = read_json(run_dir / ".staging" / f"{step_id}.artistic.api.json")
             elif response is None:
                 response, content = provider_response(
@@ -3768,8 +3768,7 @@ def validate_navigation_payload(run_dir, architecture, plan, payload):
         if not required or not required.issubset(actual):
             raise SchemaError(f"Scene {scene['technical_slot_id']} must author playable exits to: {', '.join(sorted(required - actual)) or 'its frozen navigation targets'}")
     if architecture.get("causal_scaffold"):
-        validate_scaffold_reader_states(architecture, content, destination)
-        return
+        return validate_scaffold_reader_states(architecture, content, destination)
     route, values = navigation_contract_route(architecture), {}
     for index, slot in enumerate(route):
         if slot not in content:
@@ -4280,6 +4279,13 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
         ("ENDING ATTRACTOR" if plan["packet_kind"] == "ending" else "ENDING / BRANCH ATTRACTORS EXERTING PRESSURE", attractors),
         ("FROZEN THRESHOLD GEOMANCY", [item for item in geomancy["assignments"] if item["technical_slot_id"] in slots]),
     ]
+    if architecture.get("causal_scaffold"):
+        arrivals = validate_navigation_payload(run_dir, architecture, {}, {"scenes": [], "endings": []})
+        assigned = plan["scene_slot_ids"] + plan["ending_slot_ids"]
+        entry_states = {slot: list(arrivals.get(slot, {}).values()) for slot in assigned}
+        if any(not states for states in entry_states.values()):
+            raise IntegrityError("Packet has no reachable entry state from the committed predecessor routes")
+        required.append(("REACHABLE READER STATES ON ENTRY", entry_states))
     tool_session = run_dir / "raw" / f"{step_id or packet_step_id(plan)}.retrieval-session.json"
     if not tool_session.exists() and step_id and step_id.endswith("_expanded"):
         tool_session = run_dir / "raw" / f"{step_id.removesuffix('_expanded')}.retrieval-session.json"
@@ -4507,7 +4513,7 @@ def build_prospective_plan(run_dir: Path, architecture: dict, recomputed_after_c
         raise CathedralsError("Forward feasibility", "Ending prerequisites were resolved without satisfaction: " + ", ".join(invalid), "continuity_impossibility")
     pending = sorted(identifier for identifier in required if obligations[identifier]["data"]["status"] != "satisfied")
     if pending and not literary_pending:
-        raise PausedError("Ending prerequisites", "No remaining literary plan can establish: " + ", ".join(pending))
+        raise CathedralsError("Ending prerequisites", "No remaining literary plan can establish: " + ", ".join(pending), "continuity_impossibility")
     obligation_assignments = []
     for obligation_id, event in obligations.items():
         obligation = event["data"]
@@ -5084,10 +5090,14 @@ def build_architecture_core(run_dir: Path, payload: dict) -> dict:
 
 def preserve_artistic_payload(run_dir: Path, step_id: str, payload: dict, content: str, response: dict) -> None:
     base = run_dir / ".staging" / step_id
-    if not base.with_suffix(".artistic.json").exists():
-        write_json(base.with_suffix(".artistic.json"), payload, mode=0o444, exclusive=True)
-        write_atomic(base.with_suffix(".artistic.txt"), content.encode(), mode=0o444, exclusive=True)
-        write_json(base.with_suffix(".artistic.api.json"), response, mode=0o444, exclusive=True)
+    # The payload marks completion. Resume can finish sidecars using the saved response.
+    for suffix, data in ((".artistic.txt", content.encode()), (".artistic.api.json", canonical_json(response)),
+            (".artistic.json", canonical_json(payload))):
+        path = base.with_suffix(suffix)
+        if path.exists():
+            verify_immutable_file(path, sha256_bytes(data))
+        else:
+            write_atomic(path, data, mode=0o444, exclusive=True)
 
 
 def planning_string_value(content: str, schema: dict, path=None):
@@ -5132,7 +5142,7 @@ def request_architecture_analysis(
     *, phase="architecture", system_prompt="Repair only the identified uncommitted Architecture fields. Return JSON only.",
     response_name="architectureRepair", pause_stage="Architecture repair",
     value_mode=False, value_path=None, initial_draft=False, temperature=0.0, max_tokens=None,
-    planning_mode=False, context_purpose="planning", retrieval_task=None, result_normalizer=None,
+    planning_mode=False, context_purpose="planning", retrieval_task=None,
 ):
     brief = read_json(run_dir / "generation-brief.json")
     seed = step_seed(brief["generation_seed"], step_id)
@@ -5211,8 +5221,6 @@ def request_architecture_analysis(
                 authored = planning_string_value(content, schema, value_path)
             else:
                 authored = parse_structured_content(content)
-            if result_normalizer:
-                authored = result_normalizer(authored)
             validate_json_schema(authored, schema)
             if validator:
                 validator(authored)
@@ -5928,10 +5936,15 @@ def semantic_prompt(artistic: dict, context: str, instruction: str, accepted=Non
 
 
 def semantic_attempt(run_dir: Path, step_id: str) -> int:
-    attempts = [entry["attempt"] for entry in step_entries(run_dir, f"{step_id}_semantic")]
-    attempts.extend(int(match.group(1)) for path in (run_dir / "raw").glob(f"{step_id}-semantic-attempt*.api.json")
-                    if (match := re.fullmatch(rf"{re.escape(step_id)}-semantic-attempt([0-9]+)\.api\.json", path.name)))
-    return max(attempts, default=0) + 1
+    accounted = {entry["attempt"] for entry in step_entries(run_dir, f"{step_id}_semantic")}
+    saved = {int(match.group(1)) for path in (run_dir / "raw").glob(f"{step_id}-semantic-attempt*.api.json")
+             if (match := re.fullmatch(rf"{re.escape(step_id)}-semantic-attempt([0-9]+)\.api\.json", path.name))}
+    latest = max(saved | accounted, default=0)
+    if latest in saved - accounted:
+        response = read_json(run_dir / "raw" / f"{step_id}-semantic-attempt{latest}.api.json")
+        if isinstance(response, dict) and response.get("_cathedrals_started_at"):
+            return latest
+    return latest + 1
 
 
 def semantic_output_limit(run_dir: Path, prompt: str, schema: dict, maximum=8192) -> int:
@@ -6163,11 +6176,12 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
     return state["payload"], assembled
 
 
-def audit_ending_resolutions(run_dir, step_id, artistic, normalized, transport):
+def audit_ending_resolutions(run_dir, step_id, artistic, normalized, transport, *, plan=None):
     if not isinstance(normalized, dict) or not isinstance(normalized.get("obligation_updates"), list):
         return normalized  # The normal schema/category recovery must diagnose malformed metadata.
     obligations = _read_state_map(run_dir, "obligations.json")
-    strict = ending_prerequisite_ids(committed_record(run_dir, "architecture") or {}, obligations)
+    architecture = committed_record(run_dir, "architecture") or {}
+    strict = ending_prerequisite_ids(architecture, obligations)
     if not strict:
         return normalized
     sources = {item["technical_slot_id"]: [item["prose_mdx"]] + [artifact["body_mdx"] for artifact in item["artifacts"]]
@@ -6175,11 +6189,7 @@ def audit_ending_resolutions(run_dir, step_id, artistic, normalized, transport):
     choices = {item["technical_slot_id"]: item["choices"] for item in artistic["scenes"] + artistic["endings"]}
     for slot, items in choices.items():
         sources[slot].extend(item["label"] for item in items)
-    accepted = []
-    for update in normalized["obligation_updates"]:
-        if not isinstance(update, dict) or not isinstance(update.get("obligation_id"), str) or not isinstance(update.get("status"), str) or update["obligation_id"] not in strict:
-            accepted.append(update)
-            continue
+    def audit(identifier, update=None):
         schema = {"type": "object", "additionalProperties": False, "required": ["outcome", "reason", "evidence_quotes"],
             "properties": {"outcome": {"enum": ["satisfied", "ongoing", "unsupported"]}, "reason": {"type": "string", "minLength": 1},
                 "evidence_quotes": {"type": "array", "items": {"type": "object", "additionalProperties": False,
@@ -6197,21 +6207,55 @@ def audit_ending_resolutions(run_dir, step_id, artistic, normalized, transport):
             "They may satisfy an obligation to provide a decision, but cannot establish an unperformed fictional event. "
             "Thematic ambiguity may be a completed payoff only if the obligation's required transformation actually occurs here. "
             "Do not change prose or invent a resolution. Return satisfied, ongoing or unsupported, with reason and exact quotes.\nOBLIGATION\n" +
-            canonical_json(obligations[update["obligation_id"]]["data"]).decode() + "\nPROPOSED UPDATE\n" + canonical_json(update).decode() +
+            canonical_json(obligations[identifier]["data"]).decode() + ("\nPROPOSED UPDATE\n" + canonical_json(update).decode() if update is not None
+                else "\nFINAL LITERARY SLOT\nCheck whether the staged scene actually earns this missing prerequisite.") +
             "\nIMMUTABLE AUTHORED CONTENT\n" + canonical_json(sources).decode() + "\nAUTHORED CHOICE AFFORDANCES\n" + canonical_json(choices).decode())
         query = f"{step_id}_resolution_{sha256_bytes(prompt.encode())[:12]}"
         result, response = request_architecture_analysis(run_dir, query, prompt, schema, transport, validator=validate,
             phase="validation", response_name="endingResolutionAudit", pause_stage="Ending resolution audit", max_tokens=4096,
             system_prompt="Audit source support for a proposed metadata update. Return JSON only.", planning_mode=True, context_purpose="semantic normalization")
         preserve_planning_result(run_dir, step_id, query, result, response, kind="ending_resolution", phase="validation")
+        return result
+
+    accepted = []
+    for update in normalized["obligation_updates"]:
+        if not isinstance(update, dict) or not isinstance(update.get("obligation_id"), str) or not isinstance(update.get("status"), str) or update["obligation_id"] not in strict:
+            accepted.append(update)
+            continue
+        result = audit(update["obligation_id"], update)
         if result["outcome"] == "satisfied":
             if update["status"] != "satisfied":
                 raise SchemaError("A proposed ambiguous prerequisite update cannot be coerced into satisfaction", paths=["$.obligation_updates"])
             accepted.append(update)
+    if plan is not None and artistic["scenes"]:
+        filled = set(sources) | {scene["technical_slot_id"] for record in committed_records(run_dir, "creative_packet") for scene in record["scenes"]}
+        remaining = {slot for packet in architecture["packet_plans"] for slot in packet["scene_slot_ids"]} - filled
+        if not remaining:
+            feasibility = {item["attractor_id"]: item["status"]
+                for item in _read_state_map(run_dir, "prospective-plan.json").get("feasibility", [])}
+            live = architecture | {"attractors": [item for item in architecture["attractors"]
+                if feasibility.get(item["attractor_id"]) != "foreclosed"]}
+            satisfied = {item["obligation_id"] for item in accepted if isinstance(item, dict) and item.get("status") == "satisfied"}
+            failures = []
+            for identifier in sorted(ending_prerequisite_ids(live, obligations) - satisfied):
+                if obligations[identifier]["data"]["status"] == "satisfied":
+                    continue
+                result = audit(identifier)
+                if result["outcome"] == "satisfied":
+                    accepted.append({"obligation_id": identifier, "status": "satisfied", "reason": result["reason"],
+                        "source": {"technical_slot_id": result["evidence_quotes"][0]["technical_slot_id"]}})
+                else:
+                    failures.append(f"{identifier}: {result['reason']}")
+            if failures:
+                raise CathedralsError("Ending prerequisites", "The final literary slot leaves prerequisites unsupported: " +
+                    "; ".join(failures), "continuity_impossibility")
     return normalized | {"obligation_updates": accepted}
 
 
 def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload: dict, context: str, transport=http_json, *, plan=None) -> dict:
+    terminal = epistemic_repair_state(run_dir, step_id, artistic_payload).get("terminal_reason")
+    if terminal:
+        raise CathedralsError("Epistemic dependency correction", terminal, "continuity_impossibility")
     audit_scaffold_guarantees(run_dir, step_id, artistic_payload, plan, transport)
     target = run_dir / ".staging" / f"{step_id}.semantic.json"
     pending_path = run_dir / ".staging" / f"{step_id}.semantic-pending.json"
@@ -6262,6 +6306,7 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
         prompt = semantic_prompt(artistic_payload, context, "Return the complete semantic delta. " + feedback, run_dir=run_dir)
         response_path = run_dir / "raw" / f"{step_id}-semantic-attempt{attempt}.api.json"
         started, response, normalized = utc_now(), None, None
+        validated_cache = cached is not None and not feedback
         try:
             if cached is not None:
                 normalized, response = cached, cached_response
@@ -6272,17 +6317,21 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
             elif recovery_path.exists():
                 normalized, response = recover_semantic_categories(run_dir, step_id, artistic_payload, context, schema, transport)
             else:
-                parameters["max_tokens"] = semantic_output_limit(run_dir, prompt, schema)
-                request = {"model": load_state(run_dir)["model"],
-                    "messages": [{"role": "system", "content": "Normalize immutable authored content into concise constraint changes. Return JSON only."},
-                                 {"role": "user", "content": prompt}],
-                    **parameters, "response_format": {"type": "json_schema", "json_schema": {"name": "semanticDeltaPayload", "strict": True, "schema": schema}}}
-                sent += 1
                 try:
-                    response, content = provider_response(transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
-                        float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")), started_at=started,
-                        preserve=lambda value: write_json(response_path, value, mode=0o444, exclusive=True),
-                        stream_path=response_path.with_suffix(".sse"))
+                    if response_path.exists():
+                        response = read_json(response_path)
+                        content = normalize_provider_response(response)
+                    else:
+                        parameters["max_tokens"] = semantic_output_limit(run_dir, prompt, schema)
+                        request = {"model": load_state(run_dir)["model"],
+                            "messages": [{"role": "system", "content": "Normalize immutable authored content into concise constraint changes. Return JSON only."},
+                                         {"role": "user", "content": prompt}],
+                            **parameters, "response_format": {"type": "json_schema", "json_schema": {"name": "semanticDeltaPayload", "strict": True, "schema": schema}}}
+                        sent += 1
+                        response, content = provider_response(transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
+                            float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")), started_at=started,
+                            preserve=lambda value: write_json(response_path, value, mode=0o444, exclusive=True),
+                            stream_path=response_path.with_suffix(".sse"))
                     normalized = parse_structured_content(content)
                 except (TruncationError, IncompleteResponseError) as error:
                     response = read_json(response_path) if response_path.exists() else error.response or {}
@@ -6294,10 +6343,11 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
                     if isinstance(error, IncompleteResponseError):
                         raise PausedError("Semantic normalization", error.reason, error.failure_class) from error
                     normalized, response = recover_semantic_categories(run_dir, step_id, artistic_payload, context, schema, transport)
-            write_json(pending_path, {"attempt": attempt, "payload": normalized, "response": response})
-            normalized = repair_named_references(run_dir, step_id, normalized, "semanticDeltaPayload", schema, transport,
-                plan=reference_plan, source_context=artistic_payload)
-            normalized = audit_ending_resolutions(run_dir, step_id, artistic_payload, normalized, transport)
+            if not validated_cache:
+                write_json(pending_path, {"attempt": attempt, "payload": normalized, "response": response})
+                normalized = repair_named_references(run_dir, step_id, normalized, "semanticDeltaPayload", schema, transport,
+                    plan=reference_plan, source_context=artistic_payload)
+                normalized = audit_ending_resolutions(run_dir, step_id, artistic_payload, normalized, transport, plan=plan)
             validate_json_schema(normalized, schema)
             validate_normalized(normalized)
             semantic_event_capacity(run_dir, normalized)
@@ -6325,7 +6375,7 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
                     context=context, parameters=parameters, started_at=started, failure_class=error.failure_class, step_type="analysis",
                     output_hash=sha256_file(response_path) if response_path.exists() else None,
                     usage=read_json(response_path).get("usage") or {} if response_path.exists() else response.get("usage") or {} if isinstance(response, dict) else {})
-            if error.failure_class == "budget_exhaustion" or isinstance(error, IntegrityError):
+            if error.failure_class in {"budget_exhaustion", "continuity_impossibility"} or isinstance(error, IntegrityError):
                 raise
             if isinstance(error, SchemaError):
                 state = (read_json(recovery_path) if recovery_path.exists() else
@@ -6417,6 +6467,8 @@ def apply_epistemic_repairs(run_dir: Path, step_id: str, artistic: dict) -> dict
 def repair_epistemic_dependencies(run_dir: Path, step_id: str, artistic: dict,
                                   error: EpistemicDependencyError, transport) -> list[dict]:
     state = epistemic_repair_state(run_dir, step_id, artistic)
+    if "terminal_reason" in state:
+        raise CathedralsError("Epistemic dependency correction", state["terminal_reason"], "continuity_impossibility")
     effective = apply_epistemic_repairs(run_dir, step_id, artistic)
     scenes = {scene["technical_slot_id"]: scene for scene in effective["scenes"]}
     occupied = {scene["technical_slot_id"] for record in committed_records(run_dir, "creative_packet") for scene in record["scenes"]}
@@ -6445,11 +6497,12 @@ def repair_epistemic_dependencies(run_dir: Path, step_id: str, artistic: dict,
                 "evidence": {"type": "array", "items": {"type": "object", "additionalProperties": False,
                     "required": ["source", "quote"], "properties": {
                         "source": {"enum": sorted(sources)}, "quote": {"type": "string", "minLength": 1}}}}}}}}}
-    def validate(result):
+    def validate(result, allowed=None):
+        allowed = targets if allowed is None else allowed
         seen = set()
         for decision in result["decisions"]:
             target = (decision["scene_slot_id"], decision["dependency_index"])
-            if target not in targets or target in seen:
+            if target not in allowed or target in seen:
                 raise SchemaError("Return exactly one decision per flagged dependency; do not edit unaffected declarations")
             seen.add(target)
             if decision["action"] == "repair_declaration":
@@ -6481,8 +6534,31 @@ def repair_epistemic_dependencies(run_dir: Path, step_id: str, artistic: dict,
         phase="validation", response_name="epistemicCorrection", system_prompt="Audit technical reliance metadata against immutable source text. Return only the required decisions.",
         max_tokens=8192, planning_mode=True, context_purpose="semantic normalization", pause_stage="Epistemic dependency correction")
     preserve_planning_result(run_dir, step_id, query, result, response, kind="epistemic_correction", phase="validation")
+    unresolved = {(item["scene_slot_id"], item["dependency_index"]): item
+        for item in result["decisions"] if item["action"] == "unresolved"}
+    if unresolved:
+        review_schema = copy.deepcopy(schema)
+        decisions = review_schema["properties"]["decisions"]
+        decisions["minItems"] = decisions["maxItems"] = len(unresolved)
+        review = prompt + ("\nRECONSIDER ONLY THESE UNRESOLVED DECISIONS\n" +
+            canonical_json(list(unresolved.values())).decode() +
+            "\nUse the same text and exact quotations. Return only the listed unresolved targets. Explain any reversal.")
+        review_id = query + "_reconsider"
+        reviewed, response = request_architecture_analysis(run_dir, review_id, review, review_schema, transport,
+            lambda value: validate(value, unresolved), phase="validation", response_name="epistemicCorrection",
+            max_tokens=8192, planning_mode=True, context_purpose="semantic normalization", pause_stage="Epistemic dependency correction")
+        preserve_planning_result(run_dir, step_id, review_id, reviewed, response, kind="epistemic_reconsideration", phase="validation")
+        corrected = {(item["scene_slot_id"], item["dependency_index"]): item for item in reviewed["decisions"]}
+        result = {"decisions": [corrected.get((item["scene_slot_id"], item["dependency_index"]), item) for item in result["decisions"]]}
+        failures = [item for item in reviewed["decisions"] if item["action"] == "unresolved"]
+        if failures:
+            state["terminal_reason"] = "Immutable content has unresolved knowledge contradictions: " + "; ".join(
+                f"{item['scene_slot_id']} {targets[(item['scene_slot_id'], item['dependency_index'])]['dependency']}: {item['reason']}"
+                for item in failures)
+            write_json(run_dir / ".staging" / f"{step_id}.epistemic-repair.json", state)
+            raise CathedralsError("Epistemic dependency correction", state["terminal_reason"], "continuity_impossibility")
     before = copy.deepcopy(state["overrides"])
-    learning, unresolved = [], []
+    learning = []
     for decision in sorted(result["decisions"], key=lambda item: (item["scene_slot_id"], -item["dependency_index"])):
         slot, index = decision["scene_slot_id"], decision["dependency_index"]
         if decision["action"] == "repair_declaration":
@@ -6490,14 +6566,10 @@ def repair_epistemic_dependencies(run_dir: Path, step_id: str, artistic: dict,
             dependencies[index:index + 1] = decision["replacement"]
         elif decision["action"] == "repair_knowledge":
             learning.append(targets[(slot, index)] | {"reason": decision["reason"], "evidence": decision["evidence"]})
-        else:
-            unresolved.append(decision["reason"])
     state["history"].append({"step_id": query, "decisions": result["decisions"], "before": before,
                              "after": copy.deepcopy(state["overrides"])})
     state["learning"] = learning
     write_json(run_dir / ".staging" / f"{step_id}.epistemic-repair.json", state)
-    if unresolved:
-        raise PausedError("Epistemic dependency correction", "Immutable content has an unresolved knowledge contradiction: " + "; ".join(unresolved))
     return learning
 
 
@@ -8404,8 +8476,7 @@ def scaffold_order(nodes):
 
 
 def scaffold_frontier(nodes):
-    admitted = {edge["target_case_id"] for node in nodes for edge in node["successors"]}
-    return sorted(node["node_id"] for node in nodes if any(case["case_id"] not in admitted for case in node["entry_cases"]))
+    return sorted(identifier for identifier, cases in scaffold_uncovered_cases(nodes).items() if cases)
 
 
 def scaffold_entry_routes(architecture, node):
@@ -8551,16 +8622,6 @@ def validate_scaffold_declaration(declaration):
             raise SchemaError(f"Malformed scaffold clause: {clause!r}. Return a plain condition or transformation, without serialized engine fields")
 
 
-def validate_scaffold_amendment(prior, amendment):
-    candidate = prior | amendment
-    validate_scaffold_declaration(candidate)
-    if scaffold_contract_signature(candidate) == scaffold_contract_signature(prior):
-        raise SchemaError("No-op scaffold amendment: the requested repair must change the contract")
-    if "guarantees" in amendment and not prior["guarantees"] and not candidate["guarantees"]:
-        raise SchemaError("Missing guarantees remain empty; changing other fields does not repair the missing exit guarantees")
-    return candidate
-
-
 def scaffold_prerequisite_requirements(obligation_graph, identifiers):
     obligations = {item["obligation_id"]: item for item in obligation_graph}
     pending, required = list(identifiers), set()
@@ -8652,7 +8713,7 @@ def compile_scaffold_supports(selection, case, guarantee_ids, genesis_ids):
         "reason": selection[requirement["requirement_id"]]["reason"]} for requirement in case["requirements"]]
 
 
-def scaffold_connection_schema(node, targets, genesis_ids, *, allow_amendment=False):
+def scaffold_connection_schema(node, targets, genesis_ids):
     evidence = set(genesis_ids) | {item["requirement_id"] for item in node["guarantees"]}
     fields = {}
     for target in targets:
@@ -8663,14 +8724,6 @@ def scaffold_connection_schema(node, targets, genesis_ids, *, allow_amendment=Fa
         "$defs": {"scaffoldEvidenceSupport": scaffold_support_value_schema(evidence)}, "required": ["connections"], "properties": {
         "connections": {"type": "object", "minProperties": 1, "maxProperties": 5,
             "additionalProperties": False, "properties": fields}}}
-    if allow_amendment:
-        repair = {"type": "object", "additionalProperties": False, "required": ["contract_issue"], "properties": {
-            "contract_issue": {"type": "object", "additionalProperties": False, "required": ["fields", "reason"], "properties": {
-                "fields": {"type": "array", "minItems": 1, "maxItems": 7, "uniqueItems": True,
-                    "items": {"enum": ["arc_id", "purpose", "intended_change", "entry_cases", "guarantees", "preserves"]}},
-                "reason": {"type": "string", "minLength": 1, "maxLength": 1200}}}}}
-        definitions = schema.pop("$defs")
-        return {"anyOf": [schema, repair], "$defs": definitions}
     return schema
 
 
@@ -8701,54 +8754,65 @@ def scaffold_opening_candidate(state, nodes):
     return opening
 
 
-def normalize_scaffold_repair_selectors(result):
-    if not isinstance(result, dict):
-        return result
-    result = copy.deepcopy(result)
-    def unique(items):
-        return list(dict.fromkeys(items)) if isinstance(items, list) and all(isinstance(item, str) for item in items) else items
-    for field in ("contract_repairs", "connection_repairs"):
-        if isinstance(result.get(field), dict):
-            result[field] = {identifier: unique(items) for identifier, items in result[field].items()}
-    issue = result.get("contract_issue")
-    if isinstance(issue, dict) and "fields" in issue:
-        issue["fields"] = unique(issue["fields"])
-    return result
+def scaffold_uncovered_cases(nodes):
+    admitted = {edge["target_case_id"] for node in nodes for edge in node["successors"]}
+    return {node["node_id"]: [case["case_id"] for case in node["entry_cases"] if case["case_id"] not in admitted]
+            for node in nodes}
 
 
-def review_scaffold_connections(run_dir, step, patch, frontier, contract_fields, mechanical_problem, transport):
-    identifiers = [node["node_id"] for node in patch["nodes"]]
-    source_ids = {identifier for node in patch["nodes"] for edge in node["successors"] for support in edge["supports"]
-        for identifier in support["genesis_source_ids"]}
-    source_ids.update(identifier for support in patch["opening_support"] for identifier in support["genesis_source_ids"])
+def scaffold_entry_budget(uncovered, selection, remaining):
+    counts = [len(cases) - int(selection.get(owner) in cases) for owner, cases in uncovered.items()]
+    if remaining == 0:
+        return int(not any(counts))
+    if max(counts, default=0) > remaining:
+        return 0
+    return max(0, min(5, remaining, 4 * remaining + 1 - sum(counts)))
+
+
+def review_scaffold_connections(run_dir, step, patch, frontier, transport):
+    nodes = {node["node_id"]: node for node in frontier + patch["nodes"]}
+    tasks = {}
+    source_ids = set()
+
+    def support_task(owner, case, support, guarantees, kind):
+        requirement = next(item for item in case["requirements"] if item["requirement_id"] == support["requirement_id"])
+        identifier = deterministic_id("scaffold_review", owner, kind, requirement["requirement_id"])
+        tasks[identifier] = {"kind": kind, "owner": owner, "case_id": case["case_id"], "requirement": requirement,
+            "support": support, "guarantees": [guarantees[key] for key in support["guarantee_ids"]]}
+        source_ids.update(support["genesis_source_ids"])
+
+    for node in patch["nodes"]:
+        owner = node["node_id"]
+        guarantees = {item["requirement_id"]: item["description"] for item in node["guarantees"]}
+        if guarantees or node["preserves"]:
+            for case in node["entry_cases"]:
+                identifier = deterministic_id("scaffold_review", owner, "contract", case["case_id"])
+                tasks[identifier] = {"kind": "contract", "owner": owner, "entry_case": case,
+                    "purpose": node["purpose"], "intended_change": node["intended_change"],
+                    "guarantees": guarantees, "preserves": node["preserves"]}
+        for edge in node["successors"]:
+            case = next(case for case in nodes[edge["to_node_id"]]["entry_cases"] if case["case_id"] == edge["target_case_id"])
+            for support in edge["supports"]:
+                support_task(owner, case, support, guarantees, "support")
+    if patch["opening_support"]:
+        opening = nodes[patch["opening_node_id"]]
+        for support in patch["opening_support"]:
+            support_task(opening["node_id"], opening["entry_cases"][0], support, {}, "opening")
+    if not tasks:
+        return []
     sources = retrieve_original_sources(run_dir, [{"sources": [{"artifact_id": identifier} for identifier in sorted(source_ids)]}],
         limit=None, strict=True, follow_sources=False) if source_ids else []
-    schema = {"type": "object", "additionalProperties": False,
-        "required": ["supported", "reason", "contract_repairs", "connection_repairs"], "properties": {
-            "supported": {"type": "boolean"}, "reason": {"type": "string", "minLength": 1},
-            "contract_repairs": {"type": "object", "additionalProperties": False, "properties": {
-                identifier: {"type": "array", "minItems": 1, "maxItems": len(contract_fields), "uniqueItems": True,
-                    "items": {"enum": list(contract_fields)}} for identifier in identifiers}},
-            "connection_repairs": {"type": "object", "additionalProperties": False, "properties": {
-                node["node_id"]: {"type": "array", "minItems": 1, "maxItems": 5, "uniqueItems": True,
-                    "items": {"enum": [edge["to_node_id"] for edge in node["successors"]]}} for node in patch["nodes"]}}}}
-    def validate(result):
-        repairs = bool(result["contract_repairs"] or result["connection_repairs"])
-        if result["supported"] and (repairs or mechanical_problem):
-            raise SchemaError("supported=true conflicts with requested repairs or a mechanical problem; return supported=false and identify the necessary repairs")
-        if not result["supported"] and not repairs:
-            raise SchemaError("Identify the specific uncommitted contract fields or predecessor connections needing correction")
+    schema = {"type": "object", "additionalProperties": False, "required": ["issues"], "properties": {
+        "issues": {"type": "object", "additionalProperties": False, "properties": {
+            identifier: {"type": "string", "minLength": 1} for identifier in tasks}}}}
     prompt = render_prompt(run_dir, "generation-scaffold-review.md", {"SCAFFOLD_CONTEXT": canonical_json({
-        "patch": patch, "existing_successors": [{key: value for key, value in node.items() if key != "successors"} for node in frontier],
-        "committed_genesis_sources": sources,
-        "mechanical_problem": mechanical_problem}).decode()})
+        "tasks": tasks, "committed_genesis_sources": sources}).decode()})
     query = step + "_review_" + sha256_bytes(prompt.encode())[:16]
-    result, response = request_architecture_analysis(run_dir, query, prompt, schema, transport, validator=validate,
+    result, response = request_architecture_analysis(run_dir, query, prompt, schema, transport,
         planning_mode=True, max_tokens=3072, pause_stage="Scaffold causal support",
-        system_prompt="Verify only causal support and compatibility in uncommitted planning. Return JSON only.",
-        result_normalizer=normalize_scaffold_repair_selectors)
+        system_prompt="Review only the supplied causal tasks. Return JSON only.")
     preserve_planning_result(run_dir, "architecture_core", query, result, response, kind="scaffold_connection_review")
-    return result
+    return [tasks[identifier] | {"reason": reason} for identifier, reason in sorted(result["issues"].items())]
 
 
 def prepare_scaffold_expansion(run_dir, state, core, targets, allocated, transport):
@@ -8756,23 +8820,21 @@ def prepare_scaffold_expansion(run_dir, state, core, targets, allocated, transpo
     path = run_dir / ".staging" / f"{step}.contracts.json"
     scope = read_json(run_dir / "run-manifest.json")["scope"]
     genesis = genesis_reference_catalog(run_dir)
-    frontier = [node for identifier in targets for node in state["nodes"] if node["node_id"] == identifier]
-    input_hash = sha256_bytes(canonical_json({"nodes": state["nodes"], "targets": targets, "allocated": allocated, "scope": scope}))
+    accepted = state["nodes"]
+    scene_count = sum(node["kind"] == "scene" for node in accepted)
+    input_hash = sha256_bytes(canonical_json([accepted, targets, allocated, scope]))
     declaration_schema = scaffold_declaration_schema(run_dir, 1, minimum=1)
-    fields = declaration_schema["properties"]["nodes"]["items"]["properties"]
     if path.exists():
         draft = read_json(path)
-        if draft.get("version") != 3 or draft["input_hash"] != input_hash:
+        if draft.get("version") != 4 or draft["input_hash"] != input_hash:
             raise IntegrityError("Scaffold contract checkpoint belongs to a different planner, frontier or allocation")
     else:
-        draft = {"version": 3, "input_hash": input_hash, "assignments": {}, "declarations": [], "revisions": {},
-            "connections": {}, "connection_locks": {}, "history": [], "feedback": {}, "pending": {},
-            "needs_guarantees": [], "last_repairs": {}, "batch_closed": False}
-        write_json(path, draft)
+        draft = {"version": 4, "input_hash": input_hash, "assignments": {}, "declarations": [], "revisions": {},
+            "bindings": {}, "repairs": {}, "pending": {}, "retired_targets": {}, "target_locks": {},
+            "rejected_evidence": {}, "history": [], "batch_closed": False}
     canon = committed_record(run_dir, "genesis") or {}
     common = {"scope": scope, "arcs": core["arcs"], "genesis_sources": genesis,
         "global_canon": {key: canon[key] for key in ("work_canon", "format_composition_law") if key in canon}}
-    replanned = set()
 
     def save():
         write_json(path, draft)
@@ -8783,248 +8845,311 @@ def prepare_scaffold_expansion(run_dir, state, core, targets, allocated, transpo
     def ask(kind, prompt, schema, *, pause_stage, **kwargs):
         query = step + "_" + kind + "_" + sha256_bytes(canonical_json([prompt, schema]))[:16]
         result, response = request_architecture_analysis(run_dir, query, prompt, schema, transport,
-            planning_mode=True, pause_stage=pause_stage, **kwargs)
+            planning_mode=True, pause_stage=pause_stage,
+            system_prompt="Perform the supplied scaffold planning task. Return only the requested JSON.", **kwargs)
         preserve_planning_result(run_dir, "architecture_core", query, result, response, kind="scaffold_" + kind.split("_")[0])
         return result
 
-    def clear_publication_check():
-        draft.pop("opening_input", None)
-        draft.pop("accepted_patch", None)
-
-    def invalidate_contract(identifier, old_node, new_node):
-        invalidated = [identifier]
-        draft["connections"].pop(identifier, None)
-        draft["connection_locks"].pop(identifier, None)
-        for consumer, assignment in list(draft["assignments"].items()):
-            if identifier not in assignment["targets"]:
-                continue
-            old_case = next(case for case in old_node["entry_cases"] if case["case_id"] == assignment["targets"][identifier])
-            descriptions = scaffold_contract_signature([item["description"] for item in old_case["requirements"]])
-            replacement = next((case for case in new_node["entry_cases"] if
-                scaffold_contract_signature([item["description"] for item in case["requirements"]]) == descriptions), None)
-            existing = draft["connection_locks"].get(consumer, {}) | draft["connections"].pop(consumer, {}).get("connections", {})
-            draft["connection_locks"][consumer] = {key: value for key, value in existing.items() if key != identifier}
-            if replacement is not None:
-                assignment["targets"][identifier] = replacement["case_id"]
-            else:
-                draft["assignments"].pop(consumer)
-                draft["pending"][consumer] = "A selected successor entry condition changed; reselect and redeclare this predecessor."
-            draft["feedback"][consumer] = "The successor contract changed; bind the current requirement IDs against their exact conditions."
-            invalidated.append(consumer)
-        clear_publication_check()
-        return invalidated
-
-    def replan(identifier, reason):
-        if identifier in replanned:
-            raise PausedError("Scaffold contract re-declaration", f"{identifier} remains unsupported after its bounded local re-declaration. "
-                "The latest contract and accepted unrelated work were retained. Last problem: " + reason)
-        replanned.add(identifier)
-        draft["pending"][identifier] = reason
-        draft["feedback"][identifier] = reason
-        draft["assignments"].pop(identifier, None)
-        draft["connections"].pop(identifier, None)
-        draft["connection_locks"].pop(identifier, None)
-        clear_publication_check()
+    def exhausted(owner, reason):
+        remaining = scope["possible_scene_count"] - scene_count - len(draft["declarations"])
+        draft["terminal_reason"] = (f"{owner} cannot complete its assignment within the repair limits. "
+            f"Remaining earlier scene slots: {remaining}. {reason}")
         save()
+        raise CathedralsError("Scaffold planning", draft["terminal_reason"], "budget_exhaustion")
 
-    def repair(review):
-        owners = set(review["contract_repairs"]) | set(review["connection_repairs"])
-        for identifier in sorted(owners):
-            names = review["contract_repairs"].get(identifier, [])
-            destinations = review["connection_repairs"].get(identifier, [])
-            signature = {"fields": sorted(names), "destinations": sorted(destinations)}
-            index = allocated.index(identifier)
-            prior = copy.deepcopy(draft["declarations"])
-            draft["feedback"][identifier] = review["reason"]
-            if "guarantees" in names and not prior[index]["guarantees"] and identifier not in draft["needs_guarantees"]:
-                draft["needs_guarantees"].append(identifier)
-            if identifier in draft["pending"]:
-                save()
-                continue
-            if draft["last_repairs"].get(identifier) == signature:
-                replan(identifier, review["reason"])
-                continue
-            invalidated = []
-            if names:
-                amendment_fields = {name: copy.deepcopy(fields[name]) for name in names}
-                if identifier in draft["needs_guarantees"]:
-                    amendment_fields["guarantees"] = copy.deepcopy(fields["guarantees"]) | {"minItems": 1}
-                schema = {"type": "object", "additionalProperties": False, "required": [identifier], "properties": {
-                    identifier: {"type": "object", "additionalProperties": False,
-                        "required": list(amendment_fields), "properties": amendment_fields}}}
-                def validate(result):
-                    validate_scaffold_amendment(prior[index], result[identifier])
-                known = frontier + compiled()[:index]
-                assignment = draft["assignments"][identifier]
-                prompt = ("Repair only these flagged fields of one uncommitted predecessor. Make an actual change. "
-                    "If guarantees are missing, add the promised exit conditions; changing preserves alone is insufficient. "
-                    "Write plain clauses without serialized engine IDs. This scene immediately precedes the selected entry cases, "
-                    "not necessarily the opening of the story. Do not turn Genesis premises into unwritten reader experiences.\n" +
-                    canonical_json(common | {"problem": review["reason"], "field_requests": {identifier: list(amendment_fields)},
-                        "contracts": {identifier: prior[index]}, "assignment": assignment,
-                        "successor_interfaces": scaffold_assigned_interfaces(assignment, known)}).decode())
-                try:
-                    amendments = ask("amend_" + identifier, prompt, schema, validator=validate,
-                        pause_stage="Scaffold contract amendment", max_tokens=6144)
-                except PausedError as error:
-                    if error.stage != "Scaffold contract amendment" or error.failure_class != "corrective_pause":
-                        raise
-                    replan(identifier, error.reason)
-                    continue
-                old_node = compiled()[index]
-                draft["declarations"][index] = validate_scaffold_amendment(prior[index], amendments[identifier])
-                draft["revisions"][identifier] = draft["revisions"].get(identifier, 0) + 1
-                invalidated = invalidate_contract(identifier, old_node, compiled()[index])
+    def retarget(owner, reason, locks=None, *, failed_conditions=()):
+        used = draft["repairs"].setdefault(owner, [])
+        if "retarget" in used:
+            exhausted(owner, reason)
+        used.append("retarget")
+        retired = draft["assignments"].pop(owner)["targets"]
+        failed = set(failed_conditions or draft["pending"].get(owner, {}).get("requirements", []))
+        if locks is None and failed:
+            locks = {node["node_id"]: case["case_id"] for node in accepted + compiled() for case in node["entry_cases"]
+                     if retired.get(node["node_id"]) == case["case_id"] and
+                     not failed.intersection(item["description"] for item in case["requirements"])}
+        draft["retired_targets"][owner] = retired
+        draft["target_locks"][owner] = locks or {}
+        draft["pending"][owner] = {"reason": reason, "requirements": []}
+
+    def replace(owner, reason, requirements=()):
+        used = draft["repairs"].setdefault(owner, [])
+        if "retarget" in used:
+            exhausted(owner, reason)
+        if "replace" in used:
+            retarget(owner, reason, failed_conditions=requirements)
+            return
+        used.append("replace")
+        draft["pending"][owner] = {"reason": reason, "requirements": sorted(set(requirements))}
+
+    def replace_declaration(index, declaration):
+        owner = allocated[index]
+        if index == len(draft["declarations"]):
+            draft["declarations"].append(declaration)
+            return
+        prior = compiled()[index]
+        draft["declarations"][index] = declaration
+        draft["revisions"][owner] = draft["revisions"].get(owner, 0) + 1
+        updated = compiled()[index]
+        guarantees = {item["description"]: item["requirement_id"] for item in updated["guarantees"]}
+        remap = {item["requirement_id"]: guarantees.get(item["description"]) for item in prior["guarantees"]}
+        for key, proof in list(draft["bindings"].get(owner, {}).items()):
+            evidence = [remap.get(identifier, identifier) for identifier in proof["evidence_ids"]]
+            if None in evidence:
+                del draft["bindings"][owner][key]
             else:
-                existing = draft["connection_locks"].get(identifier, {}) | draft["connections"].pop(identifier, {}).get("connections", {})
-                draft["connection_locks"][identifier] = {key: value for key, value in existing.items() if key not in destinations}
-                invalidated = [identifier]
-                clear_publication_check()
-            draft["last_repairs"][identifier] = signature
-            draft["history"].append({"review": review, "prior_declarations": prior,
-                "invalidated_connections": sorted(invalidated), "locked_connections": copy.deepcopy(draft["connection_locks"])})
-            draft["opening_feedback"] = review["reason"]
-            save()
+                proof["evidence_ids"] = list(dict.fromkeys(evidence))
+        draft["rejected_evidence"].pop(owner, None)
+        consumers = set(draft["assignments"]) | set(draft["target_locks"])
+        for consumer in sorted(consumers):
+            assignment = draft["assignments"].get(consumer)
+            locks = draft["target_locks"].get(consumer, {})
+            targets = assignment["targets"] if assignment else locks
+            if owner not in targets:
+                continue
+            old = next(case for case in prior["entry_cases"] if case["case_id"] == targets[owner])
+            descriptions = [item["description"] for item in old["requirements"]]
+            new = next((case for case in updated["entry_cases"]
+                if [item["description"] for item in case["requirements"]] == descriptions), None)
+            bindings = draft["bindings"].get(consumer, {})
+            rejected = draft["rejected_evidence"].get(consumer, {})
+            if new is None:
+                if assignment:
+                    retarget(consumer, f"{owner} changed the selected entry case.",
+                        {key: value for key, value in targets.items() if key != owner})
+                else:
+                    locks.pop(owner)
+            else:
+                targets[owner] = new["case_id"]
+                if owner in locks:
+                    locks[owner] = new["case_id"]
+            for offset, requirement in enumerate(old["requirements"]):
+                for values in (bindings, rejected):
+                    value = values.pop(requirement["requirement_id"], None)
+                    if value is not None and new is not None:
+                        values[new["requirements"][offset]["requirement_id"]] = value
+        draft["history"].append({"kind": "redeclaration", "owner": owner, "prior": prior})
 
-    for recovery in range(4):
-        binding_issue = None
-        for index, identifier in enumerate(allocated):
+    def bind(owner, node, interfaces):
+        bindings = draft["bindings"].setdefault(owner, {})
+        rejected = draft["rejected_evidence"].get(owner, {})
+        requirements = [item for target in interfaces for case in target["entry_cases"] for item in case["requirements"]]
+        guarantees = {item["description"]: item["requirement_id"] for item in node["guarantees"]}
+        outstanding = {}
+        for item in requirements:
+            identifier, description = item["requirement_id"], item["description"]
+            if identifier in bindings:
+                continue
+            if description in guarantees and identifier not in rejected:
+                bindings[identifier] = {"evidence_ids": [guarantees[description]], "reason": "The declared exit guarantees this condition."}
+            else:
+                outstanding[identifier] = description
+        if outstanding:
+            evidence = set(genesis) | set(guarantees.values())
+            choice = {"anyOf": [{"$ref": "#/$defs/scaffoldEvidenceSupport"}, {
+                "type": "object", "additionalProperties": False, "required": ["needs_guarantee"], "properties": {
+                    "needs_guarantee": {"type": "string", "minLength": 1}}}]}
+            schema = {"type": "object", "additionalProperties": False, "required": ["bindings"], "properties": {
+                "bindings": {"type": "object", "additionalProperties": False, "required": list(outstanding), "properties": {
+                    identifier: choice for identifier in outstanding}}},
+                "$defs": {"scaffoldEvidenceSupport": scaffold_support_value_schema(evidence)}}
+            prompt = render_prompt(run_dir, "generation-scaffold-connections.md", {"SCAFFOLD_CONTEXT": canonical_json({
+                "predecessor": node, "requirements": outstanding, "genesis_sources": genesis,
+                "rejected_evidence": {key: rejected[key] for key in outstanding if key in rejected}}).decode()})
+            result = ask("connect_" + owner, prompt, schema, pause_stage="Scaffold connections", max_tokens=6144)
+            missing = {}
+            for identifier, answer in result["bindings"].items():
+                if "needs_guarantee" in answer:
+                    missing[identifier] = answer["needs_guarantee"]
+                elif set(answer["evidence_ids"]) == set(rejected.get(identifier, [])):
+                    missing[identifier] = "Rebinding repeated the rejected evidence."
+                else:
+                    bindings[identifier] = answer
+            if missing:
+                reason = "; ".join(f"{key} ({outstanding[key]}): {value}" for key, value in missing.items())
+                replace(owner, reason, [outstanding[key] for key in missing])
+                return None
+        selection = {"connections": {target["node_id"]: {
+            "entry_case_id": target["entry_cases"][0]["case_id"],
+            "supports": {item["requirement_id"]: bindings[item["requirement_id"]]
+                for item in target["entry_cases"][0]["requirements"]}} for target in interfaces}}
+        save()
+        return compile_scaffold_connections(node, interfaces, selection, genesis)
+
+    if "accepted_patch" in draft:
+        patch = draft["accepted_patch"]
+        validate_scaffold(state | patch | {"nodes": accepted + patch["nodes"]}, scope, set(genesis), complete=patch["complete"])
+        return patch
+    if "terminal_reason" in draft:
+        raise CathedralsError("Scaffold planning", draft["terminal_reason"], "budget_exhaustion")
+    while True:
+        nodes = []
+        restart = False
+        for index, owner in enumerate(allocated):
             if index >= len(draft["declarations"]) and draft["batch_closed"]:
                 break
-            nodes = compiled()
-            known = frontier + nodes[:index]
-            if identifier not in draft["assignments"]:
-                locks = {key: value["entry_case_id"] for key, value in draft["connection_locks"].get(identifier, {}).items()}
-                schema = scaffold_target_schema(known, allow_finish=index > 0 and index == len(nodes), locks=locks)
-                context = common | {"source_node_id": identifier, "scenes_accepted": sum(node["kind"] == "scene" for node in state["nodes"]) + index,
-                    "remaining_batch_capacity": len(allocated) - index,
+            prefix = accepted + nodes
+            remaining = scope["possible_scene_count"] - scene_count - index - 1
+            uncovered = scaffold_uncovered_cases(prefix)
+            mandatory = {key for key, cases in uncovered.items() if len(cases) > remaining}
+            assignment = draft["assignments"].get(owner)
+            locks = {key: case for key, case in draft["target_locks"].get(owner, {}).items()
+                     if key not in mandatory or case in uncovered[key]}
+            visible = set(targets) | mandatory | set(locks) | {node["node_id"] for node in nodes}
+            if assignment:
+                visible.update(assignment["targets"])
+            # Include cases that can make progress even when the original frontier window has been filled.
+            active = sorted((key for key, cases in uncovered.items() if cases), key=lambda key: (-len(uncovered[key]), key))
+            visible.update(active[:5])
+            known = [node for node in prefix if node["node_id"] in visible]
+            pending = draft["pending"].get(owner)
+            if assignment is None:
+                schema = scaffold_target_schema(known, allow_finish=index > 0 and index == len(draft["declarations"]), locks=locks)
+                selection_schema = schema["properties"]["selection"]
+                target_fields = selection_schema.get("anyOf", [selection_schema])[0]["properties"]["targets"]
+                target_fields["required"] = sorted(set(locks) | mandatory)
+                for identifier in mandatory - set(locks):
+                    target_fields["properties"][identifier] = {"enum": uncovered[identifier]}
+                def validate_targets(result):
+                    if result["selection"] is None:
+                        return
+                    selection = result["selection"]["targets"]
+                    if selection == draft["retired_targets"].get(owner):
+                        raise SchemaError("Choose a different destination or entry case for the replacement assignment")
+                    if not scaffold_entry_budget(uncovered, selection, remaining):
+                        raise SchemaError(f"Assignment leaves insufficient capacity with {remaining} earlier scene slots. "
+                            f"Cover more of these pending entry cases: { {key: cases for key, cases in uncovered.items() if cases} }")
+                context = common | {"source_node_id": owner, "scenes_accepted": scene_count + index,
+                    "remaining_batch_capacity": len(allocated) - index, "remaining_earlier_scenes": remaining,
+                    "uncovered_cases": uncovered, "required_targets": sorted(mandatory),
                     "frontier_contracts": [{key: value for key, value in node.items() if key != "successors"} for node in known],
-                    "correction": draft["feedback"].get(identifier), "previous_contract": draft["declarations"][index] if index < len(nodes) else None}
+                    "correction": pending, "previous_targets": draft["retired_targets"].get(owner)}
                 prompt = render_prompt(run_dir, "generation-scaffold-targets.md", {"SCAFFOLD_CONTEXT": canonical_json(context).decode()})
-                selected = ask("targets_" + identifier, prompt, schema, pause_stage="Scaffold targets", max_tokens=4096)
-                if selected["selection"] is None:
+                try:
+                    selected = ask("targets_" + owner, prompt, schema, validator=validate_targets,
+                        pause_stage="Scaffold targets", max_tokens=4096)
+                except PausedError as error:
+                    if error.failure_class == "corrective_pause" and owner in draft["retired_targets"]:
+                        exhausted(owner, error.reason)
+                    raise
+                assignment = selected["selection"]
+                if assignment is None:
                     draft["batch_closed"] = True
                     save()
                     break
-                draft["assignments"][identifier] = selected["selection"]
+                draft["assignments"][owner] = assignment
+                draft["target_locks"][owner] = locks
                 save()
-            assignment = draft["assignments"][identifier]
+            maximum = scaffold_entry_budget(uncovered, assignment["targets"], remaining)
+            if not maximum:
+                retarget(owner, f"The selected cases no longer fit in {remaining} earlier slots. Pending cases: {uncovered}")
+                restart = True
+                break
             interfaces = scaffold_assigned_interfaces(assignment, known)
-            if index == len(nodes) or identifier in draft["pending"]:
+            prior = draft["declarations"][index] if index < len(draft["declarations"]) else None
+            if prior is not None and not pending and (len(prior["entry_cases"]) > maximum or
+                    remaining == 0 and not prior["entry_cases"][0]["requirements"]):
+                replace(owner, f"Use at most {maximum} entry cases within {remaining} earlier slots.")
+                restart = True
+                break
+            if prior is None or pending:
                 schema = copy.deepcopy(declaration_schema)
-                if identifier in draft["needs_guarantees"]:
-                    schema["properties"]["nodes"]["items"]["properties"]["guarantees"]["minItems"] = 1
-                prior = copy.deepcopy(draft["declarations"])
-                def validate(result):
-                    compile_scaffold_declarations(result["nodes"], [identifier])
-                    if index < len(prior) and scaffold_contract_signature(result["nodes"][0]) == scaffold_contract_signature(prior[index]):
-                        raise SchemaError("No-op scaffold re-declaration: replace the deficient contract to fulfill its backward assignment")
-                prompt = render_prompt(run_dir, "generation-scaffold-declarations.md", {"SCAFFOLD_CONTEXT": canonical_json(common | {
-                    "source_node_id": identifier, "assignment": assignment, "successor_interfaces": interfaces,
-                    "scenes_accepted": sum(node["kind"] == "scene" for node in state["nodes"]) + index, "allocated_capacity": 1,
-                    "previous_contract": prior[index] if index < len(prior) else None, "correction": draft["pending"].get(identifier)}).decode()})
-                declared = ask("declare_" + identifier, prompt, schema, validator=validate,
-                    pause_stage="Scaffold declarations", temperature=0.5, max_tokens=6144)
-                if index == len(nodes):
-                    draft["declarations"].append(declared["nodes"][0])
-                else:
-                    old_node = nodes[index]
-                    draft["declarations"][index] = declared["nodes"][0]
-                    draft["revisions"][identifier] = draft["revisions"].get(identifier, 0) + 1
-                    invalidated = invalidate_contract(identifier, old_node, compiled()[index])
-                    draft["history"].append({"kind": "redeclaration", "node_id": identifier, "prior_declarations": prior,
-                        "invalidated_connections": sorted(invalidated)})
-                    draft["last_repairs"].pop(identifier, None)
-                draft["pending"].pop(identifier, None)
-                save()
-                nodes = compiled()
-            node = nodes[index]
-            schema = scaffold_connection_schema(node, interfaces, genesis, allow_amendment=True)
-            connection_fields = schema["anyOf"][0]["properties"]["connections"]
-            connection_fields["required"] = list(assignment["targets"])
-            for target_id, value in draft["connection_locks"].get(identifier, {}).items():
-                if target_id not in connection_fields["properties"]:
-                    raise IntegrityError("Locked scaffold connection is outside the selected successor interfaces")
-                connection_fields["properties"][target_id] = {"const": value}
-            if identifier in draft["connections"]:
-                selected = draft["connections"][identifier]
-                validate_json_schema(selected, schema)
-            else:
-                prompt = render_prompt(run_dir, "generation-scaffold-connections.md", {"SCAFFOLD_CONTEXT": canonical_json({
-                    "predecessor": node, "assignment": assignment, "successor_interfaces": interfaces,
-                    "genesis_sources": genesis, "correction": draft["feedback"].get(identifier)}).decode()})
-                selected = ask("connect_" + identifier, prompt, schema, pause_stage="Scaffold connections", max_tokens=6144,
-                    result_normalizer=normalize_scaffold_repair_selectors)
-                if "contract_issue" in selected:
-                    binding_issue = {"supported": False, "reason": selected["contract_issue"]["reason"],
-                        "contract_repairs": {identifier: selected["contract_issue"]["fields"]}, "connection_repairs": {}}
+                fields = schema["properties"]["nodes"]["items"]["properties"]
+                fields["entry_cases"]["maxItems"] = maximum
+                if remaining == 0:
+                    fields["entry_cases"]["items"]["properties"]["requirements"]["minItems"] = 1
+                required = pending["requirements"] if pending else []
+                if len(required) > fields["guarantees"]["maxItems"]:
+                    retarget(owner, f"The assignment requires {len(required)} exit guarantees, exceeding the contract limit.")
+                    restart = True
                     break
-                draft["connections"][identifier] = selected
+                def validate_declaration(result):
+                    if "nodes" in result:
+                        compile_scaffold_declarations(result["nodes"], [owner])
+                if pending:
+                    schema = {"anyOf": [schema, {"type": "object", "additionalProperties": False,
+                        "required": ["unworkable"], "properties": {"unworkable": {"type": "string", "minLength": 1}}}]}
+                prompt = render_prompt(run_dir, "generation-scaffold-declarations.md", {"SCAFFOLD_CONTEXT": canonical_json(common | {
+                    "source_node_id": owner, "assignment": assignment, "successor_interfaces": interfaces,
+                    "scenes_accepted": scene_count + index, "allocated_capacity": 1, "maximum_entry_cases": maximum,
+                    "opening_required": remaining == 0, "required_exit_guarantees": required,
+                    "previous_contract": prior, "correction": pending}).decode()})
+                try:
+                    declared = ask("declare_" + owner, prompt, schema, validator=validate_declaration,
+                        pause_stage="Scaffold declarations", temperature=0.5, max_tokens=6144)
+                except PausedError as error:
+                    if error.failure_class != "corrective_pause":
+                        raise
+                    retarget(owner, error.reason)
+                    restart = True
+                    break
+                reason = declared.get("unworkable")
+                if not reason and prior:
+                    if scaffold_contract_signature(prior) == scaffold_contract_signature(declared["nodes"][0]):
+                        reason = "Replacement repeated the deficient predecessor contract."
+                if not reason and not set(required).issubset(declared["nodes"][0]["guarantees"]):
+                    reason = f"Replacement omitted required exit guarantees: {required}"
+                if reason:
+                    retarget(owner, reason)
+                    restart = True
+                    break
+                replace_declaration(index, declared["nodes"][0])
+                draft["pending"].pop(owner, None)
                 save()
-        else:
-            draft["batch_closed"] = True
+            node = bind(owner, compiled()[index], interfaces)
+            if node is None:
+                restart = True
+                break
+            nodes.append(node)
+        if restart:
             save()
-        if binding_issue is not None:
-            review = binding_issue
-            draft["last_review"] = {"reason": review["reason"], "revisions": copy.deepcopy(draft["revisions"])}
-            save()
-            if recovery < 3:
-                repair(review)
             continue
-        nodes = [compile_scaffold_connections(node, frontier + compiled()[:index], draft["connections"][node["node_id"]], genesis)
-            for index, node in enumerate(compiled())]
+
         patch = {"nodes": nodes, "complete": False, "opening_node_id": None, "opening_support": []}
         opening = scaffold_opening_candidate(state, nodes)
-        if opening is not None:
+        remaining = scope["possible_scene_count"] - scene_count - len(nodes)
+        if opening:
             case = opening["entry_cases"][0]
-            exhausted = len([node for node in state["nodes"] + nodes if node["kind"] == "scene"]) == scope["possible_scene_count"]
-            opening_schema = {"type": "object", "additionalProperties": False, "required": ["opening"], "properties": {
-                "opening": {"type": "object", "additionalProperties": False, "required": ["supports"],
-                    "properties": {"supports": scaffold_support_selection_schema(case, genesis)}}}}
-            if not exhausted:
-                opening_schema["properties"]["opening"] = {"anyOf": [opening_schema["properties"]["opening"], {"type": "null"}]}
-            signature = sha256_bytes(canonical_json(patch))
-            if draft.get("opening_input") != signature:
-                prompt = ("Decide whether this structurally eligible uncommitted opening is the earned beginning of this work. "
-                    "Return opening=null to keep planning earlier scenes when capacity remains. To finish, support every entry "
-                    "requirement with supplied Genesis evidence only. Do not invent events or claim plans as history.\n" +
-                    canonical_json({"opening": opening, "remaining_scenes": scope["possible_scene_count"] - sum(node["kind"] == "scene" for node in state["nodes"] + nodes),
-                        "genesis": committed_record(run_dir, "genesis"), "genesis_sources": genesis,
-                        "correction": draft.get("opening_feedback")}).decode())
-                query = step + "_opening_" + sha256_bytes(prompt.encode())[:16]
-                result, response = request_architecture_analysis(run_dir, query, prompt, opening_schema, transport,
-                    planning_mode=True, max_tokens=4096, pause_stage="Scaffold opening")
-                preserve_planning_result(run_dir, "architecture_core", query, result, response, kind="scaffold_opening")
-                draft |= {"opening_input": signature, "opening": result["opening"]}
-                write_json(path, draft)
-            if draft["opening"] is not None:
-                validate_json_schema({"opening": draft["opening"]}, opening_schema)
+            supports = {"type": "object", "additionalProperties": False, "required": ["supports"],
+                "properties": {"supports": scaffold_support_selection_schema(case, genesis)}}
+            schema = {"type": "object", "additionalProperties": False, "required": ["opening"], "properties": {
+                "opening": {"anyOf": [supports, {"type": "null"}]}}}
+            prompt = ("Ground this opening in supplied Genesis sources. Return opening=null if its entry conditions cannot be established.\n" +
+                canonical_json({"opening": opening, "remaining_scenes": remaining, "genesis_sources": genesis}).decode())
+            result = ask("opening", prompt, schema, pause_stage="Scaffold opening", max_tokens=4096)
+            if result["opening"] is not None:
                 patch |= {"complete": True, "opening_node_id": opening["node_id"],
-                    "opening_support": compile_scaffold_supports(draft["opening"]["supports"], case, set(), set(genesis))}
-        problem = None
-        try:
-            validate_scaffold(state | {"nodes": state["nodes"] + nodes, "opening_node_id": patch["opening_node_id"],
-                "opening_support": patch["opening_support"]}, scope, set(genesis), complete=patch["complete"])
-        except SchemaError as error:
-            problem = error.reason
-        if draft.get("accepted_patch") == patch:
-            if problem:
-                raise IntegrityError("Accepted scaffold checkpoint is no longer structurally valid: " + problem)
-            return patch
-        review = review_scaffold_connections(run_dir, step, patch, frontier,
-            declaration_schema["properties"]["nodes"]["items"]["properties"], problem, transport)
-        if review["supported"]:
+                    "opening_support": compile_scaffold_supports(result["opening"]["supports"], case, set(), set(genesis))}
+            elif remaining == 0:
+                replace(opening["node_id"], f"Ground opening case {case['case_id']} in supplied Genesis evidence.")
+                save()
+                continue
+        validate_scaffold(state | patch | {"nodes": accepted + nodes}, scope, set(genesis), complete=patch["complete"])
+        issues = review_scaffold_connections(run_dir, step, patch, accepted, transport)
+        opening_issues = [item for item in issues if item["kind"] == "opening"]
+        if opening_issues and remaining:
+            patch |= {"complete": False, "opening_node_id": None, "opening_support": []}
+            issues = [item for item in issues if item["kind"] != "opening"]
+            validate_scaffold(state | patch | {"nodes": accepted + nodes}, scope, set(genesis))
+        if not issues:
             draft["accepted_patch"] = patch
-            write_json(path, draft)
+            save()
             return patch
-        draft["last_review"] = {"reason": review["reason"], "revisions": copy.deepcopy(draft["revisions"])}
+        for owner in sorted({item["owner"] for item in issues}):
+            defects = [item for item in issues if item["owner"] == owner]
+            reason = canonical_json(defects).decode()
+            failed = [item for item in defects if item["kind"] == "support"]
+            for item in failed:
+                identifier = item["requirement"]["requirement_id"]
+                proof = draft["bindings"][owner].pop(identifier)
+                draft["rejected_evidence"].setdefault(owner, {})[identifier] = proof["evidence_ids"]
+            used = draft["repairs"].setdefault(owner, [])
+            if len(failed) == len(defects) and "rebind" not in used:
+                used.append("rebind")
+            else:
+                replace(owner, reason, [item["requirement"]["description"] for item in failed])
+        draft["history"].append({"kind": "review", "issues": issues})
         save()
-        if recovery < 3:
-            repair(review)
-    last = draft["last_review"]
-    raise PausedError("Scaffold connections", "Four scaffold repair cycles did not establish a valid expansion in this invocation. "
-        f"Last evaluated revisions: {last['revisions']}; pending declarations: {sorted(draft['pending'])}. "
-        "Accepted unrelated work was retained. Last problem: " + last["reason"])
 
 
 def prepare_causal_scaffold(run_dir, core, transport):
@@ -9205,10 +9330,11 @@ def validate_scaffold_reader_states(architecture, content, destination):
                 apply_reader_effects(choice["state_effects"], after)
                 arrivals.setdefault(target, {})[canonical_json(after).decode()] = after
                 if len(arrivals[target]) > 128:
-                    raise PausedError("Scaffold state verification", f"{target} has more than 128 distinct incoming states; "
-                        "verification retained the authored work and stopped without dropping paths")
+                    raise CathedralsError("Scaffold state verification", f"{target} has more than 128 distinct incoming states. "
+                        "This exceeds the verification budget for the authored routes.", "budget_exhaustion")
         if reached != required:
             raise SchemaError(f"Scaffold exits from {slot} are never playable: {', '.join(sorted(required - reached))}")
+    return arrivals
 
 
 def scaffold_local_contract(architecture, plan):
@@ -10629,7 +10755,7 @@ def probe_execution_policy(base_url, model, transport, output_fn=print):
     validate_json_schema(parse_structured_content(content), schema)
     output_fn(f"Retrieval mode: {mode} (synthetic structured metadata check passed).")
     return {"bounded_planning": True, "scoped_sources": True, "retrieval_mode": mode,
-        "max_tool_rounds": 2, "max_tool_calls": 8, "completion_contract_version": 1, "scaffold_planning_version": 3}, artifacts
+        "max_tool_rounds": 2, "max_tool_calls": 8, "completion_contract_version": 1, "scaffold_planning_version": 4}, artifacts
 
 
 def archive_preflight_probes(run_dir, artifacts):

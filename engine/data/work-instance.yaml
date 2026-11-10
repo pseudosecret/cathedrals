@@ -452,7 +452,7 @@ generation_budget:
   max_prepared_context_tokens: 49152 # Legacy cap; normal input target for completion-contract v1.
   normal_prepared_context_tokens: 49152
   completion_contract_version: 1
-  scaffold_planning_version: 3
+  scaffold_planning_version: 4
   scaffold_expansion_node_maximum: 4
   scaffold_branch_destination_maximum: 5
   scaffold_reader_states_per_node_maximum: 128

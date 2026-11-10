@@ -64,4 +64,5 @@ Return the one-ending packet chunk now.
 For scaffold planning, the local outcome contract governs this ending. Premature
 endings need their own earned entry conditions; they do not inherit every final
 revelation as a prerequisite. Endings are terminal: choices=[],
-redirect_destination=null. Respect every admitted alternative entry case.
+redirect_destination=null. Respect every admitted alternative entry case and
+ensure entry_conditions admit every state listed in REACHABLE READER STATES ON ENTRY.
