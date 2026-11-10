@@ -2,12 +2,13 @@
 
 ## Backward Scaffold Policy
 
-New runs freeze scaffold_planning_version=2. After macro intentions, seed terminal
+New runs freeze scaffold_planning_version=3. After macro intentions, seed terminal
 outcomes and expand earlier scenes in checkpointed groups of at most four. Validate
 causal support locally. Linear chapters have one successor; branches have two to
 five. Final and premature endings are terminal, with route-specific entry cases.
-The engine assigns declaration IDs before requesting connections from closed
-successor interfaces. Each connection, draft amendment and audit task is
+The engine/model first selects concrete successor entry cases automatically,
+then declares one immediate predecessor, assigns its IDs and binds evidence to
+those selected cases. Up to four such tasks interleave within a batch. Each connection, draft amendment and audit task is
 checkpointed. Only a single Genesis-grounded opening closes the frontier. Compile technical
 slots, authored-exit requirements, actual scope, and writing dependencies afterward.
 Scene count is a ceiling, not a requirement to fill. Write prose forward; audit hard
@@ -507,7 +508,7 @@ one scene and then the next. The root README is not edited or silently redefined
 ## Bounded execution policy
 
 Every current manifest freezes bounded planning, scoped sources, completion contract
-version 1 and scaffold planning version 2. Engine-allocated layout and coherent
+version 1 and scaffold planning version 3. Engine-allocated layout and coherent
 record batches precede scaffold compilation. Up to four records
 are authored per batch; accepted fields are checkpointed. Scoped contexts retain
 frozen law, global canon, relevant entities, obligations and full mandatory proof.

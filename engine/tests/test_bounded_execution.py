@@ -88,7 +88,7 @@ class BoundedExecutionTests(unittest.TestCase):
             policy, artifacts = RUNNER.probe_execution_policy("http://offline.invalid", "offline", transport, lambda _: None)
             self.assertEqual(policy["retrieval_mode"], mode)
             self.assertEqual(policy["completion_contract_version"], 1)
-            self.assertEqual(policy["scaffold_planning_version"], 2)
+            self.assertEqual(policy["scaffold_planning_version"], 3)
             self.assertEqual(len(artifacts), 2)
             self.assertNotIn("tools", transport.call_args.args[2])
         RUNNER.archive_preflight_probes(self.run, artifacts)

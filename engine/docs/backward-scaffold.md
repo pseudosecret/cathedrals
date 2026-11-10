@@ -1,6 +1,6 @@
 # Backward causal scaffold
 
-New preflight policies freeze `scaffold_planning_version: 2`. The saved causal
+New preflight policies freeze `scaffold_planning_version: 3`. The saved causal
 scaffold remains version 1; the planning response interface is separately versioned. These runs seed
 terminal outcomes in pages of at most four, then expand predecessors in groups of
 at most four. The existing derived ending ceiling remains in force; there is no
@@ -14,27 +14,45 @@ IDs. These are planned contracts, separate from committed facts and character
 knowledge. Endings can be premature or final, with one or multiple incoming paths.
 They are terminal under this policy. Browser history and `start_over` are separate.
 
-Version 2 uses two stages. The model first declares narrative contracts without
-node, entry-case, requirement, or guarantee IDs. The engine assigns IDs by owner,
-ordinal and draft revision. It then requests connections per predecessor using
-closed schemas: destination keys fix the node, entry-case alternatives fix its
-requirements, and each requirement accepts only that predecessor's guarantee IDs
-or known Genesis sources. Sources cannot be empty for a required support. The evidence selector is stored
-once in a shared schema definition rather than repeated for every requirement. A
-predecessor may target existing frontier nodes or earlier declarations in the batch,
-so same-batch cycles cannot be represented. Duplicate JSON keys are rejected.
+Version 3 selects targets before drafting each predecessor. A closed-schema mapping
+selects one to five known destination/entry-case pairs and a concise causal job.
+The engine/model chooses these automatically; there is no human target-selection
+step. It then authors one contract, assigns its IDs, and binds evidence to exactly
+those selected cases. These stages interleave for up to four scenes, so a later
+predecessor can target an earlier declaration in the same batch. The model can end
+a batch after its first scene rather than fill unused capacity.
 
-Contracts and accepted connections are checkpointed in
-`.staging/scaffold_expand_NNNNN.contracts.json` before the next request. A failed
-connection does not redeclare scenes. Missing guarantees can be reported explicitly
-as `contract_issue`, followed by an amendment restricted to the flagged fields.
-Causal review may also select particular faulty source-to-destination connections.
-Other destinations from that predecessor are locked to their accepted values.
-Amending a contract creates a new draft revision and invalidates only its own
-connections and affected consumers; unrelated connections remain available.
-Four review rounds per invocation bound this recovery. The latest amendments and
-all accepted work survive a pause. No committed contract or literary bytes are
-changed by these draft repairs.
+Contracts contain no authored declaration IDs. The engine assigns IDs by owner,
+ordinal and revision. Binding schemas fix destination keys and the selected entry
+case, and accept only predecessor guarantee IDs or supplied Genesis sources for
+its requirements. The shared evidence definition remains bounded. Future and self
+references cannot be selected; duplicate JSON keys remain invalid.
+
+Target assignments, declarations and connections are separate checkpoints in
+`.staging/scaffold_expand_NNNNN.contracts.json` (checkpoint version 3). Each request
+is keyed by its actual prompt and schema. Interruptions replay completed responses
+without repeating their usage. Old checkpoint formats use their saved launcher;
+there is no in-process migration.
+
+An unchanged or whitespace-only amendment cannot advance a revision. A requested
+repair of missing guarantees cannot leave those guarantees empty while changing
+other fields. Punctuation-only clauses, serialized engine fields inside clauses,
+and identical alternative entry cases are rejected before acceptance, including
+in terminal outcomes. Empty guarantees still remain valid for scenes whose work
+needs no new hard fact.
+
+Causal review can amend only flagged fields or rebind faulty connections, preserving
+unrelated destinations. When focused repair is ineffective, one bounded local
+re-declaration per failed node per invocation can choose new targets and replace
+that uncommitted contract. Its node ID stays fixed. Only a validated change creates
+a revision. Unchanged successor conditions can be remapped to new engine-owned case
+IDs without redrafting consumers; changed conditions require affected consumers to
+reselect and redeclare. Other contracts and raw responses remain unchanged.
+
+Four repair cycles per invocation and the existing frozen request/cumulative budgets
+bound recovery. The final cycle does not issue another unreviewed amendment. Pause
+diagnostics identify the last evaluated revisions and any pending declarations.
+No committed contract or literary bytes are changed by these draft repairs.
 
 Repair field/destination selectors are treated as sets: exact repeated strings are
 removed before schema validation, preserving their first-occurrence order. This
@@ -88,7 +106,7 @@ authored exit. Ending assignments allow no story choices or redirects. Reader-st
 verification follows all distinct reachable states, including both sides of a merge;
 more than 128 states at a node pauses verification without dropping paths.
 
-Version 2 source audits use engine-owned task IDs. Each task fixes one guarantee
+Source audits continue to use engine-owned task IDs. Each task fixes one guarantee
 or preserved condition, entry case, incoming route, and permitted source list.
 The model returns only its support judgment and exact quotations. Pages contain at
 most eight tasks; completed responses are ledgered and reused on resume. Results
@@ -115,7 +133,8 @@ hashes. Downstream support loads those immutable receipts and verifies their
 quotations against original source units. Staging copies are diagnostic conveniences.
 
 Implementation: root `cathedrals`; protocol definitions in
-`engine/data/generation-protocol.schema.json`; expansion prompt in
+`engine/data/generation-protocol.schema.json`; target selection in
+`engine/prompts/generation-scaffold-targets.md`; expansion prompts in
 `engine/prompts/generation-scaffold-declarations.md` and
 `engine/prompts/generation-scaffold-connections.md`. Regression definitions are in
 `engine/tests/test_backward_scaffold.py` and `engine/tests/test_scaffold_compiler.py`, covering mixed linear/branch structures,
@@ -127,8 +146,17 @@ duplicate usage. The selector/context repair passed all 323 offline tests with
 network access blocked; no live generation or existing run archive was changed.
 
 Offline imports and synthetic tests are authorized for engine cleanup, with network
-access blocked. The acceptance suite exercises a current version 2 generation,
+access blocked. The acceptance suite exercises a current version 3 generation,
 interruption/resume and complete static publication using a synthetic provider.
 It makes no claim of live-model literary success. Older runs require their original
 saved launcher; the current engine does not migrate their records or fall back to
 obsolete in-process planning paths.
+
+Target-first repair verification: all 336 offline tests passed with network access
+blocked. The 13 tests in `engine/tests/test_scaffold_targets.py` cover target/case
+ownership, chapters and branches, short batches, malformed clauses, ineffective
+amendments, bounded local re-declaration, preservation of unrelated branches and
+exactly-once replay after target, declaration and amendment checkpoint interruptions.
+The full suite also includes the current 30-scene publication/resume rehearsal and
+existing 150-scene static publication and 5,000-scene structural checks. No live
+model call or change to an existing attempt was part of this verification.

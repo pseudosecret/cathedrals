@@ -40,7 +40,7 @@ DEFAULT_LM_STUDIO_URL = "http://127.0.0.1:1234"
 PROTOCOL_VERSION = "6.0"
 CURRENT_EXECUTION_POLICY = {
     "bounded_planning": True, "scoped_sources": True, "completion_contract_version": 1,
-    "scaffold_planning_version": 2, "retrieval_mode": "automatic", "max_tool_rounds": 2, "max_tool_calls": 8,
+    "scaffold_planning_version": 3, "retrieval_mode": "automatic", "max_tool_rounds": 2, "max_tool_calls": 8,
 }
 BASE_OUTPUT_TOKENS = 10900
 EXPANDED_OUTPUT_TOKENS = 21800
@@ -8524,11 +8524,48 @@ def scaffold_declaration_schema(run_dir, maximum, *, seed=False, minimum=1):
     return {"type": "object", "additionalProperties": False, "required": list(properties), "properties": properties}
 
 
+def scaffold_contract_signature(value):
+    if isinstance(value, str):
+        return " ".join(value.split())
+    if isinstance(value, list):
+        return [scaffold_contract_signature(item) for item in value]
+    if isinstance(value, dict):
+        return {key: scaffold_contract_signature(item) for key, item in value.items()}
+    return value
+
+
+def validate_scaffold_declaration(declaration):
+    clauses = [declaration["purpose"], declaration["intended_change"], *declaration["guarantees"], *declaration["preserves"]]
+    signatures = []
+    for case in declaration["entry_cases"]:
+        clauses.extend(case["requirements"])
+        signature = sorted(scaffold_contract_signature(case["requirements"]))
+        if signature in signatures:
+            raise SchemaError("Duplicate scaffold entry cases: alternatives must describe distinct sufficient conditions")
+        signatures.append(signature)
+    for clause in clauses:
+        inspected = re.sub(r'\\+(?=["\'])', '', clause)
+        if not any(character.isalnum() for character in clause) or re.search(
+                r'''\b(?:node_id|case_id|requirement_id|guarantee_id)["']\s*:''', inspected):
+            raise SchemaError(f"Malformed scaffold clause: {clause!r}. Return a plain condition or transformation, without serialized engine fields")
+
+
+def validate_scaffold_amendment(prior, amendment):
+    candidate = prior | amendment
+    validate_scaffold_declaration(candidate)
+    if scaffold_contract_signature(candidate) == scaffold_contract_signature(prior):
+        raise SchemaError("No-op scaffold amendment: the requested repair must change the contract")
+    if "guarantees" in amendment and not prior["guarantees"] and not candidate["guarantees"]:
+        raise SchemaError("Missing guarantees remain empty; changing other fields does not repair the missing exit guarantees")
+    return candidate
+
+
 def compile_scaffold_declarations(declarations, allocated, *, seed=False, revisions=None):
     if not 1 <= len(declarations) <= len(allocated):
         raise SchemaError("Scaffold declarations exceed their allocated capacity")
     result = []
     for identifier, declaration in zip(allocated, declarations):
+        validate_scaffold_declaration(declaration)
         prefix = f"{identifier}_r{(revisions or {}).get(identifier, 0):03d}"
         cases = []
         for index, case in enumerate(declaration["entry_cases"], 1):
@@ -8543,6 +8580,28 @@ def compile_scaffold_declarations(declarations, allocated, *, seed=False, revisi
                 for index, text in enumerate(declaration["guarantees"], 1)], "preserves": declaration["preserves"],
             "successors": [], "prerequisite_obligation_ids": declaration["prerequisite_obligation_ids"] if seed else []})
     return result
+
+
+def scaffold_target_schema(targets, *, allow_finish=False, locks=None):
+    fields = {node["node_id"]: {"enum": [case["case_id"] for case in node["entry_cases"]]} for node in targets}
+    for identifier, case in (locks or {}).items():
+        if identifier not in fields or case not in fields[identifier]["enum"]:
+            raise IntegrityError("Locked scaffold target is outside the current interfaces")
+        fields[identifier] = {"const": case}
+    selection = {"type": "object", "additionalProperties": False, "required": ["targets", "causal_job"], "properties": {
+        "targets": {"type": "object", "additionalProperties": False, "minProperties": 1, "maxProperties": 5,
+            "required": list(locks or {}), "properties": fields},
+        "causal_job": {"type": "string", "minLength": 1, "maxLength": 1200}}}
+    return {"type": "object", "additionalProperties": False, "required": ["selection"], "properties": {
+        "selection": {"anyOf": [selection, {"type": "null"}]} if allow_finish else selection}}
+
+
+def scaffold_assigned_interfaces(assignment, targets):
+    validate_json_schema({"selection": assignment}, scaffold_target_schema(targets))
+    return [{key: ([case for case in node["entry_cases"] if case["case_id"] == assignment["targets"][node["node_id"]]]
+                   if key == "entry_cases" else value)
+             for key, value in node.items() if key != "successors"}
+            for node in targets if node["node_id"] in assignment["targets"]]
 
 
 def scaffold_support_value_schema(evidence_ids):
@@ -8665,117 +8724,228 @@ def review_scaffold_connections(run_dir, step, patch, frontier, contract_fields,
     return result
 
 
-def prepare_scaffold_expansion_v2(run_dir, state, core, targets, allocated, transport):
+def prepare_scaffold_expansion(run_dir, state, core, targets, allocated, transport):
     step = f"scaffold_expand_{state['round'] + 1:05d}"
     path = run_dir / ".staging" / f"{step}.contracts.json"
     scope = read_json(run_dir / "run-manifest.json")["scope"]
     genesis = genesis_reference_catalog(run_dir)
-    by_id = {node["node_id"]: node for node in state["nodes"]}
-    frontier = [by_id[identifier] for identifier in targets]
+    frontier = [node for identifier in targets for node in state["nodes"] if node["node_id"] == identifier]
     input_hash = sha256_bytes(canonical_json({"nodes": state["nodes"], "targets": targets, "allocated": allocated, "scope": scope}))
-    declaration_schema = scaffold_declaration_schema(run_dir, len(allocated))
+    declaration_schema = scaffold_declaration_schema(run_dir, 1, minimum=1)
+    fields = declaration_schema["properties"]["nodes"]["items"]["properties"]
     if path.exists():
         draft = read_json(path)
-        if draft["input_hash"] != input_hash:
-            raise IntegrityError("Scaffold contract checkpoint belongs to a different frontier or allocation")
+        if draft.get("version") != 3 or draft["input_hash"] != input_hash:
+            raise IntegrityError("Scaffold contract checkpoint belongs to a different planner, frontier or allocation")
     else:
-        print(f"Backward scaffold: declaring up to {len(allocated)} predecessor contracts", file=sys.stderr)
-        admitted = {edge["target_case_id"] for node in state["nodes"] for edge in node["successors"]}
-        context = {"scope": scope, "scenes_accepted": sum(node["kind"] == "scene" for node in state["nodes"]),
-            "allocated_capacity": len(allocated), "frontier_contracts": [node | {"pending_entry_case_ids": [case["case_id"]
-                for case in node["entry_cases"] if case["case_id"] not in admitted]} for node in frontier],
-            "arcs": core["arcs"], "genesis": committed_record(run_dir, "genesis")}
-        prompt = render_prompt(run_dir, "generation-scaffold-declarations.md", {"SCAFFOLD_CONTEXT": canonical_json(context).decode()})
-        result, response = request_architecture_analysis(run_dir, step + "_declare", prompt, declaration_schema, transport,
-            planning_mode=True, temperature=0.5, max_tokens=8192, pause_stage="Scaffold declarations",
-            system_prompt="Author only narrative contracts. The engine assigns all declaration identifiers. Return JSON only.")
-        preserve_planning_result(run_dir, "architecture_core", step + "_declare", result, response, kind="scaffold_declarations")
-        draft = {"input_hash": input_hash, "declarations": result["nodes"], "revisions": {}, "connections": {}, "history": [], "feedback": {}}
+        draft = {"version": 3, "input_hash": input_hash, "assignments": {}, "declarations": [], "revisions": {},
+            "connections": {}, "connection_locks": {}, "history": [], "feedback": {}, "pending": {},
+            "needs_guarantees": [], "last_repairs": {}, "batch_closed": False}
         write_json(path, draft)
-    draft.setdefault("connection_locks", {})
-    def apply_review(review, nodes):
-        changed = set(review["contract_repairs"])
-        invalid_edges = {identifier: set(destinations) for identifier, destinations in review["connection_repairs"].items()}
-        for identifier in changed:
-            invalid_edges[identifier] = set(draft["connections"].get(identifier, {}).get("connections", {}))
-        prior = copy.deepcopy(draft["declarations"])
-        if changed:
-            fields = declaration_schema["properties"]["nodes"]["items"]["properties"]
-            amendments = {identifier: {"type": "object", "additionalProperties": False,
-                "required": names, "properties": {name: fields[name] for name in names}}
-                for identifier, names in review["contract_repairs"].items()}
-            schema = {"type": "object", "additionalProperties": False, "required": list(amendments), "properties": amendments}
-            prompt = ("Amend only the flagged fields of these uncommitted narrative contracts to resolve the stated causal or "
-                "capacity problem. Preserve other fields and other contracts. Do not assign IDs, rewrite Genesis, or author prose.\n" +
-                canonical_json({"problem": review["reason"], "field_requests": review["contract_repairs"],
-                    "contracts": {node["node_id"]: declaration for node, declaration in zip(nodes, draft["declarations"])},
-                    "existing_successors": frontier, "genesis": committed_record(run_dir, "genesis")}).decode())
-            query = step + "_amend_" + sha256_bytes(prompt.encode())[:16]
-            amendments, response = request_architecture_analysis(run_dir, query, prompt, schema, transport,
-                planning_mode=True, max_tokens=6144, pause_stage="Scaffold contract amendment")
-            preserve_planning_result(run_dir, "architecture_core", query, amendments, response, kind="scaffold_contract_amendment")
-            for index, node in enumerate(nodes):
-                identifier = node["node_id"]
-                if identifier in changed:
-                    draft["declarations"][index] |= amendments[identifier]
-                    draft["revisions"][identifier] = draft["revisions"].get(identifier, 0) + 1
-            for identifier, value in draft["connections"].items():
-                affected = changed.intersection(value["connections"])
-                if affected:
-                    invalid_edges.setdefault(identifier, set()).update(affected)
-        for identifier, locked in list(draft["connection_locks"].items()):
-            draft["connection_locks"][identifier] = {} if identifier in changed else {
-                target: value for target, value in locked.items() if target not in changed}
-        for identifier, destinations in invalid_edges.items():
-            existing = draft["connections"].pop(identifier, {}).get("connections", {})
-            if existing or identifier in changed:
-                draft["connection_locks"][identifier] = {} if identifier in changed else {
-                    target: value for target, value in existing.items() if target not in destinations}
-            draft["feedback"][identifier] = review["reason"]
-        draft["opening_feedback"] = review["reason"]
+    canon = committed_record(run_dir, "genesis") or {}
+    common = {"scope": scope, "arcs": core["arcs"], "genesis_sources": genesis,
+        "global_canon": {key: canon[key] for key in ("work_canon", "format_composition_law") if key in canon}}
+    replanned = set()
+
+    def save():
+        write_json(path, draft)
+
+    def compiled():
+        return compile_scaffold_declarations(draft["declarations"], allocated, revisions=draft["revisions"]) if draft["declarations"] else []
+
+    def ask(kind, prompt, schema, *, pause_stage, **kwargs):
+        query = step + "_" + kind + "_" + sha256_bytes(canonical_json([prompt, schema]))[:16]
+        result, response = request_architecture_analysis(run_dir, query, prompt, schema, transport,
+            planning_mode=True, pause_stage=pause_stage, **kwargs)
+        preserve_planning_result(run_dir, "architecture_core", query, result, response, kind="scaffold_" + kind.split("_")[0])
+        return result
+
+    def clear_publication_check():
         draft.pop("opening_input", None)
-        draft["history"].append({"review": review, "prior_declarations": prior, "invalidated_connections": sorted(invalid_edges), "locked_connections": copy.deepcopy(draft["connection_locks"])})
-        write_json(path, draft)
-    # A failed connection request never reruns accepted declarations or unrelated connections.
-    for recovery in range(4):
-        validate_json_schema({"nodes": draft["declarations"]}, declaration_schema)
-        nodes = compile_scaffold_declarations(draft["declarations"], allocated, revisions=draft["revisions"])
-        binding_issue = None
-        for index, node in enumerate(nodes):
-            allowed = frontier + nodes[:index]
-            schema = scaffold_connection_schema(node, allowed, genesis, allow_amendment=True)
-            locks = draft["connection_locks"].get(node["node_id"], {})
-            connection_fields = schema["anyOf"][0]["properties"]["connections"]
-            connection_fields["required"] = sorted(locks)
-            for target_id, value in locks.items():
-                if target_id not in connection_fields["properties"]:
-                    raise IntegrityError("Locked scaffold connection is outside the current successor interfaces")
-                connection_fields["properties"][target_id] = {"const": value}
-            if node["node_id"] in draft["connections"]:
-                selected = draft["connections"][node["node_id"]]
-                validate_json_schema(selected, scaffold_connection_schema(node, allowed, genesis))
+        draft.pop("accepted_patch", None)
+
+    def invalidate_contract(identifier, old_node, new_node):
+        invalidated = [identifier]
+        draft["connections"].pop(identifier, None)
+        draft["connection_locks"].pop(identifier, None)
+        for consumer, assignment in list(draft["assignments"].items()):
+            if identifier not in assignment["targets"]:
+                continue
+            old_case = next(case for case in old_node["entry_cases"] if case["case_id"] == assignment["targets"][identifier])
+            descriptions = scaffold_contract_signature([item["description"] for item in old_case["requirements"]])
+            replacement = next((case for case in new_node["entry_cases"] if
+                scaffold_contract_signature([item["description"] for item in case["requirements"]]) == descriptions), None)
+            existing = draft["connection_locks"].get(consumer, {}) | draft["connections"].pop(consumer, {}).get("connections", {})
+            draft["connection_locks"][consumer] = {key: value for key, value in existing.items() if key != identifier}
+            if replacement is not None:
+                assignment["targets"][identifier] = replacement["case_id"]
             else:
-                print(f"Scaffold connections: {index + 1}/{len(nodes)} {node['node_id']}", file=sys.stderr)
+                draft["assignments"].pop(consumer)
+                draft["pending"][consumer] = "A selected successor entry condition changed; reselect and redeclare this predecessor."
+            draft["feedback"][consumer] = "The successor contract changed; bind the current requirement IDs against their exact conditions."
+            invalidated.append(consumer)
+        clear_publication_check()
+        return invalidated
+
+    def replan(identifier, reason):
+        if identifier in replanned:
+            raise PausedError("Scaffold contract re-declaration", f"{identifier} remains unsupported after its bounded local re-declaration. "
+                "The latest contract and accepted unrelated work were retained. Last problem: " + reason)
+        replanned.add(identifier)
+        draft["pending"][identifier] = reason
+        draft["feedback"][identifier] = reason
+        draft["assignments"].pop(identifier, None)
+        draft["connections"].pop(identifier, None)
+        draft["connection_locks"].pop(identifier, None)
+        clear_publication_check()
+        save()
+
+    def repair(review):
+        owners = set(review["contract_repairs"]) | set(review["connection_repairs"])
+        for identifier in sorted(owners):
+            names = review["contract_repairs"].get(identifier, [])
+            destinations = review["connection_repairs"].get(identifier, [])
+            signature = {"fields": sorted(names), "destinations": sorted(destinations)}
+            index = allocated.index(identifier)
+            prior = copy.deepcopy(draft["declarations"])
+            draft["feedback"][identifier] = review["reason"]
+            if "guarantees" in names and not prior[index]["guarantees"] and identifier not in draft["needs_guarantees"]:
+                draft["needs_guarantees"].append(identifier)
+            if identifier in draft["pending"]:
+                save()
+                continue
+            if draft["last_repairs"].get(identifier) == signature:
+                replan(identifier, review["reason"])
+                continue
+            invalidated = []
+            if names:
+                amendment_fields = {name: copy.deepcopy(fields[name]) for name in names}
+                if identifier in draft["needs_guarantees"]:
+                    amendment_fields["guarantees"] = copy.deepcopy(fields["guarantees"]) | {"minItems": 1}
+                schema = {"type": "object", "additionalProperties": False, "required": [identifier], "properties": {
+                    identifier: {"type": "object", "additionalProperties": False,
+                        "required": list(amendment_fields), "properties": amendment_fields}}}
+                def validate(result):
+                    validate_scaffold_amendment(prior[index], result[identifier])
+                known = frontier + compiled()[:index]
+                assignment = draft["assignments"][identifier]
+                prompt = ("Repair only these flagged fields of one uncommitted predecessor. Make an actual change. "
+                    "If guarantees are missing, add the promised exit conditions; changing preserves alone is insufficient. "
+                    "Write plain clauses without serialized engine IDs. This scene immediately precedes the selected entry cases, "
+                    "not necessarily the opening of the story. Do not turn Genesis premises into unwritten reader experiences.\n" +
+                    canonical_json(common | {"problem": review["reason"], "field_requests": {identifier: list(amendment_fields)},
+                        "contracts": {identifier: prior[index]}, "assignment": assignment,
+                        "successor_interfaces": scaffold_assigned_interfaces(assignment, known)}).decode())
+                try:
+                    amendments = ask("amend_" + identifier, prompt, schema, validator=validate,
+                        pause_stage="Scaffold contract amendment", max_tokens=6144)
+                except PausedError as error:
+                    if error.stage != "Scaffold contract amendment" or error.failure_class != "corrective_pause":
+                        raise
+                    replan(identifier, error.reason)
+                    continue
+                old_node = compiled()[index]
+                draft["declarations"][index] = validate_scaffold_amendment(prior[index], amendments[identifier])
+                draft["revisions"][identifier] = draft["revisions"].get(identifier, 0) + 1
+                invalidated = invalidate_contract(identifier, old_node, compiled()[index])
+            else:
+                existing = draft["connection_locks"].get(identifier, {}) | draft["connections"].pop(identifier, {}).get("connections", {})
+                draft["connection_locks"][identifier] = {key: value for key, value in existing.items() if key not in destinations}
+                invalidated = [identifier]
+                clear_publication_check()
+            draft["last_repairs"][identifier] = signature
+            draft["history"].append({"review": review, "prior_declarations": prior,
+                "invalidated_connections": sorted(invalidated), "locked_connections": copy.deepcopy(draft["connection_locks"])})
+            draft["opening_feedback"] = review["reason"]
+            save()
+
+    for recovery in range(4):
+        binding_issue = None
+        for index, identifier in enumerate(allocated):
+            if index >= len(draft["declarations"]) and draft["batch_closed"]:
+                break
+            nodes = compiled()
+            known = frontier + nodes[:index]
+            if identifier not in draft["assignments"]:
+                locks = {key: value["entry_case_id"] for key, value in draft["connection_locks"].get(identifier, {}).items()}
+                schema = scaffold_target_schema(known, allow_finish=index > 0 and index == len(nodes), locks=locks)
+                context = common | {"source_node_id": identifier, "scenes_accepted": sum(node["kind"] == "scene" for node in state["nodes"]) + index,
+                    "remaining_batch_capacity": len(allocated) - index,
+                    "frontier_contracts": [{key: value for key, value in node.items() if key != "successors"} for node in known],
+                    "correction": draft["feedback"].get(identifier), "previous_contract": draft["declarations"][index] if index < len(nodes) else None}
+                prompt = render_prompt(run_dir, "generation-scaffold-targets.md", {"SCAFFOLD_CONTEXT": canonical_json(context).decode()})
+                selected = ask("targets_" + identifier, prompt, schema, pause_stage="Scaffold targets", max_tokens=4096)
+                if selected["selection"] is None:
+                    draft["batch_closed"] = True
+                    save()
+                    break
+                draft["assignments"][identifier] = selected["selection"]
+                save()
+            assignment = draft["assignments"][identifier]
+            interfaces = scaffold_assigned_interfaces(assignment, known)
+            if index == len(nodes) or identifier in draft["pending"]:
+                schema = copy.deepcopy(declaration_schema)
+                if identifier in draft["needs_guarantees"]:
+                    schema["properties"]["nodes"]["items"]["properties"]["guarantees"]["minItems"] = 1
+                prior = copy.deepcopy(draft["declarations"])
+                def validate(result):
+                    compile_scaffold_declarations(result["nodes"], [identifier])
+                    if index < len(prior) and scaffold_contract_signature(result["nodes"][0]) == scaffold_contract_signature(prior[index]):
+                        raise SchemaError("No-op scaffold re-declaration: replace the deficient contract to fulfill its backward assignment")
+                prompt = render_prompt(run_dir, "generation-scaffold-declarations.md", {"SCAFFOLD_CONTEXT": canonical_json(common | {
+                    "source_node_id": identifier, "assignment": assignment, "successor_interfaces": interfaces,
+                    "scenes_accepted": sum(node["kind"] == "scene" for node in state["nodes"]) + index, "allocated_capacity": 1,
+                    "previous_contract": prior[index] if index < len(prior) else None, "correction": draft["pending"].get(identifier)}).decode()})
+                declared = ask("declare_" + identifier, prompt, schema, validator=validate,
+                    pause_stage="Scaffold declarations", temperature=0.5, max_tokens=6144)
+                if index == len(nodes):
+                    draft["declarations"].append(declared["nodes"][0])
+                else:
+                    old_node = nodes[index]
+                    draft["declarations"][index] = declared["nodes"][0]
+                    draft["revisions"][identifier] = draft["revisions"].get(identifier, 0) + 1
+                    invalidated = invalidate_contract(identifier, old_node, compiled()[index])
+                    draft["history"].append({"kind": "redeclaration", "node_id": identifier, "prior_declarations": prior,
+                        "invalidated_connections": sorted(invalidated)})
+                    draft["last_repairs"].pop(identifier, None)
+                draft["pending"].pop(identifier, None)
+                save()
+                nodes = compiled()
+            node = nodes[index]
+            schema = scaffold_connection_schema(node, interfaces, genesis, allow_amendment=True)
+            connection_fields = schema["anyOf"][0]["properties"]["connections"]
+            connection_fields["required"] = list(assignment["targets"])
+            for target_id, value in draft["connection_locks"].get(identifier, {}).items():
+                if target_id not in connection_fields["properties"]:
+                    raise IntegrityError("Locked scaffold connection is outside the selected successor interfaces")
+                connection_fields["properties"][target_id] = {"const": value}
+            if identifier in draft["connections"]:
+                selected = draft["connections"][identifier]
+                validate_json_schema(selected, schema)
+            else:
                 prompt = render_prompt(run_dir, "generation-scaffold-connections.md", {"SCAFFOLD_CONTEXT": canonical_json({
-                    "predecessor": node, "successor_interfaces": allowed, "genesis_sources": genesis,
-                    "correction": draft["feedback"].get(node["node_id"])}).decode()})
-                query = step + "_connect_" + sha256_bytes(prompt.encode())[:16]
-                selected, response = request_architecture_analysis(run_dir, query, prompt, schema, transport,
-                    planning_mode=True, max_tokens=6144, pause_stage="Scaffold connections",
-                    system_prompt="Select only supplied successor interfaces and evidence. Return JSON only.",
+                    "predecessor": node, "assignment": assignment, "successor_interfaces": interfaces,
+                    "genesis_sources": genesis, "correction": draft["feedback"].get(identifier)}).decode()})
+                selected = ask("connect_" + identifier, prompt, schema, pause_stage="Scaffold connections", max_tokens=6144,
                     result_normalizer=normalize_scaffold_repair_selectors)
-                preserve_planning_result(run_dir, "architecture_core", query, selected, response, kind="scaffold_connections")
                 if "contract_issue" in selected:
                     binding_issue = {"supported": False, "reason": selected["contract_issue"]["reason"],
-                        "contract_repairs": {node["node_id"]: selected["contract_issue"]["fields"]}, "connection_repairs": {}}
+                        "contract_repairs": {identifier: selected["contract_issue"]["fields"]}, "connection_repairs": {}}
                     break
-                draft["connections"][node["node_id"]] = selected
-                write_json(path, draft)
-            nodes[index] = compile_scaffold_connections(node, allowed, selected, genesis)
+                draft["connections"][identifier] = selected
+                save()
+        else:
+            draft["batch_closed"] = True
+            save()
         if binding_issue is not None:
             review = binding_issue
-            apply_review(review, nodes)
+            draft["last_review"] = {"reason": review["reason"], "revisions": copy.deepcopy(draft["revisions"])}
+            save()
+            if recovery < 3:
+                repair(review)
             continue
+        nodes = [compile_scaffold_connections(node, frontier + compiled()[:index], draft["connections"][node["node_id"]], genesis)
+            for index, node in enumerate(compiled())]
         patch = {"nodes": nodes, "complete": False, "opening_node_id": None, "opening_support": []}
         opening = scaffold_opening_candidate(state, nodes)
         if opening is not None:
@@ -8820,9 +8990,14 @@ def prepare_scaffold_expansion_v2(run_dir, state, core, targets, allocated, tran
             draft["accepted_patch"] = patch
             write_json(path, draft)
             return patch
-        apply_review(review, nodes)
-    raise PausedError("Scaffold connections", "Four focused review rounds did not establish a valid expansion in this invocation. "
-        "Accepted contracts, unrelated connections and the latest amendments were checkpointed. Last problem: " + review["reason"])
+        draft["last_review"] = {"reason": review["reason"], "revisions": copy.deepcopy(draft["revisions"])}
+        save()
+        if recovery < 3:
+            repair(review)
+    last = draft["last_review"]
+    raise PausedError("Scaffold connections", "Four scaffold repair cycles did not establish a valid expansion in this invocation. "
+        f"Last evaluated revisions: {last['revisions']}; pending declarations: {sorted(draft['pending'])}. "
+        "Accepted unrelated work was retained. Last problem: " + last["reason"])
 
 
 def prepare_causal_scaffold(run_dir, core, transport):
@@ -8882,7 +9057,7 @@ def prepare_causal_scaffold(run_dir, core, transport):
         allocated = [f"scaffold_scene_{count + index:05d}" for index in range(1, available + 1)]
         targets = frontier[:5]
         by_id = {node["node_id"]: node for node in state["nodes"]}
-        result = prepare_scaffold_expansion_v2(run_dir, state, core, targets, allocated, transport)
+        result = prepare_scaffold_expansion(run_dir, state, core, targets, allocated, transport)
         state |= {"nodes": state["nodes"] + result["nodes"], "round": state["round"] + 1,
             "complete": result["complete"], "opening_node_id": result["opening_node_id"], "opening_support": result["opening_support"]}
         write_json(path, state)
@@ -10367,7 +10542,7 @@ def probe_execution_policy(base_url, model, transport, output_fn=print):
     validate_json_schema(parse_structured_content(content), schema)
     output_fn(f"Retrieval mode: {mode} (synthetic structured metadata check passed).")
     return {"bounded_planning": True, "scoped_sources": True, "retrieval_mode": mode,
-        "max_tool_rounds": 2, "max_tool_calls": 8, "completion_contract_version": 1, "scaffold_planning_version": 2}, artifacts
+        "max_tool_rounds": 2, "max_tool_calls": 8, "completion_contract_version": 1, "scaffold_planning_version": 3}, artifacts
 
 
 def archive_preflight_probes(run_dir, artifacts):

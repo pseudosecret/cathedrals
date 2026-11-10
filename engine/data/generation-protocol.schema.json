@@ -252,7 +252,7 @@
             "playable_status": { "const": "READY_TO_PLAY" }
           }
         },
-        "execution_policy": {"type": "object", "additionalProperties": false, "required": ["bounded_planning", "scoped_sources", "retrieval_mode", "max_tool_rounds", "max_tool_calls", "completion_contract_version", "scaffold_planning_version"], "properties": {"bounded_planning": {"const": true}, "scoped_sources": {"const": true}, "retrieval_mode": {"enum": ["tools", "automatic"]}, "max_tool_rounds": {"const": 2}, "max_tool_calls": {"const": 8}, "completion_contract_version": {"const": 1}, "scaffold_planning_version": {"const": 2}}}
+        "execution_policy": {"type": "object", "additionalProperties": false, "required": ["bounded_planning", "scoped_sources", "retrieval_mode", "max_tool_rounds", "max_tool_calls", "completion_contract_version", "scaffold_planning_version"], "properties": {"bounded_planning": {"const": true}, "scoped_sources": {"const": true}, "retrieval_mode": {"enum": ["tools", "automatic"]}, "max_tool_rounds": {"const": 2}, "max_tool_calls": {"const": 8}, "completion_contract_version": {"const": 1}, "scaffold_planning_version": {"const": 3}}}
       }
     },
     "workCanon": {

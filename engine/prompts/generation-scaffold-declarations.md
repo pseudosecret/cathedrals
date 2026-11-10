@@ -4,10 +4,11 @@ Return only the requested declaration object. The engine assigns node, entry-cas
 requirement, and guarantee IDs. Do not emit IDs for those declarations, successor
 links, evidence bindings, opening flags, or prose.
 
-Describe one to four earlier scenes that earn the supplied frontier requirements.
-Order them backward: the first is closest to already planned successors; each later
-entry may precede earlier entries in this declaration batch. Do not require the
-first entry to lead to a later entry. Connections are selected in a separate stage.
+Describe exactly ONE immediate predecessor that fulfills the supplied assignment
+and selected successor entry cases. Return it as the sole nodes array item. This is
+not necessarily an opening scene. Earlier declarations in the batch may already
+exist; the engine has selected their exact entry cases before asking for this scene.
+Connections and source bindings follow in a separate stage.
 
 Each scene needs a purpose, intended change, alternative entry cases, explicit hard
 exit guarantees, and preserved conditions. A scene may continue to ONE successor
@@ -23,6 +24,9 @@ must hold under every entry case of its scene. Requirements and guarantees are
 planning intentions, not committed facts. Empty hard guarantees are valid when the
 scene's dramatic work needs no new fact. Intended emotional or thematic change is
 advisory. Entry cases are alternatives, not a requirement to read every path.
+Each alternative must be distinct; do not repeat empty entry cases. Write real
+conditions and transformations, not punctuation placeholders or serialized JSON
+fields hidden inside strings. The engine supplies all declaration IDs.
 
 Keep the scene cap and unresolved entry cases in view. Consolidate the frontier with
 earned causes while there is still capacity. The opening, planned last, needs one

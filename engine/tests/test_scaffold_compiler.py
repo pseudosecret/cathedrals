@@ -79,7 +79,7 @@ class ScaffoldCompilerTests(unittest.TestCase):
 
     def test_connection_schema_does_not_repeat_the_evidence_catalog_per_requirement(self):
         declarations = [declaration(str(index)) for index in range(4)]
-        declarations[1]["entry_cases"] = [{"requirements": [f"Synthetic required condition {index}." for index in range(8)]} for _ in range(5)]
+        declarations[1]["entry_cases"] = [{"requirements": [f"Synthetic case {case} condition {index}." for index in range(8)]} for case in range(5)]
         nodes = RUNNER.compile_scaffold_declarations(declarations, self.allocated)
         schema = RUNNER.scaffold_connection_schema(nodes[0], nodes[1:], GENESIS, allow_amendment=True)
         self.assertEqual(json.dumps(schema).count('"commit_genesis"'), 1)
@@ -110,8 +110,17 @@ class ScaffoldCompilerTests(unittest.TestCase):
     def provider(self, *, interrupt=None, contract_issue=None):
         calls, interrupted = [], [False]
         def request(_run, step, prompt, schema, _transport, **kwargs):
-            if step.endswith("_declare"):
-                calls.append("declare"); result = {"nodes": [declaration(str(index)) for index in range(4)]}
+            if "_targets_" in step:
+                calls.append("targets")
+                context = json.loads(prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
+                earlier = [target for target in context["frontier_contracts"] if target["kind"] == "scene"]
+                chosen = earlier[-1:] if earlier else context["frontier_contracts"]
+                result = {"selection": {"targets": {target["node_id"]: target["entry_cases"][0]["case_id"] for target in chosen},
+                    "causal_job": "Synthetic predecessor assignment."}}
+            elif "_declare_" in step:
+                calls.append("declare")
+                context = json.loads(prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
+                result = {"nodes": [declaration(context["source_node_id"])]}
             elif "_connect_" in step:
                 context = json.loads(prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1]); source = context["predecessor"]
                 identifier = source["node_id"]; calls.append(identifier)
@@ -138,7 +147,7 @@ class ScaffoldCompilerTests(unittest.TestCase):
         return calls, request
 
     def expand(self, provider):
-        return RUNNER.prepare_scaffold_expansion_v2(self.run, self.state, self.core,
+        return RUNNER.prepare_scaffold_expansion(self.run, self.state, self.core,
             [node["node_id"] for node in self.outcomes], self.allocated, provider)
 
     def test_connections_resume_without_redeclaring_or_repeating_accepted_work(self):
@@ -148,16 +157,18 @@ class ScaffoldCompilerTests(unittest.TestCase):
                 RUNNER, "review_scaffold_connections", return_value=review):
             with self.assertRaisesRegex(RUNNER.PausedError, "Synthetic interruption"): self.expand(None)
             checkpoint = RUNNER.read_json(self.run / ".staging/scaffold_expand_00001.contracts.json")
-            self.assertEqual(len(checkpoint["declarations"]), 4); self.assertEqual(len(checkpoint["connections"]), 2)
+            self.assertEqual(len(checkpoint["declarations"]), 3); self.assertEqual(len(checkpoint["assignments"]), 3)
+            self.assertEqual(len(checkpoint["connections"]), 2)
             result = self.expand(None)
-        self.assertEqual(Counter(calls), Counter({"declare": 1, self.allocated[0]: 1, self.allocated[1]: 1, self.allocated[2]: 2, self.allocated[3]: 1}))
+        self.assertEqual(Counter(calls), Counter({"targets": 4, "declare": 4, self.allocated[0]: 1,
+            self.allocated[1]: 1, self.allocated[2]: 2, self.allocated[3]: 1}))
         self.assertFalse(result["complete"])
         with mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=AssertionError("Repeated accepted request")), mock.patch.object(
                 RUNNER, "review_scaffold_connections", side_effect=AssertionError("Repeated accepted review")):
             self.assertEqual(self.expand(None), result)
-        with self.assertRaisesRegex(RUNNER.IntegrityError, "different frontier"):
+        with self.assertRaisesRegex(RUNNER.IntegrityError, "different planner, frontier"):
             changed = copy.deepcopy(self.state); changed["nodes"][0]["purpose"] = "Changed checkpoint input."
-            RUNNER.prepare_scaffold_expansion_v2(self.run, changed, self.core, [node["node_id"] for node in self.outcomes], self.allocated, None)
+            RUNNER.prepare_scaffold_expansion(self.run, changed, self.core, [node["node_id"] for node in self.outcomes], self.allocated, None)
 
     def test_amendment_invalidates_only_the_owner_and_direct_consumers(self):
         calls, provider = self.provider()
@@ -168,11 +179,11 @@ class ScaffoldCompilerTests(unittest.TestCase):
                 RUNNER, "review_scaffold_connections", side_effect=reviews):
             result = self.expand(None)
         counts = Counter(calls)
-        self.assertEqual(counts["declare"], 1); self.assertEqual(counts["amend"], 1)
+        self.assertEqual(counts["declare"], 4); self.assertEqual(counts["targets"], 4); self.assertEqual(counts["amend"], 1)
         self.assertEqual([counts[identifier] for identifier in self.allocated], [2, 2, 1, 1])
         saved = RUNNER.read_json(self.run / ".staging/scaffold_expand_00001.contracts.json")
         self.assertEqual(saved["history"][0]["invalidated_connections"], self.allocated[:2])
-        self.assertEqual(result["nodes"][0]["purpose"], declaration("0")["purpose"])
+        self.assertEqual(result["nodes"][0]["purpose"], declaration(self.allocated[0])["purpose"])
         self.assertEqual(result["nodes"][0]["guarantees"][0]["description"], "Synthetic amended guarantee.")
 
     def test_binding_can_report_a_missing_contract_without_fabricating_evidence(self):
@@ -181,7 +192,7 @@ class ScaffoldCompilerTests(unittest.TestCase):
         with mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=provider), mock.patch.object(
                 RUNNER, "review_scaffold_connections", return_value=review):
             result = self.expand(None)
-        self.assertEqual(Counter(calls)["declare"], 1); self.assertEqual(Counter(calls)["amend"], 1)
+        self.assertEqual(Counter(calls)["declare"], 4); self.assertEqual(Counter(calls)["amend"], 1)
         self.assertEqual(result["nodes"][0]["guarantees"][0]["description"], "Synthetic amended guarantee.")
 
     def test_faulty_edge_repair_locks_other_destinations_from_same_predecessor(self):
@@ -196,7 +207,7 @@ class ScaffoldCompilerTests(unittest.TestCase):
                 context = json.loads(prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
                 if context["predecessor"]["node_id"] == source and source in calls:
                     locked = schema["anyOf"][0]["properties"]["connections"]
-                    self.assertEqual(locked["required"], [preserved])
+                    self.assertEqual(set(locked["required"]), {faulty, preserved})
                     locked_values.append(locked["properties"][preserved]["const"])
             return provider(run, step, prompt, schema, transport, **kwargs)
         with mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=inspect_request), mock.patch.object(
@@ -206,7 +217,7 @@ class ScaffoldCompilerTests(unittest.TestCase):
         self.assertEqual(Counter(calls)[source], 2)
         self.assertEqual([Counter(calls)[identifier] for identifier in self.allocated[1:]], [1, 1, 1])
 
-    def test_v2_outcomes_declarations_connections_and_opening_compile_together(self):
+    def test_v3_outcomes_targets_declarations_connections_and_opening_compile_together(self):
         RUNNER.write_json(self.run / ".staging/architecture_core.planning.json", {"record": self.core, "payload": {}})
         calls, base_provider = self.provider()
         def provider(run, step, prompt, schema, transport, **kwargs):
@@ -231,7 +242,7 @@ class ScaffoldCompilerTests(unittest.TestCase):
         RUNNER.validate_scaffold(compiled["causal_scaffold"], RUNNER.derive_scope(150)["scope"], set(GENESIS), complete=True)
         self.assertEqual(compiled["scope_commitment"]["planned_scene_count"], 8)
         self.assertEqual(compiled["scope_commitment"]["planned_ending_count"], 2)
-        self.assertEqual(Counter(calls)["declare"], 2)
+        self.assertEqual(Counter(calls)["declare"], 8)
 
     def test_opening_is_only_offered_after_global_structural_readiness(self):
         outcomes = copy.deepcopy(self.outcomes)

@@ -311,7 +311,14 @@ class ReferenceResolutionTests(unittest.TestCase):
                 value = {"claimants": [claimant_expansion(f"claimant_{index:02d}") for index in range(1, 6)], "characters": []}
             elif name == "architectureRepair":
                 fields = schema.get("properties", schema.get("anyOf", [{}])[0].get("properties", {}))
-                if "nodes" in fields:
+                if "selection" in fields:
+                    context = json.loads(prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
+                    targets = context["frontier_contracts"]
+                    scenes = [target for target in targets if target["kind"] == "scene"]
+                    chosen = scenes[-1:] if scenes else targets
+                    value = {"selection": {"targets": {target["node_id"]: target["entry_cases"][0]["case_id"] for target in chosen},
+                        "causal_job": "Synthetic immediate predecessor assignment."}}
+                elif "nodes" in fields:
                     seed = "complete" in fields
                     context = json.loads(prompt.split("\n", 1)[1] if seed else prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
                     offset = context.get("outcomes_accepted", context.get("scenes_accepted", 0))

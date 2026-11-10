@@ -2,6 +2,10 @@
 
 Select only supplied successor interfaces. Do not author new node, case, requirement,
 or guarantee IDs. The engine has assigned all IDs and ownership.
+The assignment fixes every destination and entry case. Bind evidence for all of
+them; do not add or omit targets or switch to another case to evade a prerequisite.
+If the assignment cannot be earned by this contract, report contract_issue so the
+engine can repair or locally re-declare the uncommitted predecessor.
 
 Return connections keyed by destination node ID. Choose that destination's exact
 entry_case_id. For its supports object, fill every supplied requirement key once.
