@@ -15,6 +15,8 @@ api_response = fixtures.api_response
 class EpistemicRecoveryTests(unittest.TestCase):
     def setUp(self):
         fixtures.ReferenceResolutionTests.setUp(self)
+        audit = mock.patch.object(RUNNER, "audit_scaffold_guarantees")
+        audit.start(); self.addCleanup(audit.stop)
         self.records = architecture_genesis_records()
         self.records["genesis"]["claimants"] += [{"claimant_id": "claimant_02", "technical_slot_id": "claimant_slot_02", "name": "Lila Chen"}]
         self.facts = {key: {"data": {"fact_id": key, "subject": "logbook", "predicate": description,

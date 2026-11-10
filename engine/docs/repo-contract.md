@@ -45,7 +45,7 @@ engine canon merely because it was accepted once.
 - `generated-work/<generation-id>/provenance/` preserves the frozen manifest, raw
   responses, committed records, append-only ledger/constraints/planning history, hashes, and verdicts.
 - `generated-work/<generation-id>/web/` contains the dependency-free static baseline,
-  optional Astro enhancement sources, deterministic work JSON, and verbatim literary source files.
+  deterministic work JSON and verbatim literary source files.
 - `.cathedrals/runs/<generation-id>/` is ignored operational state used for atomic
   commits, resume, constraint retrieval, prospective planning, validation,
   pre-publication builds, and rejected-work diagnostic builds.
@@ -55,7 +55,7 @@ engine canon merely because it was accepted once.
   the executable does not mutate them during an engine revision.
 
 No downstream directory is authoritative during `engine_revision`. Important story
-truth must never live only in an Astro route.
+truth must never live only in an reader page.
 
 ## Source and Generated Work
 
@@ -75,6 +75,6 @@ the generation rather than modifying it.
 - Always cite engine truth with `engine/...` paths.
 - Never write compiled output into `engine/planning/`.
 - Never treat `schema-generation/decision-graph.json` as hand-authored canon.
-- Never embed generated literary content in Astro components.
+- Never embed generated literary content in reader templates.
 - Never use a missing path as canonical authority.
 - Never mark a milestone complete while any declared output is absent.

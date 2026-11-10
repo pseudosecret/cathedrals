@@ -13,7 +13,7 @@ live options. The first branch has no fixed timing or exact width.
 
 Every choice destination, artifact presentation, terminal ending, hidden route,
 stateful variant, and contamination behavior must exist before play. The projection is
-a complete static Astro site. Runtime behavior is deterministic and client-side only;
+a complete static HTML site. Runtime behavior is deterministic and client-side only;
 no model, network story service, or deferred branch generation is allowed.
 
 Generated Markdown-compatible literary strings are immutable source evidence. The

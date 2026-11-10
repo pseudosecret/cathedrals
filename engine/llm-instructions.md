@@ -126,7 +126,7 @@ A rejected complete work may retain its ignored static build for diagnosis. It r
 nonplayable and unpublished. Accepted work is copied atomically to its own
 `generated-work/<generation-id>/` directory.
 
-Astro remains static. At play time no LLM, API, database, server-side story state,
+The HTML reader remains static. At play time no LLM, API, database, server-side story state,
 creative generation, branch completion, or prose rewriting occurs. Every choice
 forecloses preexisting possibilities.
 

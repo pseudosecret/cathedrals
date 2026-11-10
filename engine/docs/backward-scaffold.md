@@ -108,13 +108,15 @@ quotations against original source units. Staging copies are diagnostic convenie
 
 Implementation: root `cathedrals`; protocol definitions in
 `engine/data/generation-protocol.schema.json`; expansion prompt in
-`engine/prompts/generation-scaffold.md`. Regression definitions are in
+`engine/prompts/generation-scaffold-declarations.md` and
+`engine/prompts/generation-scaffold-connections.md`. Regression definitions are in
 `engine/tests/test_backward_scaffold.py` and `engine/tests/test_scaffold_compiler.py`, covering mixed linear/branch structures,
 orphan slots, merges, capacity, interrupted expansion, source preservation, and
 100/150-scene static publication fixtures, plus iterative 5,000-scene graph validation.
 
-For this change, verification is restricted by the operator's instruction: no engine
-execution, replay, imports, or engine-loading tests. Static syntax, JSON references,
-source review, and diff checks are allowed. The version 1 planning path and frozen runs retain their original interfaces.
-There is no migration of archived runs. The regression suite is supplied for a
-later operator-authorized run; no end-to-end generation success is claimed.
+Offline imports and synthetic tests are authorized for engine cleanup, with network
+access blocked. The acceptance suite exercises a current version 2 generation,
+interruption/resume and complete static publication using a synthetic provider.
+It makes no claim of live-model literary success. Older runs require their original
+saved launcher; the current engine does not migrate their records or fall back to
+obsolete in-process planning paths.

@@ -16,8 +16,7 @@ from benchmark_storage import packet
 from test_scale_rehearsal import scale_web_fixture
 
 
-POLICY = {"bounded_planning": True, "scoped_sources": True, "retrieval_mode": "automatic",
-          "max_tool_rounds": 2, "max_tool_calls": 8, "completion_contract_version": 1}
+POLICY = RUNNER.CURRENT_EXECUTION_POLICY.copy()
 
 
 def architecture(count=3):
@@ -153,26 +152,6 @@ class CompletionContractTests(unittest.TestCase):
         with self.assertRaisesRegex(RUNNER.SchemaError, "no route to an ending"):
             RUNNER.navigation_contract_route(trapped)
 
-    def test_navigation_repair_changes_only_uncommitted_routing_fields(self):
-        planned = architecture()
-        routes = planned["packet_plans"][0]["required_navigation"]
-        draft = copy.deepcopy(planned)
-        draft["packet_plans"][0]["required_navigation"] = {}
-        records = [{"batch_sequence": 1, "packet_plans": copy.deepcopy(draft["packet_plans"])}]
-        state = {"payload": {"packet_plans": [{"packet_slot_id": item["packet_slot_id"], "soft_guidance": ["Keep this guidance."]}
-            for item in draft["packet_plans"]]}, "record": records[0]}
-        RUNNER.save_planning_draft(self.run, "architecture_plan_batch_0001", state)
-        def author(*args, validator=None, **kwargs):
-            result = {"routes": routes}
-            validator(result)
-            return result, {}
-        with mock.patch.object(RUNNER, "architecture_from_parts", return_value=draft), mock.patch.object(
-                RUNNER, "committed_records", return_value=[]), mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=author), mock.patch.object(
-                RUNNER, "preserve_planning_result"):
-            RUNNER.prepare_navigation_contract(self.run, {}, records, mock.Mock())
-        retained = RUNNER.read_json(self.run / ".staging/architecture_plan_batch_0001.planning.json")
-        self.assertEqual(retained["payload"]["packet_plans"][0]["soft_guidance"], ["Keep this guidance."])
-        self.assertEqual(retained["record"]["packet_plans"][0]["required_navigation"], routes)
 
     def test_empty_reserved_and_state_blocked_choices_fail_before_commit(self):
         planned = architecture()
@@ -298,7 +277,7 @@ class CompletionContractTests(unittest.TestCase):
         with mock.patch.object(RUNNER, "committed_records", return_value=fixture["packets"]):
             RUNNER.validate_navigation_payload(self.run, planned, {}, {"scenes": [], "endings": []})
         project, work = self.project_fixture(fixture)
-        with mock.patch.object(RUNNER, "ensure_node", side_effect=AssertionError("Provider/toolchain forbidden")), mock.patch.object(RUNNER, "append_deterministic_step"):
+        with mock.patch.object(RUNNER, "append_deterministic_step"):
             self.assertEqual(RUNNER.build_web(self.run, project)["result"], "PASS")
         self.assertEqual(len(work["scenes"]), 150)
         self.assertEqual(len(list((project / "dist/scenes").glob("*/index.html"))), 150)
@@ -306,7 +285,7 @@ class CompletionContractTests(unittest.TestCase):
 
     def test_complete_baseline_contains_rendered_prose_and_exact_source_bytes(self):
         project, work = self.project_fixture()
-        with mock.patch.object(RUNNER, "ensure_node", side_effect=AssertionError("Optional build must not run")), mock.patch.object(RUNNER, "append_deterministic_step"):
+        with mock.patch.object(RUNNER, "append_deterministic_step"):
             self.assertEqual(RUNNER.build_web(self.run, project)["result"], "PASS")
         self.assertEqual(RUNNER.static_build_problems(project, work), [])
         scene = work["scenes"][0]
@@ -315,21 +294,6 @@ class CompletionContractTests(unittest.TestCase):
         path.write_text('<div class="prose">A placeholder.</div>')
         self.assertTrue(any("Rendered prose" in reason for reason in RUNNER.static_build_problems(project, work)))
 
-    def test_optional_build_success_with_missing_page_restores_complete_baseline(self):
-        project, work = self.project_fixture()
-        (project / "package-lock.json").write_text("{}")
-        calls = []
-        def command(args, **kwargs):
-            calls.append(args)
-            if len(calls) == 2:
-                (project / "dist/scenes" / work["scenes"][0]["scene_id"] / "index.html").unlink()
-            return subprocess.CompletedProcess(args, 0, "", "")
-        with mock.patch.object(RUNNER, "ensure_node", return_value=(Path("/offline/node"), Path("/offline/npm"))), mock.patch.object(
-                RUNNER, "run_command", side_effect=command), mock.patch.object(RUNNER, "append_deterministic_step"):
-            self.assertEqual(RUNNER.build_web(self.run, project)["result"], "PASS")
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(RUNNER.static_build_problems(project, work), [])
-        self.assertEqual(RUNNER.read_json(self.run / "validation/npm-enhancement.json")["result"], "WARNING")
 
     def test_final_build_detects_broken_links_assets_and_source_exports(self):
         project, work = self.project_fixture()
@@ -343,13 +307,6 @@ class CompletionContractTests(unittest.TestCase):
         self.assertTrue(any("link has no target" in reason for reason in reasons))
         self.assertTrue(any("reader asset changed" in reason for reason in reasons))
         self.assertTrue(any("Published source changed" in reason for reason in reasons))
-
-    def test_optional_toolchain_exception_keeps_a_valid_baseline(self):
-        project, work = self.project_fixture()
-        (project / "package-lock.json").write_text("{}")
-        with mock.patch.object(RUNNER, "ensure_node", side_effect=OSError("Offline fixture")), mock.patch.object(RUNNER, "append_deterministic_step"):
-            self.assertEqual(RUNNER.build_web(self.run, project)["result"], "PASS")
-        self.assertEqual(RUNNER.static_build_problems(project, work), [])
 
 
 if __name__ == "__main__":

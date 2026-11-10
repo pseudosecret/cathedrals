@@ -125,7 +125,7 @@ def worker(count):
             receipt = {}
             with mock.patch.object(RUNNER, "committed_record", return_value={"record_type": "genesis", "claimants": [], "characters": []}), mock.patch.object(
                 RUNNER, "ensure_frozen_geomancy", return_value={"assignments": []}
-            ), mock.patch.object(RUNNER, "packet_root_sources", return_value=[]
+            ), mock.patch.object(RUNNER, "scoped_root_sources", return_value=[]
             ):
                 started = time.perf_counter()
                 context = RUNNER.relevant_packet_context(run, architecture, plan, receipt=receipt)

@@ -107,7 +107,8 @@ milestone_control:
       - engine/canon/acceptance-tests.md
       - engine/docs/build-contract.md
       - engine/formats/web.md
-      - engine/prompts/generation-architecture.md
+      - engine/prompts/generation-scaffold-declarations.md
+      - engine/prompts/generation-scaffold-connections.md
       - engine/prompts/generation-packet.md
       - engine/prompts/generation-ending-packet.md
       - engine/tests/validate-generation-protocol.py
@@ -471,7 +472,7 @@ generation_budget:
   max_analysis_output_tokens: 15000
   reference_repair_allowance_per_chunk: 3
   planning_recovery_attempts_per_value: 3
-  planning_recovery_allowance: schema_bounded_fields_and_backward_setups
+  planning_recovery_allowance: schema_bounded_macro_fields
   planning_whole_draft_output_ceiling: 21800
   planning_batch_output_ceiling: 8192
   planning_records_per_recovery_batch: 4
@@ -519,11 +520,9 @@ generation_budget:
       + semantic_recovery_allowance
       + scaffold_recovery_allowance
     planning_recovery_allowance: >
-      3 * (schema-bounded core field count + plan_batch_count * schema-bounded
-      batch field count + 2 * (maximum ending seed/prerequisite placements +
-      maximum preserved plan hints)); object arrays use schema maxItems and
-      primitive arrays count as one field value
-    scaffold_recovery_allowance: "30 * (possible_scene_count + ending_hard_max) + 6 for scaffold v2; 15 * (possible_scene_count + ending_hard_max) + 6 for v1"
+      3 * schema-bounded fields in arcs, attractors, obligation_graph and saturation_rationale;
+      routing and backward setup placement are compiled from the causal scaffold instead.
+    scaffold_recovery_allowance: "30 * (possible_scene_count + ending_hard_max) + 6"
     semantic_recovery_allowance: >
       3 * (5 * (possible_scene_count + ending_hard_max) + max_constraint_events)
     constraint_events: "max(1000, possible_scene_count * 45)"
@@ -610,7 +609,6 @@ run_processing:
     - serialize_json_and_markdown_without_literary_change
     - hash_generated_files
     - compile_dependency_free_static_baseline
-    - attempt_locked_static_astro_enhancement
   literary_change_forbidden: true
 
 validation:
@@ -682,7 +680,7 @@ provenance:
     - "creative_step_count may be greater than one"
 
 build_target:
-  framework: astro
+  framework: static_html
   static_only: true
   client_side_state_only: true
   live_ai_at_runtime: false

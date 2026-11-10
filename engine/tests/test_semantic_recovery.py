@@ -13,6 +13,8 @@ import test_reference_resolution as fixtures
 class SemanticRecoveryTests(unittest.TestCase):
     def setUp(self):
         fixtures.ReferenceResolutionTests.setUp(self)
+        audit = mock.patch.object(RUNNER, "audit_scaffold_guarantees")
+        audit.start(); self.addCleanup(audit.stop)
         records = architecture_genesis_records()
         for patch in (mock.patch.object(RUNNER, "committed_record", side_effect=lambda run, kind: records.get(kind)),
                       mock.patch.object(RUNNER, "committed_records", return_value=[]),

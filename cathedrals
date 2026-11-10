@@ -15,15 +15,12 @@ import importlib.machinery
 import json
 import math
 import os
-import platform
 import re
 import secrets
 import sqlite3
 import shutil
 import stat
-import subprocess
 import sys
-import tarfile
 import tempfile
 import time
 import traceback
@@ -40,11 +37,11 @@ ROOT = Path(__file__).resolve().parent
 RUNTIME_ROOT = ROOT / ".cathedrals"
 RUNS_ROOT = RUNTIME_ROOT / "runs"
 DEFAULT_LM_STUDIO_URL = "http://127.0.0.1:1234"
-NODE_VERSION = "22.23.2"
-ASTRO_VERSION = "7.2.9"
-MARKDOWN_IT_VERSION = "14.1.0"
-NODE_MINIMUM = (22, 12, 0)
 PROTOCOL_VERSION = "6.0"
+CURRENT_EXECUTION_POLICY = {
+    "bounded_planning": True, "scoped_sources": True, "completion_contract_version": 1,
+    "scaffold_planning_version": 2, "retrieval_mode": "automatic", "max_tool_rounds": 2, "max_tool_calls": 8,
+}
 BASE_OUTPUT_TOKENS = 10900
 EXPANDED_OUTPUT_TOKENS = 21800
 ANALYSIS_OUTPUT_TOKENS = 15000
@@ -94,15 +91,6 @@ ENGINE_CONTEXT_FILES = (
     "docs/artistic-constitution.md",
     "docs/branching-architecture-contract.md",
     "docs/generation-workflow-contract.md",
-    "formats/web.md",
-)
-ARCHITECTURE_CONTEXT_FILES = (
-    "llm-instructions.md",
-    "canon/ontology.md",
-    "canon/arc-grammar.md",
-    "data/state-model.yaml",
-    "docs/artistic-constitution.md",
-    "docs/branching-architecture-contract.md",
     "formats/web.md",
 )
 PACKET_WORK_SECTIONS = (
@@ -416,10 +404,6 @@ def validate_json_schema(value, schema, root=None, path: str = "$") -> None:
     raise SchemaError("\n".join(lines).rstrip(), paths=[item[0] for item in errors])
 
 
-def _schema_matches(value, schema, root, path: str) -> bool:
-    return not _collect_schema_errors(value, schema, root, path)
-
-
 def snapshot_root(run_dir: Path) -> Path:
     return run_dir / "engine-snapshot"
 
@@ -431,11 +415,6 @@ def engine_root(run_dir: Path | None = None) -> Path:
 
 def load_protocol(run_dir: Path | None = None):
     return read_json(engine_root(run_dir) / "data/generation-protocol.schema.json")
-
-
-def record_schema(record_type: str, protocol=None):
-    protocol = protocol or load_protocol()
-    return definition_schema(RECORD_DEFS[record_type], protocol)
 
 
 def definition_schema(definition_name: str, protocol=None):
@@ -529,7 +508,7 @@ def grouped_counts(total: int, target: int, minimum: int, maximum: int) -> list[
     return groups
 
 
-def planning_recovery_allowance(plan_batch_count: int) -> int:
+def planning_recovery_allowance() -> int:
     protocol = load_protocol()
 
     def fields(node):
@@ -544,10 +523,7 @@ def planning_recovery_allowance(plan_batch_count: int) -> int:
         return 1
 
     core = protocol["$defs"]["architectureCorePayload"]
-    batch = protocol["$defs"]["architecturePlanBatchPayload"]
-    seeds = core["properties"]["attractors"]["maxItems"] * (protocol["$defs"]["stringList"]["maxItems"] + core["properties"]["obligation_graph"]["maxItems"])
-    hints = plan_batch_count * PLAN_BATCH_SIZE * protocol["$defs"]["stringList"]["maxItems"]
-    return 3 * (fields(core) + plan_batch_count * fields(batch) + 2 * (seeds + hints))
+    return 3 * sum(fields(core["properties"][key]) for key in ("arcs", "attractors", "obligation_graph", "saturation_rationale"))
 
 
 def derive_scope(possible_scene_count: int) -> dict:
@@ -566,7 +542,7 @@ def derive_scope(possible_scene_count: int) -> dict:
     max_analysis_steps = (
         max(4, math.ceil(count / 3) + math.ceil(ending_max / 2) + 2)
         + REFERENCE_REPAIRS_PER_CHUNK * (count + ending_max)
-        + planning_recovery_allowance(plan_batch_count)
+        + planning_recovery_allowance()
         + 3 * (5 * (count + ending_max) + max(1000, count * 45))
     )
     return {
@@ -812,21 +788,8 @@ def lm_studio_preflight(base_url: str, model_override=None, input_fn=input, outp
     return choose_model(usable_model_ids(payload), model_override, input_fn, output_fn)
 
 
-def run_command(args, *, cwd=ROOT, env=None, capture=True) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [str(item) for item in args],
-        cwd=cwd,
-        env=env,
-        text=True,
-        capture_output=capture,
-        check=False,
-    )
-
-
 def ensure_runtime_layout() -> None:
     for path in (
-        RUNTIME_ROOT / "toolchains/node",
-        RUNTIME_ROOT / "cache/npm",
         RUNTIME_ROOT / "logs",
         RUNS_ROOT,
     ):
@@ -853,16 +816,6 @@ def verify_engine_snapshot(run_dir: Path) -> None:
 def generation_id(project_name: str, timestamp: str | None = None) -> str:
     stamp = (timestamp or dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S")).replace("-", "_")
     return f"{slugify(project_name)}_{stamp}_{secrets.token_hex(3)}"
-
-
-def active_format_contract(requested_format: str) -> Path:
-    normalize_requested_format(requested_format)
-    return ROOT / "engine/formats/web.md"
-
-
-def renderer_for(requested_format: str) -> str:
-    active_format_contract(requested_format)
-    return "astro"
 
 
 def initial_run_state(identifier: str, brief_hash: str, manifest_hash: str, model: str) -> dict:
@@ -1051,27 +1004,6 @@ def read_projection(db, name):
             result[motif_id]["appearances"].extend(json.loads(sources))
             result[motif_id]["provenance"].append(event_id)
     return result.get("latest", {}) if name == "prospective-plan.json" else result
-
-
-def write_state_map(run_dir: Path, name: str, value: dict) -> None:
-    """Replace a fixture projection; runtime commits apply individual events instead."""
-    ensure_index(run_dir)
-    with index_connection(run_dir) as db:
-        db.execute("DELETE FROM projection WHERE map=?", (name,))
-        if name == "knowledge-state.json":
-            db.execute("DELETE FROM knowledge")
-            db.execute("DELETE FROM subjects")
-            for position, (subject, relations) in enumerate(value.items()):
-                db.execute("INSERT INTO subjects VALUES (?,?)", (subject, position))
-                for relation, propositions in relations.items():
-                    for number, (proposition, event) in enumerate(propositions.items()):
-                        db.execute("INSERT INTO knowledge VALUES (?,?,?,?,?,?)", (subject, relation, proposition, canonical_json(event).decode(), number, event["constraint_event_sequence"]))
-        else:
-            if name == "motifs.json":
-                db.execute("DELETE FROM motif_history")
-            items = {"latest": value} if name == "prospective-plan.json" else value
-            for position, (key, item) in enumerate(items.items()):
-                put_projection(db, name, key, item, position)
 
 
 SEARCH_CANDIDATES = 192
@@ -1632,6 +1564,10 @@ def create_run(
     model_context_window_tokens: int = 64148,
     execution_policy: dict | None = None,
 ) -> Path:
+    policy = CURRENT_EXECUTION_POLICY | (execution_policy or {})
+    for key in ("bounded_planning", "scoped_sources", "completion_contract_version", "scaffold_planning_version"):
+        if type(policy[key]) is not type(CURRENT_EXECUTION_POLICY[key]) or policy[key] != CURRENT_EXECUTION_POLICY[key]:
+            raise CathedralsError("Execution policy", f"The current engine requires {key}={CURRENT_EXECUTION_POLICY[key]!r}.")
     identifier = generation_id(frozen.project_name)
     ensure_runtime_layout()
     run_dir = RUNS_ROOT / identifier
@@ -1651,16 +1587,13 @@ def create_run(
     derived = derive_scope(frozen.possible_scene_count)
     derived["budgets"]["model_context_window_tokens"] = model_context_window_tokens
     budgets = derived["budgets"]
-    if (execution_policy or {}).get("scaffold_planning_version") in (1, 2):
-        # Distinct outcome packets can require additional architecture batches.
-        budgets["max_creative_step_count"] += math.ceil(derived["scope"]["ending_hard_max"] / PLAN_BATCH_SIZE)
-        scaffold_allowance = 30 if (execution_policy or {}).get("scaffold_planning_version") == 2 else 15
-        budgets["max_analysis_step_count"] += scaffold_allowance * (frozen.possible_scene_count + derived["scope"]["ending_hard_max"]) + 6
-        budgets["max_cumulative_output_tokens"] = (budgets["max_creative_step_count"] * (BASE_OUTPUT_TOKENS + EXPANDED_OUTPUT_TOKENS)
-            + budgets["max_analysis_step_count"] * ANALYSIS_OUTPUT_TOKENS)
-    if (execution_policy or {}).get("completion_contract_version") == 1:
-        budgets["normal_prepared_context_tokens"] = 49152
-        budgets["max_prepared_context_tokens"] = model_context_window_tokens - budgets["context_safety_reserve_tokens"]
+    budgets["max_creative_step_count"] += math.ceil(derived["scope"]["ending_hard_max"] / PLAN_BATCH_SIZE)
+    scaffold_allowance = 30
+    budgets["max_analysis_step_count"] += scaffold_allowance * (frozen.possible_scene_count + derived["scope"]["ending_hard_max"]) + 6
+    budgets["max_cumulative_output_tokens"] = (budgets["max_creative_step_count"] * (BASE_OUTPUT_TOKENS + EXPANDED_OUTPUT_TOKENS)
+        + budgets["max_analysis_step_count"] * ANALYSIS_OUTPUT_TOKENS)
+    budgets["normal_prepared_context_tokens"] = 49152
+    budgets["max_prepared_context_tokens"] = model_context_window_tokens - budgets["context_safety_reserve_tokens"]
     budgets["max_planning_context_tokens"] = model_context_window_tokens - budgets["context_safety_reserve_tokens"] - MIN_PLANNING_OUTPUT_TOKENS
     budgets["max_cumulative_input_tokens"] = (2 * budgets["max_creative_step_count"] + budgets["max_analysis_step_count"]) * max(
         budgets["max_prepared_context_tokens"], budgets["max_planning_context_tokens"])
@@ -1706,8 +1639,7 @@ def create_run(
             "playable_status": "READY_TO_PLAY",
         },
     }
-    if execution_policy is not None:
-        manifest["execution_policy"] = execution_policy
+    manifest["execution_policy"] = policy
     protocol = load_protocol(run_dir)
     validate_json_schema(manifest, protocol["$defs"]["runManifest"], protocol)
     manifest_hash = sha256_bytes(canonical_json(manifest))
@@ -2992,11 +2924,10 @@ def request_record(
             **parameters,
             "response_format": {"type": "json_schema", "json_schema": {"name": response_definition, "strict": True, "schema": wire_schema}},
         }
-        if execution_policy(run_dir).get("completion_contract_version") == 1:
-            prompt_tokens = provider_input_tokens(payload)
-            if prompt_tokens > capacity:
-                raise PausedError("Context assembly", f"Complete provider envelope for {step_id} needs approximately {prompt_tokens:,} input tokens; "
-                    f"ceiling {capacity:,} after output and safety reserves. No request was sent.", "budget_exhaustion")
+        prompt_tokens = provider_input_tokens(payload)
+        if prompt_tokens > capacity:
+            raise PausedError("Context assembly", f"Complete provider envelope for {step_id} needs approximately {prompt_tokens:,} input tokens; "
+                f"ceiling {capacity:,} after output and safety reserves. No request was sent.", "budget_exhaustion")
         request_hash = sha256_bytes(canonical_json(payload))
         attempts = [entry["attempt"] for entry in step_entries(run_dir, step_id)]
         attempt = max(attempts, default=0) + 1
@@ -3580,13 +3511,6 @@ def validate_architecture(architecture: dict, manifest: dict, committed_origin_i
     for edge in architecture["topology"]["edges"]:
         if edge["from_node_id"] not in nodes or edge["to_node_id"] not in nodes or not set(edge["hard_obligation_ids"]).issubset(obligations):
             raise SchemaError(f"Architecture edge references unknown canon: {edge['edge_id']}")
-    opening_edges = [
-        edge
-        for edge in architecture["topology"]["edges"]
-        if edge["from_node_id"] == architecture["topology"]["opening_branch_node_id"] and edge["relation"] == "branch"
-    ]
-    if not architecture.get("causal_scaffold") and manifest.get("execution_policy", {}).get("scaffold_planning_version") not in (1, 2) and len(opening_edges) != 3:
-        raise SchemaError("Macroarchitecture opening hub must establish exactly three branch relations")
     for arc in architecture["arcs"]:
         if not set(arc["hard_obligation_ids"]).issubset(obligations):
             raise SchemaError(f"Arc references unknown hard obligation: {arc['arc_id']}")
@@ -3821,8 +3745,6 @@ def apply_reader_effects(effects, values):
 
 
 def validate_navigation_payload(run_dir, architecture, plan, payload):
-    if execution_policy(run_dir).get("completion_contract_version") != 1:
-        return
     content, id_to_slot = {}, {}
     for record in committed_records(run_dir, "creative_packet"):
         for item in record["scenes"] + record["endings"]:
@@ -4036,17 +3958,6 @@ def selected_current_knowledge(run_dir, events, required_fact_ids=(), subject_id
 
 def compact_context_value(value):
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-
-
-def packet_root_sources(run_dir):
-    kinds = ("genesis_foundation", "genesis_cast", "genesis_constraints")
-    with index_connection(run_dir) as db:
-        rows = db.execute("SELECT commit_id,record_type FROM records WHERE record_type IN (?,?,?) ORDER BY sequence", kinds).fetchall()
-    if [kind for _identifier, kind in rows] != list(kinds):
-        raise IntegrityError("Packet context requires all three original Genesis records")
-    cache = {}
-    return [read_search_source(run_dir, {"commit_id": identifier, "source_id": identifier, "pointer": "", "kind": "root"}, cache)
-        for identifier, _kind in rows]
 
 
 def scoped_root_sources(run_dir, plan):
@@ -4301,8 +4212,7 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
     ensure_index(run_dir)
     manifest = read_json(run_dir / "run-manifest.json")
     genesis = committed_record(run_dir, "genesis")
-    scoped = execution_policy(run_dir).get("scoped_sources", False)
-    root_sources = scoped_root_sources(run_dir, plan) if scoped else packet_root_sources(run_dir)
+    root_sources = scoped_root_sources(run_dir, plan)
     law, law_provenance = instruction_profile(run_dir)
     dependencies = packet_records(run_dir, plan.get("depends_on_packet_slot_ids", []), verify=True)
     if {record["packet_slot_id"] for record in dependencies} != set(plan.get("depends_on_packet_slot_ids", [])):
@@ -4330,14 +4240,12 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
         proof_events.append(event)
         if event.get("resolution_event"):
             proof_events.append(event["resolution_event"])
-    dependency_ids = set() if scoped else {identifier for record in dependencies for identifier in generated_ids(record)}
-    uncovered_proofs = [event | {"sources": [source for source in event["sources"] if source["artifact_id"] not in dependency_ids]} for event in proof_events]
-    required_sources = retrieve_original_sources(run_dir, uncovered_proofs, limit=None, strict=True) if uncovered_proofs else []
-    required_ids = (set() if scoped else {identifier for record in dependencies for identifier in generated_ids(record)}) | {source["source_id"] for source in required_sources}
+    required_sources = retrieve_original_sources(run_dir, proof_events, limit=None, strict=True) if proof_events else []
+    required_ids = {source["source_id"] for source in required_sources}
     mandatory_tags = {key: set(plan.get("relevance", {}).get(key, []))
         for key in ("object_ids", "location_ids", "state_keys", "technical_slot_ids")}
     protected_past = [event for event in past if any(source["artifact_id"] in required_ids for source in event["sources"])
-        or scoped and any(values.intersection(event["data"].get("relevance", {}).get(key, [])) for key, values in mandatory_tags.items())]
+        or any(values.intersection(event["data"].get("relevance", {}).get(key, [])) for key, values in mandatory_tags.items())]
     protected_fact_ids = {event["data"]["fact_id"] for event in protected_past}
     protected_knowledge, optional_knowledge = [], []
     for subject in knowledge:
@@ -4365,7 +4273,7 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
         ("ACTIVE HARD FUTURE OBLIGATIONS", hard),
         ("OBLIGATIONS THIS PACKET SHOULD ADVANCE", [obligations[key] for key in plan.get("advance_obligation_ids", [])]),
         ("OBLIGATIONS THIS PACKET MAY SATISFY", [obligations[key] for key in plan.get("may_satisfy_obligation_ids", [])]),
-        ("DIRECT DEPENDENCY SOURCE EVIDENCE", predecessor_contracts(run_dir, dependencies) if scoped else dependencies),
+        ("DIRECT DEPENDENCY SOURCE EVIDENCE", (predecessor_contracts(run_dir, dependencies))),
         ("REQUIRED PREREQUISITE SOURCE EVIDENCE", required_sources),
         ("CHARACTER KNOWLEDGE / BELIEF CONSTRAINTS", protected_knowledge),
         ("ENDING ATTRACTOR" if plan["packet_kind"] == "ending" else "ENDING / BRANCH ATTRACTORS EXERTING PRESSURE", attractors),
@@ -4432,7 +4340,7 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
         receipt["source_candidate_count"] = len(hits)
         ranks = {(hit["commit_id"],hit["pointer"]): {key: hit[key] for key in ("document_id", "bm25", "locality")} for hit in hits}
         for hit in hits:
-            if hit["commit_id"] in covered_commits or hit["source_id"] in covered_ids or hit["kind"] == "root" and genesis and not scoped:
+            if hit["commit_id"] in covered_commits or hit["source_id"] in covered_ids:
                 receipt["omissions"].append({"source_id": hit["source_id"], "source_commit_id": hit["commit_id"], "record_pointer": hit["pointer"], "reason": "covered_by_required_context"})
                 continue
             if len(chosen) + len(tool_records) >= SEARCH_SOURCE_LIMIT:
@@ -4591,15 +4499,14 @@ def build_prospective_plan(run_dir: Path, architecture: dict, recomputed_after_c
     committed = completed_packet_slots(architecture, all_committed_records(run_dir))
     uncommitted_plans = [plan for plan in architecture["packet_plans"] if plan["packet_slot_id"] not in committed]
     literary_pending = any(plan["packet_kind"] == "literary" for plan in uncommitted_plans)
-    if execution_policy(run_dir).get("completion_contract_version") == 1:
-        live = architecture | {"attractors": [item for item in architecture["attractors"] if feasibility_by_id[item["attractor_id"]] != "foreclosed"]}
-        required = ending_prerequisite_ids(live, obligations)
-        invalid = sorted(identifier for identifier in required if obligations[identifier]["data"]["status"] not in {"active", "satisfied"})
-        if invalid:
-            raise CathedralsError("Forward feasibility", "Ending prerequisites were resolved without satisfaction: " + ", ".join(invalid), "continuity_impossibility")
-        pending = sorted(identifier for identifier in required if obligations[identifier]["data"]["status"] != "satisfied")
-        if pending and not literary_pending:
-            raise PausedError("Ending prerequisites", "No remaining literary plan can establish: " + ", ".join(pending))
+    live = architecture | {"attractors": [item for item in architecture["attractors"] if feasibility_by_id[item["attractor_id"]] != "foreclosed"]}
+    required = ending_prerequisite_ids(live, obligations)
+    invalid = sorted(identifier for identifier in required if obligations[identifier]["data"]["status"] not in {"active", "satisfied"})
+    if invalid:
+        raise CathedralsError("Forward feasibility", "Ending prerequisites were resolved without satisfaction: " + ", ".join(invalid), "continuity_impossibility")
+    pending = sorted(identifier for identifier in required if obligations[identifier]["data"]["status"] != "satisfied")
+    if pending and not literary_pending:
+        raise PausedError("Ending prerequisites", "No remaining literary plan can establish: " + ", ".join(pending))
     obligation_assignments = []
     for obligation_id, event in obligations.items():
         obligation = event["data"]
@@ -4718,14 +4625,12 @@ def select_next_packet(run_dir: Path, architecture: dict) -> dict | None:
         if item["packet_slot_id"] == packet_slot_id
     ]
     obligations = _read_state_map(run_dir, "obligations.json")
-    if execution_policy(run_dir).get("completion_contract_version") == 1:
-        assignments = [identifier for identifier in assignments if obligations[identifier]["data"]["hardness"] == "hard"]
+    assignments = [identifier for identifier in assignments if obligations[identifier]["data"]["hardness"] == "hard"]
     eligible_assignments = list(assignments)
-    if execution_policy(run_dir).get("completion_contract_version") == 1:
-        completed = completed_packet_slots(architecture, all_committed_records(run_dir))
-        remaining = [plan for plan in architecture["packet_plans"] if plan["packet_kind"] == "literary" and plan["packet_slot_id"] not in completed]
-        # A long-range payoff is pressure before its deadline, not a demand to close it in the opening.
-        assignments = [identifier for identifier in assignments if obligations[identifier]["data"]["range"] != "long_range" or len(remaining) <= 1]
+    completed = completed_packet_slots(architecture, all_committed_records(run_dir))
+    remaining = [plan for plan in architecture["packet_plans"] if plan["packet_kind"] == "literary" and plan["packet_slot_id"] not in completed]
+    # A long-range payoff is pressure before its deadline, not a demand to close it in the opening.
+    assignments = [identifier for identifier in assignments if obligations[identifier]["data"]["range"] != "long_range" or len(remaining) <= 1]
     may_satisfy = [
         item for item in eligible_assignments
         if all(obligations[required]["data"]["status"] == "satisfied" for required in obligations[item]["data"]["requires"])
@@ -4974,30 +4879,6 @@ def architecture_id_catalog(payload: dict, run_dir: Path) -> dict[str, str]:
     return catalog
 
 
-def architecture_topology_problems(payload: dict) -> list[str]:
-    topology = payload["topology"]
-    declared_nodes = [item["node_id"] for item in topology["nodes"]]
-    declared_edges = [item["edge_id"] for item in topology["edges"]]
-    node_ids = set(declared_nodes)
-    referenced = [topology["entry_segment_id"], topology["opening_branch_node_id"], *topology["reconvergence_node_ids"]]
-    referenced += [edge[key] for edge in topology["edges"] for key in ("from_node_id", "to_node_id")]
-    problems = []
-    if len(declared_nodes) != len(node_ids):
-        problems.append("topology node IDs are not unique")
-    if len(declared_edges) != len(set(declared_edges)):
-        problems.append("topology edge IDs are not unique")
-    unknown = sorted(set(referenced) - node_ids)
-    if unknown:
-        problems.append(f"undeclared topology nodes: {', '.join(unknown)}")
-    opening_edges = sum(
-        edge["from_node_id"] == topology["opening_branch_node_id"] and edge["relation"] == "branch"
-        for edge in topology["edges"]
-    )
-    if opening_edges != 3:
-        problems.append(f"opening branch node has {opening_edges} outgoing branch edges; expected 3")
-    return problems
-
-
 def validate_architecture_draft(payload: dict, schema: dict, run_dir: Path) -> None:
     errors = _collect_schema_errors(payload, schema, schema, "$")
     if not errors:
@@ -5078,20 +4959,6 @@ def architecture_reference_issues(payload: dict, run_dir: Path) -> list[dict]:
     return issues
 
 
-def apply_architecture_reference_resolutions(payload: dict, issues: list[dict], resolutions: dict) -> dict:
-    value = copy.deepcopy(payload)
-    for issue in issues:
-        cursor = value
-        for part in issue["path"][:-1]:
-            cursor = cursor[part]
-        choice = resolutions[issue["issue_id"]]
-        if issue["mode"] == "set_list":
-            cursor[issue["path"][-1]] = [choice]
-        else:
-            cursor[issue["path"][-1]] = choice
-    return value
-
-
 def validate_architecture_core_payload(payload: dict, run_dir: Path) -> None:
     genesis = committed_record(run_dir, "genesis")
     claimant_ids = {item["claimant_id"] for item in genesis["claimants"]}
@@ -5147,12 +5014,6 @@ def validate_architecture_core_payload(payload: dict, run_dir: Path) -> None:
         committed_ids | local_ids,
         "unresolved obligation sources",
     )
-    opening_edges = sum(
-        item["from_node_id"] == topology["opening_branch_node_id"] and item["relation"] == "branch"
-        for item in topology["edges"]
-    )
-    if not scaffold_enabled(run_dir) and opening_edges != 3:
-        problems.append(f"opening branch node has {opening_edges} outgoing branch edges; expected 3")
     if problems:
         raise SchemaError("Architecture core has unresolved semantics: " + "; ".join(problems))
 
@@ -5217,35 +5078,6 @@ def build_architecture_core(run_dir: Path, payload: dict) -> dict:
     return record_envelope(run_dir, "architecture_core", "architecture_core") | {
         "genesis_commit_id": committed_record(run_dir, "genesis")["commit_id"],
         "story_format": "web", "scope_commitment": commitment, **artistic,
-    }
-
-
-def validate_architecture_plan_join_keys(payload: dict, specs: list[dict]) -> None:
-    expected = [item["packet_slot_id"] for item in specs]
-    actual = [item.get("packet_slot_id") for item in payload.get("packet_plans", []) if isinstance(item, dict)]
-    missing = sorted(set(expected) - set(actual))
-    unexpected = sorted(set(actual) - set(expected), key=str)
-    duplicated = sorted({item for item in actual if actual.count(item) > 1}, key=str)
-    if missing or unexpected or duplicated or len(actual) != len(payload.get("packet_plans", [])):
-        details = []
-        if missing:
-            details.append("missing: " + ", ".join(missing))
-        if unexpected:
-            details.append("unexpected: " + ", ".join(map(str, unexpected)))
-        if duplicated:
-            details.append("duplicated: " + ", ".join(map(str, duplicated)))
-        if len(actual) != len(payload.get("packet_plans", [])):
-            details.append("entries without packet_slot_id")
-        raise SchemaError("Architecture plan batch packet IDs do not match its frozen allocation; " + "; ".join(details))
-
-
-def build_architecture_plan_batch(run_dir: Path, payload: dict, specs: list[dict], sequence: int, count: int) -> dict:
-    validate_architecture_plan_join_keys(payload, specs)
-    annotations = {item["packet_slot_id"]: item for item in payload["packet_plans"]}
-    plans = [spec | annotations[spec["packet_slot_id"]] for spec in specs]
-    return record_envelope(run_dir, "architecture_plan_batch", f"architecture_plan_batch_{sequence:04d}") | {
-        "architecture_core_commit_id": planning_core(run_dir)["commit_id"],
-        "story_format": "web", "batch_sequence": sequence, "batch_count": count, "packet_plans": plans,
     }
 
 
@@ -5407,125 +5239,6 @@ def request_architecture_analysis(
                 pause_stage, f"{step_id} exhausted 3 focused repair attempts. Last problem: {error.reason}"
             ) from error
     raise PausedError(pause_stage, f"{step_id} exhausted its focused repair attempts")
-
-
-def architecture_plan_schema_failure_count(run_dir: Path, step_id: str) -> int:
-    return sum(
-        entry["planned_step_id"] in {step_id, f"{step_id}_expanded"}
-        and entry["failure_class"] == "malformed_response"
-        for entry in step_entries(run_dir, step_id) + step_entries(run_dir, f"{step_id}_expanded")
-    )
-
-
-def architecture_plan_repair_request(
-    run_dir: Path, spec: dict, allowed_dependencies: list[str]
-) -> tuple[str, dict]:
-    core = planning_core(run_dir)
-    schema = architecture_plan_annotation_schema(run_dir, spec, allowed_dependencies)
-    attractors = [
-        item for item in core["attractors"]
-        if spec["packet_kind"] != "ending" or item["kind"] == "ending"
-    ]
-    prompt = bounded_context(
-        [
-            ("IMMUTABLE GENESIS", committed_record(run_dir, "genesis")),
-            ("IMMUTABLE ARCHITECTURE CORE", core),
-            ("FROZEN PACKET ALLOCATION", spec),
-            ("ALLOWED DEPENDENCY IDS", allowed_dependencies),
-            ("ALLOWED ATTRACTORS", attractors),
-            (
-                "INSTRUCTION",
-                "Return exactly one complete packet-plan annotation for the frozen packet_slot_id. "
-                "Do not repeat deterministic allocation fields or invent identifiers.",
-            ),
-        ],
-        36000,
-    )
-    return prompt, schema
-
-
-def repair_architecture_plan_batch_payload(
-    run_dir: Path, step_id: str, specs: list[dict], transport
-) -> dict:
-    repair_path = run_dir / ".staging" / f"{step_id}.repair.json"
-    state = read_json(repair_path) if repair_path.exists() else {
-        "payload": {"packet_plans": []}, "history": [],
-    }
-    prior_ids = [
-        plan["packet_slot_id"]
-        for batch in committed_records(run_dir, "architecture_plan_batch")
-        for plan in batch["packet_plans"]
-    ]
-    expected_ids = [item["packet_slot_id"] for item in specs]
-    annotations = {}
-
-    def retain_valid(payload: dict) -> None:
-        plans = payload.get("packet_plans", []) if isinstance(payload, dict) else []
-        ids = [item.get("packet_slot_id") for item in plans if isinstance(item, dict)]
-        for index, spec in enumerate(specs):
-            packet_id = spec["packet_slot_id"]
-            matches = [item for item in plans if isinstance(item, dict) and item.get("packet_slot_id") == packet_id]
-            if len(matches) != 1 or ids.count(packet_id) != 1:
-                continue
-            schema = architecture_plan_annotation_schema(
-                run_dir, spec, prior_ids + expected_ids[:index]
-            )
-            try:
-                validate_json_schema({"packet_plans": matches}, schema)
-            except SchemaError:
-                continue
-            annotations[packet_id] = matches[0]
-
-    failed_entries = [
-        entry for entry in step_entries(run_dir, step_id) + step_entries(run_dir, f"{step_id}_expanded")
-        if entry["planned_step_id"] in {step_id, f"{step_id}_expanded"}
-        and entry["failure_class"] == "malformed_response"
-    ]
-    for entry in failed_entries:
-        response_path = run_dir / "raw" / f"{entry['planned_step_id']}-attempt{entry['attempt']}.api.json"
-        if not response_path.exists():
-            continue
-        try:
-            retain_valid(parse_structured_content(normalize_provider_response(read_json(response_path))))
-        except CathedralsError:
-            continue
-    retain_valid(state["payload"])
-    state["payload"] = {
-        "packet_plans": [annotations[item] for item in expected_ids if item in annotations]
-    }
-    write_json(repair_path, state)
-
-    for index, spec in enumerate(specs):
-        packet_id = spec["packet_slot_id"]
-        if packet_id in annotations:
-            continue
-        allowed_dependencies = prior_ids + expected_ids[:index]
-        prompt, schema = architecture_plan_repair_request(run_dir, spec, allowed_dependencies)
-        repair_step = f"{step_id}_repair_{packet_id}"
-        result, api_response = request_architecture_analysis(
-            run_dir,
-            repair_step,
-            prompt,
-            schema,
-            transport,
-            phase="architecture",
-            system_prompt="Complete one missing Architecture packet-plan annotation. Return JSON only.",
-            response_name="architecturePlanAnnotation",
-            pause_stage="Architecture plan repair",
-        )
-        annotations[packet_id] = result["packet_plans"][0]
-        state["payload"] = {"packet_plans": [annotations[item] for item in expected_ids if item in annotations]}
-        state["history"].append({
-            "kind": "packet_plan",
-            "packet_slot_id": packet_id,
-            "step_id": repair_step,
-            "result": result,
-            "api_response": api_response,
-        })
-        write_json(repair_path, state)
-
-    validate_architecture_plan_join_keys(state["payload"], specs)
-    return state["payload"]
 
 
 def validate_genesis_constraints_payload(payload: dict) -> None:
@@ -5992,46 +5705,6 @@ def repair_genesis_constraints_payload(
     raise PausedError("Genesis reference resolution", "Genesis reference repairs did not converge")
 
 
-def architecture_reference_repair_request(payload: dict, issues: list[dict], run_dir: Path) -> tuple[str, dict]:
-    catalog = architecture_id_catalog(payload, run_dir)
-    issue_context = [
-        {
-            "issue_id": issue["issue_id"],
-            "problem": issue["label"],
-            "invalid_value": issue["invalid"],
-            "local_context": issue["context"],
-            "allowed_candidates": [catalog.get(identifier, identifier) for identifier in issue["candidates"]],
-        }
-        for issue in issues
-    ]
-    genesis = committed_record(run_dir, "genesis")
-    prompt = bounded_context(
-        [
-            ("STORY PREMISE", genesis["work_canon"]["premise"]),
-            ("CENTRAL INCIDENT", genesis["work_canon"]["central_incident"]),
-            ("REFERENCE ISSUES", issue_context),
-            ("INSTRUCTION", "Choose an allowed candidate only when its described meaning matches the reference. Otherwise return UNRESOLVED for that issue; a focused local correction will follow. Preserve all other Architecture content."),
-        ],
-        36000,
-    )
-    properties = {
-        issue["issue_id"]: {"enum": issue["candidates"] + ["UNRESOLVED"]}
-        for issue in issues
-    }
-    schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["resolutions"],
-        "properties": {
-            "resolutions": {
-                "type": "object", "additionalProperties": False,
-                "required": list(properties), "properties": properties,
-            }
-        },
-    }
-    return prompt, schema
-
-
 def architecture_obligation_cycle(payload: dict) -> list[str]:
     graph = {item["obligation_id"]: item["requires"] for item in payload["obligation_graph"]}
     visiting = []
@@ -6057,247 +5730,6 @@ def architecture_obligation_cycle(payload: dict) -> list[str]:
         if cycle:
             return cycle
     return []
-
-
-def architecture_dependency_repair_request(payload: dict, cycle: list[str], run_dir: Path) -> tuple[str, dict]:
-    obligations = {item["obligation_id"]: item for item in payload["obligation_graph"]}
-    catalog = architecture_id_catalog(payload, run_dir)
-    prompt = bounded_context(
-        [
-            ("CIRCULAR OBLIGATIONS", [catalog[item] for item in cycle]),
-            ("CURRENT DEPENDENCIES", {item: obligations[item]["requires"] for item in cycle}),
-            ("ALLOWED OBLIGATIONS", [catalog[item] for item in sorted(obligations)]),
-            ("INSTRUCTION", "Return replacement requires lists for the circular obligations only. Preserve their descriptions and all other fields, and break the cycle."),
-        ],
-        36000,
-    )
-    properties = {}
-    for item in cycle:
-        candidates = sorted(set(obligations) - {item})
-        properties[item] = {
-            "type": "array", "uniqueItems": True,
-            **({"items": {"enum": candidates}} if candidates else {"maxItems": 0}),
-        }
-    return prompt, {
-        "type": "object", "additionalProperties": False,
-        "required": ["requires"],
-        "properties": {
-            "requires": {
-                "type": "object", "additionalProperties": False,
-                "required": list(properties), "properties": properties,
-            }
-        },
-    }
-
-
-def architecture_topology_repair_request(payload: dict, problems: list[str], run_dir: Path) -> tuple[str, dict]:
-    catalog = architecture_id_catalog(payload, run_dir)
-    obligations = [catalog[item["obligation_id"]] for item in payload["obligation_graph"]]
-    genesis = committed_record(run_dir, "genesis")
-    prompt = bounded_context(
-        [
-            ("STORY PREMISE", genesis["work_canon"]["premise"]),
-            ("CENTRAL INCIDENT", genesis["work_canon"]["central_incident"]),
-            ("CURRENT TOPOLOGY", payload["topology"]),
-            ("TOPOLOGY PROBLEMS", problems),
-            ("ALLOWED HARD OBLIGATIONS", obligations),
-            ("INSTRUCTION", "Return a complete replacement topology only. It must use declared nodes, exactly three outgoing branch edges at the opening hub, and only listed hard obligations. Preserve the existing dramatic design where possible."),
-        ],
-        36000,
-    )
-    protocol = load_protocol(run_dir)
-    schema = copy.deepcopy(protocol["$defs"]["architectureCore"]["properties"]["topology"])
-    schema["$defs"] = definition_schema("architectureCorePayload", protocol)["$defs"]
-    return prompt, schema
-
-
-def architecture_local_repair_request(payload: dict, issue: dict, run_dir: Path) -> tuple[str, dict]:
-    protocol = load_protocol(run_dir)
-    field = issue["path"][-2] if isinstance(issue["path"][-1], int) else issue["path"][-1]
-    additions = {"new_obligation": "obligation", "new_attractor": "attractor"}
-    allowed = {"new_obligation"} if field in {"hard_obligation_ids", "requires", "prerequisite_obligation_ids"} else set()
-    if field == "termination_targets":
-        allowed = set(additions)
-    properties = {"replacement": {"enum": list(dict.fromkeys(issue["candidates"] +
-        ([issue["invalid"]] if allowed and isinstance(issue["invalid"], str) else []) +
-        ([None] if isinstance(issue["path"][-1], int) else [])))}}
-    definitions = {}
-    for name, definition in additions.items():
-        properties[name] = {"anyOf": [{"type": "null"}, {"$ref": f"#/$defs/{definition}"}]} if name in allowed else {"type": "null"}
-        if name in allowed:
-            definitions.update(definition_schema(definition, protocol)["$defs"])
-    response_schema = {"type": "object", "additionalProperties": False, "required": list(properties),
-                       "properties": properties, "$defs": definitions}
-    owner = payload
-    for part in issue["path"][:-2] if isinstance(issue["path"][-1], int) else issue["path"][:-1]:
-        owner = owner[part]
-    prompt = bounded_context([
-        ("REFERENCE TO CORRECT", {"path": reference_path(issue["path"]), "invalid": issue["invalid"], "owner": owner}),
-        ("INSTRUCTION", "Correct only this reference. Select an existing target with matching meaning, or use null to remove an erroneous list entry if its field remains valid. If the intended local obligation or attractor is genuinely missing, author exactly one complete definition using the missing ID and return that same ID as replacement. New definitions must reference existing, typed IDs. Do not invent claimants, committed sources, or unrelated content. Set unused new_obligation and new_attractor to null."),
-        ("REPAIR RESPONSE SCHEMA", response_schema),
-        ("DECLARED IDS AND MEANINGS", [f"{key}: {value}" for key, value in architecture_id_catalog(payload, run_dir).items()]),
-    ], 36000)
-    return prompt, response_schema
-
-
-def apply_architecture_local_repair(payload: dict, issue: dict, result: dict, run_dir: Path) -> dict:
-    value = copy.deepcopy(payload)
-    additions = [(key, group, identity) for key, group, identity in (
-        ("new_obligation", "obligation_graph", "obligation_id"), ("new_attractor", "attractors", "attractor_id")
-    ) if result[key] is not None]
-    if len(additions) > 1:
-        raise SchemaError("A local reference repair may add only one definition")
-    for key, group, identity in additions:
-        item = result[key]
-        if item[identity] != issue["invalid"] or result["replacement"] != issue["invalid"]:
-            raise SchemaError("A new definition must use the missing ID and resolve its reference")
-        if any(record[identity] == item[identity] for record in value[group]):
-            raise SchemaError("Local reference repair cannot replace an existing definition")
-        value[group].append(item)
-    if not additions and result["replacement"] not in issue["candidates"] + [None]:
-        raise SchemaError("Replacement needs an existing target or its missing definition")
-    cursor = value
-    for part in issue["path"][:-1]:
-        cursor = cursor[part]
-    if result["replacement"] is None:
-        if not isinstance(issue["path"][-1], int):
-            raise SchemaError("Only an invalid list entry may be removed")
-        del cursor[issue["path"][-1]]
-    else:
-        cursor[issue["path"][-1]] = [result["replacement"]] if issue["mode"] == "set_list" else result["replacement"]
-    value = normalize_architecture_core_payload(value, run_dir)
-    draft_schema = definition_schema("architectureCorePayload", load_protocol(run_dir))
-    draft_schema["$defs"]["obligation"].pop("allOf", None)
-    validate_architecture_draft(value, draft_schema, run_dir)
-    previous = {(tuple(item["path"]), item["invalid"]) for item in architecture_reference_issues(payload, run_dir)}
-    for item in architecture_reference_issues(value, run_dir):
-        if (tuple(item["path"]), item["invalid"]) not in previous:
-            # Removing one list entry shifts later invalid references; they remain pending.
-            shifted = result["replacement"] is None and any(
-                path[:-1] == tuple(item["path"][:-1]) and invalid == item["invalid"] for path, invalid in previous)
-            if not shifted:
-                raise SchemaError("Local correction introduced another invalid reference")
-    if not architecture_obligation_cycle(payload) and architecture_obligation_cycle(value):
-        raise SchemaError("Local correction introduced a dependency cycle")
-    return value
-
-
-def repair_architecture_core_payload(run_dir: Path, step_id: str, payload: dict, content: str, response: dict, transport) -> dict:
-    preserve_artistic_payload(run_dir, step_id, payload, content, response)
-    repair_path = run_dir / ".staging" / f"{step_id}.repair.json"
-    state = read_json(repair_path) if repair_path.exists() else {
-        "payload": normalize_architecture_core_payload(payload, run_dir), "history": []
-    }
-    write_json(repair_path, state)
-
-    def persist(kind, repair_step, result, api_response):
-        entry = {
-            "kind": kind,
-            "step_id": repair_step,
-            "result": result,
-            "api_response": api_response,
-        }
-        previous = next((item for item in state["history"] if item["step_id"] == repair_step), None)
-        if previous:
-            if previous != entry:
-                raise IntegrityError(f"Preserved Architecture repair changed: {repair_step}")
-            return
-        state["history"].append(entry)
-        write_json(repair_path, state)
-
-    def resolve_reference_batch(issues):
-        signature = sha256_bytes(canonical_json([
-            {key: issue[key] for key in ("path", "invalid", "candidates")}
-            for issue in issues
-        ]))[:12]
-        repair_step = f"{step_id}_reference_repair_{signature}"
-        prompt, schema = architecture_reference_repair_request(state["payload"], issues, run_dir)
-        try:
-            result, api_response = request_architecture_analysis(
-                run_dir, repair_step, prompt, schema, transport
-            )
-        except PausedError as error:
-            if len(issues) == 1 or error.failure_class == "provider_incomplete_response":
-                raise
-            midpoint = len(issues) // 2
-            resolve_reference_batch(issues[:midpoint])
-            resolve_reference_batch(issues[midpoint:])
-            return
-        resolved = [issue for issue in issues if result["resolutions"][issue["issue_id"]] != "UNRESOLVED"]
-        state["payload"] = normalize_architecture_core_payload(
-            apply_architecture_reference_resolutions(state["payload"], resolved, result["resolutions"]), run_dir)
-        persist("reference", repair_step, result, api_response)
-        unresolved = [issue for issue in issues if issue not in resolved]
-        if unresolved:
-            issue = unresolved[0]
-            signature = sha256_bytes(canonical_json(issue))[:12]
-            repair_step = f"{step_id}_local_repair_{signature}"
-            prompt, schema = architecture_local_repair_request(state["payload"], issue, run_dir)
-            result, api_response = request_architecture_analysis(
-                run_dir, repair_step, prompt, schema, transport,
-                lambda correction: apply_architecture_local_repair(state["payload"], issue, correction, run_dir),
-            )
-            state["payload"] = apply_architecture_local_repair(state["payload"], issue, result, run_dir)
-            persist("local_reference", repair_step, result, api_response)
-
-    for _ in range(12):
-        state["payload"] = normalize_architecture_core_payload(state["payload"], run_dir)
-        topology_problems = architecture_topology_problems(state["payload"])
-        if topology_problems:
-            signature = sha256_bytes(canonical_json({
-                "topology": state["payload"]["topology"], "problems": topology_problems
-            }))[:12]
-            repair_step = f"{step_id}_topology_repair_{signature}"
-            prompt, schema = architecture_topology_repair_request(state["payload"], topology_problems, run_dir)
-
-            def validate_topology(topology):
-                candidate = copy.deepcopy(state["payload"])
-                candidate["topology"] = topology
-                remaining = architecture_topology_problems(normalize_architecture_core_payload(candidate, run_dir))
-                if remaining:
-                    raise SchemaError("Topology remains invalid: " + "; ".join(remaining))
-
-            result, api_response = request_architecture_analysis(
-                run_dir, repair_step, prompt, schema, transport, validate_topology
-            )
-            state["payload"]["topology"] = result
-            state["payload"] = normalize_architecture_core_payload(state["payload"], run_dir)
-            persist("topology", repair_step, result, api_response)
-            continue
-        issues = architecture_reference_issues(state["payload"], run_dir)
-        if issues:
-            resolve_reference_batch(issues)
-            continue
-        cycle = architecture_obligation_cycle(state["payload"])
-        if cycle:
-            signature = sha256_bytes(canonical_json(cycle))[:12]
-            repair_step = f"{step_id}_dependency_repair_{signature}"
-            prompt, schema = architecture_dependency_repair_request(state["payload"], cycle, run_dir)
-
-            def validate_dependencies(result):
-                candidate = copy.deepcopy(state["payload"])
-                by_id = {item["obligation_id"]: item for item in candidate["obligation_graph"]}
-                for obligation_id, requires in result["requires"].items():
-                    by_id[obligation_id]["requires"] = requires
-                if architecture_obligation_cycle(candidate):
-                    raise SchemaError("Replacement obligation dependencies remain circular")
-
-            result, api_response = request_architecture_analysis(
-                run_dir, repair_step, prompt, schema, transport, validate_dependencies
-            )
-            by_id = {item["obligation_id"]: item for item in state["payload"]["obligation_graph"]}
-            for obligation_id, requires in result["requires"].items():
-                by_id[obligation_id]["requires"] = requires
-            persist("obligation_dependencies", repair_step, result, api_response)
-            continue
-        try:
-            validate_architecture_core_payload(state["payload"], run_dir)
-        except SchemaError as error:
-            raise PausedError("Architecture repair", error.reason) from error
-        if state["history"] or state["payload"] != payload:
-            write_json(repair_path, state)
-        return state["payload"]
-    raise PausedError("Architecture repair", "Focused repairs did not converge after 12 validated rounds")
 
 
 def validate_packet_payload(payload: dict, plan: dict) -> None:
@@ -6729,12 +6161,12 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
 
 
 def audit_ending_resolutions(run_dir, step_id, artistic, normalized, transport):
-    if execution_policy(run_dir).get("completion_contract_version") != 1:
-        return normalized
     if not isinstance(normalized, dict) or not isinstance(normalized.get("obligation_updates"), list):
         return normalized  # The normal schema/category recovery must diagnose malformed metadata.
     obligations = _read_state_map(run_dir, "obligations.json")
     strict = ending_prerequisite_ids(committed_record(run_dir, "architecture") or {}, obligations)
+    if not strict:
+        return normalized
     sources = {item["technical_slot_id"]: [item["prose_mdx"]] + [artifact["body_mdx"] for artifact in item["artifacts"]]
         for item in artistic["scenes"] + artistic["endings"]}
     choices = {item["technical_slot_id"]: item["choices"] for item in artistic["scenes"] + artistic["endings"]}
@@ -6777,8 +6209,7 @@ def audit_ending_resolutions(run_dir, step_id, artistic, normalized, transport):
 
 
 def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload: dict, context: str, transport=http_json, *, plan=None) -> dict:
-    if scaffold_enabled(run_dir):
-        audit_scaffold_guarantees(run_dir, step_id, artistic_payload, plan, transport)
+    audit_scaffold_guarantees(run_dir, step_id, artistic_payload, plan, transport)
     target = run_dir / ".staging" / f"{step_id}.semantic.json"
     pending_path = run_dir / ".staging" / f"{step_id}.semantic-pending.json"
     semantic_api_path = run_dir / ".staging" / f"{step_id}.semantic.api.json"
@@ -7301,10 +6732,9 @@ def validate_completed_architecture(run_dir: Path) -> None:
     if not architecture:
         raise SchemaError("Architecture plan batches are incomplete")
     validate_architecture(architecture, read_json(run_dir / "run-manifest.json"), set(_source_index(run_dir)))
-    if scaffold_enabled(run_dir) and not architecture.get("causal_scaffold"):
+    if not architecture.get("causal_scaffold"):
         raise IntegrityError("Scaffold policy requires a committed causal scaffold")
-    if execution_policy(run_dir).get("completion_contract_version") == 1:
-        navigation_contract_route(architecture)
+    navigation_contract_route(architecture)
     if architecture.get("causal_scaffold") and architecture["packet_plans"] != scaffold_packet_plans(architecture):
         raise IntegrityError("Frozen packets differ from causal scaffold compilation")
 
@@ -7352,15 +6782,14 @@ def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
     if record["packet_sequence"] != committed_packet_count + 1:
         raise SchemaError("Packet sequence does not match immutable forward commit order")
     content = record["scenes"] if record["packet_kind"] == "literary" else record["endings"]
-    if scaffold_enabled(run_dir):
-        scaffold_nodes = {architecture["causal_scaffold"]["slot_ids"][node["node_id"]]: node for node in architecture["causal_scaffold"]["nodes"]}
-        for item in content:
-            receipt_path = run_dir / ".staging" / f"scaffold-evidence-{item['technical_slot_id']}.json"
-            if not receipt_path.exists():
-                raise IntegrityError("A scaffold packet cannot commit without its source audit")
-            receipt = read_json(receipt_path)
-            if receipt["own_text_hash"] != sha256_bytes(canonical_json(scaffold_literary_texts(item, record))) or receipt["contract_hash"] != sha256_bytes(canonical_json(scaffold_nodes[item["technical_slot_id"]])):
-                raise IntegrityError("Scaffold source audit does not match the committing prose or contract")
+    scaffold_nodes = {architecture["causal_scaffold"]["slot_ids"][node["node_id"]]: node for node in architecture["causal_scaffold"]["nodes"]}
+    for item in content:
+        receipt_path = run_dir / ".staging" / f"scaffold-evidence-{item['technical_slot_id']}.json"
+        if not receipt_path.exists():
+            raise IntegrityError("A scaffold packet cannot commit without its source audit")
+        receipt = read_json(receipt_path)
+        if receipt["own_text_hash"] != sha256_bytes(canonical_json(scaffold_literary_texts(item, record))) or receipt["contract_hash"] != sha256_bytes(canonical_json(scaffold_nodes[item["technical_slot_id"]])):
+            raise IntegrityError("Scaffold source audit does not match the committing prose or contract")
     occupied_slots = {
         item["technical_slot_id"]
         for chunk in packet_chunks(run_dir, record["packet_slot_id"])
@@ -7417,7 +6846,7 @@ def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
         if update["obligation_id"] not in obligations:
             raise SchemaError("Obligation update references an unknown obligation")
         original = obligation_state[update["obligation_id"]]["data"]
-        if execution_policy(run_dir).get("completion_contract_version") == 1 and update["obligation_id"] in ending_prerequisite_ids(architecture, obligation_state) and update["status"] == "intentionally_unresolved":
+        if update["obligation_id"] in ending_prerequisite_ids(architecture, obligation_state) and update["status"] == "intentionally_unresolved":
             raise SchemaError("An ending prerequisite must remain active until supported satisfaction; ambiguous ongoing work is not a terminal resolution",
                 paths=["$.constraint_delta.obligation_updates"])
         if update["status"] == "foreclosed" and original["universality"] == "universal" and original["hardness"] == "hard":
@@ -7441,15 +6870,14 @@ def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
         raise EpistemicDependencyError(conflicts)
     prospective = _read_state_map(run_dir, "prospective-plan.json")
     feasibility = {item["attractor_id"]: item["status"] for item in prospective.get("feasibility", [])}
-    if execution_policy(run_dir).get("completion_contract_version") == 1:
-        effective = {identifier: event["data"]["status"] for identifier, event in obligation_state.items()}
-        effective.update({update["obligation_id"]: update["status"] for update in changes["obligation_updates"]})
-        active_architecture = architecture | {"attractors": [item for item in architecture["attractors"] if feasibility.get(item["attractor_id"]) != "foreclosed"]}
-        pending = sorted(identifier for identifier in ending_prerequisite_ids(active_architecture, obligation_state) if effective.get(identifier) != "satisfied")
-        filled = {scene["technical_slot_id"] for packet in committed_records(run_dir, "creative_packet") + [record] for scene in packet["scenes"]}
-        remaining = {slot for item in architecture["packet_plans"] for slot in item["scene_slot_ids"]} - filled
-        if pending and not remaining:
-            raise SchemaError("No remaining literary slot can establish these ending prerequisites: " + ", ".join(pending), paths=["$.constraint_delta.obligation_updates"])
+    effective = {identifier: event["data"]["status"] for identifier, event in obligation_state.items()}
+    effective.update({update["obligation_id"]: update["status"] for update in changes["obligation_updates"]})
+    active_architecture = architecture | {"attractors": [item for item in architecture["attractors"] if feasibility.get(item["attractor_id"]) != "foreclosed"]}
+    pending = sorted(identifier for identifier in ending_prerequisite_ids(active_architecture, obligation_state) if effective.get(identifier) != "satisfied")
+    filled = {scene["technical_slot_id"] for packet in committed_records(run_dir, "creative_packet") + [record] for scene in packet["scenes"]}
+    remaining = {slot for item in architecture["packet_plans"] for slot in item["scene_slot_ids"]} - filled
+    if pending and not remaining:
+        raise SchemaError("No remaining literary slot can establish these ending prerequisites: " + ", ".join(pending), paths=["$.constraint_delta.obligation_updates"])
     satisfaction_evidence = {
         key: {source["artifact_id"] for source in value["resolution_event"]["sources"]}
         for key, value in obligation_state.items()
@@ -7501,15 +6929,10 @@ def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
     ):
         raise SchemaError("Packet changed its frozen threshold geomancy")
     validate_packet_against_plan(record, plan)
-    if execution_policy(run_dir).get("completion_contract_version") == 1:
-        candidate = {field: [item | {"choices": [edge for edge in record["decision_edges"]
-            if edge["from_content_id"] == item.get("scene_id", item.get("ending_id"))]} for item in record[field]]
-            for field in ("scenes", "endings")}
-        validate_navigation_payload(run_dir, architecture, plan, candidate)
-
-
-def compact_schema(run_dir: Path, record_type: str) -> str:
-    return json.dumps(record_schema(record_type, load_protocol(run_dir)), ensure_ascii=False, separators=(",", ":"))
+    candidate = {field: [item | {"choices": [edge for edge in record["decision_edges"]
+        if edge["from_content_id"] == item.get("scene_id", item.get("ending_id"))]} for item in record[field]]
+        for field in ("scenes", "endings")}
+    validate_navigation_payload(run_dir, architecture, plan, candidate)
 
 
 def compact_definition(run_dir: Path, definition: str) -> str:
@@ -7519,59 +6942,6 @@ def compact_definition(run_dir: Path, definition: str) -> str:
 def packet_dependency_schema(allowed):
     return {"type": "array", "uniqueItems": True,
         **({"items": {"type": "string", "enum": list(allowed)}} if allowed else {"maxItems": 0})}
-
-
-def architecture_plan_batch_schema(run_dir: Path, specs: list[dict], *, prior_packet_ids=()) -> dict:
-    schema = copy.deepcopy(definition_schema("architecturePlanBatchPayload", load_protocol(run_dir)))
-    navigation = execution_policy(run_dir).get("completion_contract_version") == 1
-    if navigation:
-        schema["$defs"]["navigationDestination"] = {"enum": [slot for item in planned_packet_specs(planning_core(run_dir))
-            for slot in item["scene_slot_ids"] + item["ending_slot_ids"]]}
-    else:
-        schema["$defs"]["packetPlanAnnotation"]["properties"].pop("required_navigation", None)
-    packet_ids = [item["packet_slot_id"] for item in specs]
-    schema["properties"]["packet_plans"] |= {
-        "minItems": len(packet_ids), "maxItems": len(packet_ids)
-    }
-    packet_id = schema["$defs"]["packetPlanAnnotation"]["properties"]["packet_slot_id"]
-    packet_id.clear()
-    packet_id.update({"const": packet_ids[0]} if len(packet_ids) == 1 else {"enum": packet_ids})
-    variants = []
-    for index, spec in enumerate(specs):
-        node = copy.deepcopy(schema["$defs"]["packetPlanAnnotation"])
-        if navigation:
-            node["required"].append("required_navigation")
-            node["properties"]["required_navigation"] = {"type": "object", "additionalProperties": False,
-                "required": spec["scene_slot_ids"], "properties": {slot: {"type": "array", "minItems": 1, "maxItems": 16,
-                    "uniqueItems": True, "items": {"$ref": "#/$defs/navigationDestination"}} for slot in spec["scene_slot_ids"]}}
-        node["properties"]["packet_slot_id"] = {"const": spec["packet_slot_id"]}
-        node["properties"]["depends_on_packet_slot_ids"] = packet_dependency_schema(list(prior_packet_ids) + packet_ids[:index])
-        variants.append(node)
-    schema["properties"]["packet_plans"]["items"] = {"type": "object", "anyOf": variants}
-    return schema
-
-
-def architecture_plan_annotation_schema(
-    run_dir: Path, spec: dict, allowed_dependencies: list[str]
-) -> dict:
-    schema = architecture_plan_batch_schema(run_dir, [spec], prior_packet_ids=allowed_dependencies)
-    if execution_policy(run_dir).get("completion_contract_version") == 1:
-        navigation = schema["properties"]["packet_plans"]["items"]["anyOf"][0]["properties"]["required_navigation"]
-        schema["$defs"]["packetPlanAnnotation"]["required"].append("required_navigation")
-        schema["$defs"]["packetPlanAnnotation"]["properties"]["required_navigation"] = navigation
-    properties = schema["$defs"]["packetPlanAnnotation"]["properties"]
-    properties["depends_on_packet_slot_ids"] = packet_dependency_schema(allowed_dependencies)
-    core = planning_core(run_dir)
-    attractors = [
-        item["attractor_id"] for item in core["attractors"]
-        if spec["packet_kind"] != "ending" or item["kind"] == "ending"
-    ]
-    properties["attractor_ids"] = {
-        "type": "array", "uniqueItems": True, "items": {"enum": attractors},
-        **({"minItems": 1, "maxItems": 1} if spec["packet_kind"] == "ending" else {}),
-    }
-    schema["properties"]["packet_plans"]["items"]["anyOf"] = [copy.deepcopy(schema["$defs"]["packetPlanAnnotation"])]
-    return schema
 
 
 def ending_prerequisite_ids(architecture, obligations):
@@ -7606,7 +6976,7 @@ def semantic_delta_schema(run_dir: Path, source_slots, *, plan=None) -> dict:
             "enum": [status for status in protocol["$defs"]["obligationUpdate"]["properties"]["status"]["enum"]
                      if status not in {"foreclosed", "impossible"}]
         }
-        if obligations and execution_policy(run_dir).get("completion_contract_version") == 1:
+        if obligations:
             strict = ending_prerequisite_ids(committed_record(run_dir, "architecture") or {}, _read_state_map(run_dir, "obligations.json")) & set(obligations)
             if strict:
                 base = schema["$defs"]["semanticObligationUpdate"]
@@ -7686,16 +7056,14 @@ def genesis_cast_schema(run_dir: Path) -> dict:
 
 
 def generation_context(run_dir, sections, max_tokens):
-    if execution_policy(run_dir).get("scoped_sources"):
-        return complete_context(sections)
-    return bounded_context(sections, max_tokens)
+    return complete_context(sections)
 
 
 def genesis_foundation_prompt(run_dir: Path) -> tuple[str, str]:
     manifest = read_json(run_dir / "run-manifest.json")
     context = generation_context(run_dir,
         [
-            ("FROZEN ENGINE CANON", instruction_profile(run_dir)[0] if execution_policy(run_dir).get("scoped_sources") else (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
+            ("FROZEN ENGINE CANON", (instruction_profile(run_dir)[0])),
             ("FROZEN RUN MANIFEST", manifest),
         ],
         manifest["budgets"]["max_prepared_context_tokens"] - 12000,
@@ -7711,7 +7079,7 @@ def genesis_cast_prompt(run_dir: Path) -> tuple[str, str]:
     manifest = read_json(run_dir / "run-manifest.json")
     context = generation_context(run_dir,
         [
-            ("FROZEN ENGINE CANON", instruction_profile(run_dir)[0] if execution_policy(run_dir).get("scoped_sources") else (run_dir / "state/frozen-engine-context.txt").read_text(encoding="utf-8")),
+            ("FROZEN ENGINE CANON", (instruction_profile(run_dir)[0])),
             ("IMMUTABLE GENESIS FOUNDATION", committed_record(run_dir, "genesis_foundation")),
         ],
         manifest["budgets"]["max_prepared_context_tokens"] - 12000,
@@ -7741,70 +7109,6 @@ def genesis_constraints_prompt(run_dir: Path) -> tuple[str, str]:
             "GENESIS_CONSTRAINT_PROTOCOL_DEFINITIONS": json.dumps(
                 genesis_constraints_schema(run_dir), ensure_ascii=False, separators=(",", ":")
             ),
-        },
-    ), context
-
-
-def architecture_core_prompt(run_dir: Path) -> tuple[str, str]:
-    manifest = read_json(run_dir / "run-manifest.json")
-    genesis = committed_record(run_dir, "genesis")
-    catalog = genesis_reference_catalog(run_dir)
-    context = complete_context(
-        [
-            ("FROZEN ARCHITECTURE CANON", engine_context(run_dir, ARCHITECTURE_CONTEXT_FILES)),
-            ("FROZEN RUN MANIFEST", manifest),
-            ("IMMUTABLE GENESIS", genesis),
-            ("ALLOWED GENESIS CLAIMANTS", [catalog[item] for item in sorted(
-                claimant["claimant_id"] for claimant in genesis["claimants"]
-            )]),
-            ("ALLOWED COMMITTED SOURCES", [catalog[item] for item in sorted(_source_index(run_dir))]),
-        ],
-    )
-    return render_prompt(
-        run_dir,
-        "generation-architecture.md",
-        {
-            "FROZEN_ARCHITECTURE_CONTEXT": context,
-            "ARCHITECTURE_PROTOCOL_DEFINITIONS": compact_definition(run_dir, "architectureCorePayload"),
-        },
-    ), context
-
-
-def architecture_plan_prompt(run_dir: Path, specs: list[dict], sequence: int, count: int) -> tuple[str, str]:
-    core = planning_core(run_dir)
-    prior_ids = [
-        plan["packet_slot_id"]
-        for batch in planning_batches_view(run_dir)
-        if batch["batch_sequence"] < sequence
-        for plan in batch["packet_plans"]
-    ]
-    scene_slots = {slot for spec in specs for slot in spec["scene_slot_ids"]}
-    geomancy = [item for item in ensure_frozen_geomancy(run_dir)["assignments"] if item["technical_slot_id"] in scene_slots]
-    context = complete_context(
-        [
-            ("IMMUTABLE GENESIS", committed_record(run_dir, "genesis")),
-            ("VALIDATED STAGED ARCHITECTURE CORE", core),
-            ("PRIOR STAGED PACKET IDS", prior_ids),
-            ("THIS BATCH THRESHOLD GEOMANCY", geomancy),
-        ],
-    )
-    allocation = {
-        "record_type": "architecture_plan_batch",
-        "protocol_version": PROTOCOL_VERSION,
-        "generation_id": run_dir.name,
-        "architecture_core_commit_id": core["commit_id"],
-        "story_format": "web",
-        "batch_sequence": sequence,
-        "batch_count": count,
-        "packet_allocations": specs,
-    }
-    return render_prompt(
-        run_dir,
-        "generation-architecture-plan-batch.md",
-        {
-            "ARCHITECTURE_PLAN_CONTEXT": context,
-            "ARCHITECTURE_PLAN_ALLOCATIONS": canonical_json(allocation).decode(),
-            "ARCHITECTURE_PLAN_PROTOCOL_DEFINITIONS": canonical_json(architecture_plan_batch_schema(run_dir, specs, prior_packet_ids=prior_ids)).decode(),
         },
     ), context
 
@@ -7846,10 +7150,9 @@ def packet_prompt(run_dir: Path, architecture: dict, plan: dict, *, step_id=None
         }
     envelope = render_prompt(run_dir, name, replacements)
     overhead = estimated_prompt_tokens(RECORD_SYSTEM_PROMPT + envelope)
-    if execution_policy(run_dir).get("completion_contract_version") == 1:
-        overhead = provider_input_tokens({"messages": [{"role": "system", "content": RECORD_SYSTEM_PROMPT}, {"role": "user", "content": envelope}],
-            "response_format": {"type": "json_schema", "json_schema": {"name": "creativePacketPayload", "strict": True,
-                "schema": packet_payload_schema(run_dir, plan)}}}) + 128
+    overhead = provider_input_tokens({"messages": [{"role": "system", "content": RECORD_SYSTEM_PROMPT}, {"role": "user", "content": envelope}],
+        "response_format": {"type": "json_schema", "json_schema": {"name": "creativePacketPayload", "strict": True,
+            "schema": packet_payload_schema(run_dir, plan)}}}) + 128
     context = relevant_packet_context(run_dir, architecture, plan, receipt=receipt, step_id=actual_step, prompt_overhead_tokens=overhead)
     replacements["PACKET_CONTEXT" if plan["packet_kind"] == "literary" else "ENDING_PACKET_CONTEXT"] = context
     prompt = render_prompt(run_dir, name, replacements)
@@ -7895,10 +7198,9 @@ def expanded_output_limit(run_dir: Path, prompt: str, base_step_id: str, schema=
         default=0,
     )
     prompt_tokens = max(observed, math.ceil(len(prompt.encode("utf-8")) / 3))
-    if execution_policy(run_dir).get("completion_contract_version") == 1:
-        prompt_tokens = max(prompt_tokens, provider_input_tokens({"messages": [
-            {"role": "system", "content": RECORD_SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
-            "response_format": {"type": "json_schema", "json_schema": {"schema": schema or {}}}}) + 128)
+    prompt_tokens = max(prompt_tokens, provider_input_tokens({"messages": [
+        {"role": "system", "content": RECORD_SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
+        "response_format": {"type": "json_schema", "json_schema": {"schema": schema or {}}}}) + 128)
     available = (
         min(
             manifest["budgets"]["model_context_window_tokens"],
@@ -7963,25 +7265,23 @@ def packet_payload_schema(run_dir: Path, plan: dict) -> dict:
         if not architecture:
             raise IntegrityError("Creative packet schema requires committed Architecture")
         properties["arc_id"] = {"enum": [item["arc_id"] for item in architecture["arcs"]]}
-        if execution_policy(run_dir).get("completion_contract_version") == 1:
-            targets = plan.get("required_navigation", {}).get(slots[0], [])
-            if not targets:
-                raise IntegrityError(f"Frozen navigation targets are absent for {slots[0]}")
-            properties["choices"]["minItems"] = len(targets)
-            if scaffold_enabled(run_dir):
-                local_node = scaffold_local_contract(architecture, plan)["nodes"][0]
-                properties["arc_id"] = {"const": local_node["arc_id"]}
-                properties["choices"]["maxItems"] = len(targets)
-                choice_properties = schema["$defs"]["choicePayload"]["properties"]
-                choice_properties["availability"] = {"const": "playable"}
-                choice_properties["kind"] = {"enum": ["progression", "decision", "ending"]}
-                if len(targets) == 1:
-                    properties["major_decision"] = {"const": False}
-                    choice_properties["major_decision"] = {"const": False}
-                    choice_properties["kind"] = {"enum": ["progression", "ending"]}
-                schema["$defs"]["choicePayload"]["properties"]["destination"] = {"type": "object", "additionalProperties": False,
-                    "required": ["kind", "id"], "properties": {"kind": {"const": "technical_slot"}, "id": {"enum": targets}}}
-    if scaffold_enabled(run_dir) and definition == "endingPayload":
+        targets = plan.get("required_navigation", {}).get(slots[0], [])
+        if not targets:
+            raise IntegrityError(f"Frozen navigation targets are absent for {slots[0]}")
+        properties["choices"]["minItems"] = len(targets)
+        local_node = scaffold_local_contract(architecture, plan)["nodes"][0]
+        properties["arc_id"] = {"const": local_node["arc_id"]}
+        properties["choices"]["maxItems"] = len(targets)
+        choice_properties = schema["$defs"]["choicePayload"]["properties"]
+        choice_properties["availability"] = {"const": "playable"}
+        choice_properties["kind"] = {"enum": ["progression", "decision", "ending"]}
+        if len(targets) == 1:
+            properties["major_decision"] = {"const": False}
+            choice_properties["major_decision"] = {"const": False}
+            choice_properties["kind"] = {"enum": ["progression", "ending"]}
+        schema["$defs"]["choicePayload"]["properties"]["destination"] = {"type": "object", "additionalProperties": False,
+            "required": ["kind", "id"], "properties": {"kind": {"const": "technical_slot"}, "id": {"enum": targets}}}
+    if definition == "endingPayload":
         properties["choices"] = {"type": "array", "maxItems": 0}
         properties["redirect_destination"] = {"type": "null"}
         properties["ending_type"] = {"enum": ["commitment", "foreclosure", "contamination", "release", "other"]}
@@ -8388,45 +7688,6 @@ def compact_planning_schema(schema: dict) -> dict:
     return result
 
 
-def planning_context(run_dir: Path, step_id: str, state: dict) -> dict:
-    context = {"assembled_draft": state["payload"], "pending_hints": state.get("hints", []),
-               "original_response": state.get("unassigned", []), "genesis": committed_record(run_dir, "genesis")}
-    core = planning_core(run_dir)
-    if core:
-        if step_id == "architecture_core":
-            context["compiled_core_metadata"] = {key: value for key, value in core.items()
-                if key not in {"arcs", "attractors", "obligation_graph", "topology"}}
-            context["canonical_ids"] = {item[identity]: compiled[identity]
-                for group, identity in (("arcs", "arc_id"), ("attractors", "attractor_id"), ("obligation_graph", "obligation_id"))
-                for item, compiled in zip(state["payload"][group], core[group])}
-            context["canonical_ids"].update({item[identity]: compiled[identity]
-                for group, identity in (("nodes", "node_id"), ("edges", "edge_id"))
-                for item, compiled in zip(state["payload"]["topology"][group], core["topology"][group])})
-        else:
-            context["assembled_core"] = core
-        context["allocations"] = planned_packet_specs(core)
-        context["assembled_plan_batches"] = [record for record in planning_batches_view(run_dir)
-            if step_id != f"architecture_plan_batch_{record['batch_sequence']:04d}"]
-    if state.get("setups"):
-        context["backward_setups"] = [dict(task) for task in state["setups"]]
-        guidance_locations = {}
-        for batch_index, batch in enumerate(context.get("assembled_plan_batches", [])):
-            for plan_index, plan in enumerate(batch["packet_plans"]):
-                for guidance_index, guidance in enumerate(plan["soft_guidance"]):
-                    pointer = f"/assembled_plan_batches/{batch_index}/packet_plans/{plan_index}/soft_guidance/{guidance_index}"
-                    guidance_locations.setdefault(guidance, []).append(pointer)
-        for task in context["backward_setups"]:
-            if not task.get("attached") or "instruction" not in task:
-                continue
-            marker = f"Setup in {task['setup_slot_id']} for {task.get('attractor_id', 'authored hint')}: {task['instruction']}"
-            matches = guidance_locations.get(marker, [])
-            if len(matches) == 1:
-                # Render the instruction once; the saved task retains its original bytes.
-                del task["instruction"]
-                task["instruction_ref"] = matches[0]
-    return context
-
-
 def prepared_context_limit(budgets: dict, *, planning=False):
     limit = budgets.get("max_prepared_context_tokens", float("inf"))
     return budgets.get("max_planning_context_tokens", limit) if planning else limit
@@ -8437,8 +7698,6 @@ def execution_policy(run_dir):
 
 
 def scoped_planning_context(run_dir, step_id, state, paths):
-    if not execution_policy(run_dir).get("bounded_planning"):
-        return planning_context(run_dir, step_id, state)
     payload = state["payload"]
     targets = []
     for path in paths:
@@ -8483,7 +7742,7 @@ def scoped_planning_context(run_dir, step_id, state, paths):
             for group in ("claimants", "characters") for value in genesis.get(group, [])],
         "relevant_entities": [value for group in ("claimants", "characters") for value in genesis.get(group, [])
             if any(value.get(key) in references for key in ("claimant_id", "character_id") if value.get(key))],
-        "pending_hints": state.get("hints", []), "backward_setups": state.get("setups", [])}
+        "pending_hints": state.get("hints", [])}
     if core:
         context["allocations"] = planned_packet_specs(core)
     return context
@@ -8525,9 +7784,8 @@ def planning_retrieval_task(step_id, state, paths, *, context=None):
 def planning_output_limit(run_dir: Path, prompt: str, schema: dict, requested: int, stage: str, *, purpose="planning") -> int:
     budgets = read_json(run_dir / "run-manifest.json")["budgets"]
     prompt_tokens = math.ceil(len(prompt.encode()) / 3)
-    if execution_policy(run_dir).get("completion_contract_version") == 1:
-        prompt_tokens = provider_input_tokens({"messages": [{"role": "user", "content": prompt}],
-            "response_format": {"type": "json_schema", "json_schema": {"schema": schema}}}) + 256
+    prompt_tokens = provider_input_tokens({"messages": [{"role": "user", "content": prompt}],
+        "response_format": {"type": "json_schema", "json_schema": {"schema": schema}}}) + 256
     reserve = budgets.get("context_safety_reserve_tokens", 4096)
     window = min(budgets.get("model_context_window_tokens", float("inf")),
                  load_state(run_dir).get("model_context_window_tokens", float("inf")))
@@ -8659,59 +7917,6 @@ def parsed_planning_fragment(content: str) -> tuple[dict, list[list]]:
     return (payload if isinstance(payload, dict) else {}), incomplete
 
 
-def parsed_planning_prefix(content: str) -> dict:
-    return parsed_planning_fragment(content)[0]
-
-
-def staged_planning_request(run_dir: Path, step_id: str, prompt: str, context: str,
-                            schema: dict, transport) -> dict:
-    path = run_dir / ".staging" / f"{step_id}.planning.json"
-
-    def account_bulk(state):
-        if not state.get("bulk_usage_ledgered"):
-            if not state["bulk_failed"]:
-                preserve_planning_result(run_dir, step_id, f"{step_id}_draft", state["payload"], state["bulk_response"], kind="planning_bulk")
-            state["bulk_usage_ledgered"] = True
-            save_planning_draft(run_dir, step_id, state)
-        return state
-
-    if path.exists():
-        return account_bulk(read_json(path))
-    failed = False
-    interruption = None
-    incomplete = []
-    try:
-        payload, response = request_architecture_analysis(
-            run_dir, step_id, prompt, schema, transport, initial_draft=True,
-            response_name="architectureCorePayload" if step_id == "architecture_core" else "architecturePlanBatchPayload",
-            pause_stage="Planning draft", temperature=0.7, max_tokens=EXPANDED_OUTPUT_TOKENS, planning_mode=True,
-            system_prompt="Author the supplied complete planning draft. Return JSON only.",
-        )
-    except PausedError as error:
-        if not isinstance(error.__cause__, (SchemaError, TruncationError, IncompleteResponseError)):
-            raise
-        if isinstance(error.__cause__, IncompleteResponseError):
-            interruption = error
-        failed = True
-        paths = list((run_dir / "raw").glob(f"{step_id}-attempt*.api.json"))
-        latest = max(paths, key=lambda p: int(p.name.split("-attempt")[-1].split(".")[0]))
-        response = read_json(latest)
-        choice = (response.get("choices") or [{}])[0]
-        content = (choice.get("message") or {}).get("content") or ""
-        try:
-            payload = parse_structured_content(content)
-        except SchemaError:
-            payload, incomplete = parsed_planning_fragment(content)
-    state = {"payload": payload if isinstance(payload, dict) else {}, "values": {}, "hints": [],
-             "bulk_response": response, "bulk_failed": failed, "prompt": prompt, "context": context,
-             "ready": False, "unassigned": [], "incomplete": incomplete, "checkpoint_version": 2}
-    save_planning_draft(run_dir, step_id, state)
-    account_bulk(state)
-    if interruption:
-        raise interruption
-    return state
-
-
 def planning_schema_node(schema: dict, root: dict) -> dict:
     if "$ref" in schema:
         return planning_schema_node(_resolve_pointer(root, schema["$ref"]), root) | {
@@ -8720,9 +7925,9 @@ def planning_schema_node(schema: dict, root: dict) -> dict:
 
 
 def planning_location(state: dict, path: list):
-    sections = {"$layout": "layout", "$setups": "setups", "$resolutions": "resolutions"}
+    sections = {"$layout": "layout", "$resolutions": "resolutions"}
     if path and path[0] in sections:
-        return state.setdefault(sections[path[0]], [] if path[0] == "$setups" else {}), path[1:]
+        return state.setdefault(sections[path[0]], {}), path[1:]
     return state["payload"], path
 
 
@@ -9047,34 +8252,7 @@ def canonical_planning_aliases(run_dir: Path, payload: dict, audit=None) -> dict
     return result
 
 
-def repair_packet_dependency_lists(run_dir, step_id, state, schema, transport):
-    variants = schema.get("properties", {}).get("packet_plans", {}).get("items", {}).get("anyOf", [])
-    domains = {node["properties"]["packet_slot_id"]["const"]: node["properties"]["depends_on_packet_slot_ids"] for node in variants}
-    for index, plan in enumerate(state["payload"].get("packet_plans", [])):
-        node = domains.get(plan.get("packet_slot_id"))
-        if node is None or "depends_on_packet_slot_ids" not in plan:
-            continue
-        before = plan["depends_on_packet_slot_ids"]
-        if not _collect_schema_errors(before, node, node, "$"):
-            continue
-        allowed = node.get("items", {}).get("enum", [])
-        retained = [value for value in before if value in allowed] if isinstance(before, list) else []
-        if not allowed:
-            after = []
-        else:
-            def preserve_existing(value):
-                if not set(retained).issubset(value):
-                    raise SchemaError("Dependency repair must retain every already-valid earlier prerequisite")
-            after = planning_value(run_dir, step_id, state, ["packet_plans", index, "depends_on_packet_slot_ids"], node,
-                f"Repair the complete dependency list {before!r}. Retain these valid earlier prerequisites: {retained!r}. "
-                "Remove or replace self/future/unknown references using only earlier packet IDs. An empty list is allowed when no valid prerequisite remains.",
-                transport, validator=preserve_existing)
-        state.setdefault("dependency_repairs", []).append({"packet_slot_id": plan["packet_slot_id"], "before": before, "after": after})
-        plan["depends_on_packet_slot_ids"] = after
-        save_planning_draft(run_dir, step_id, state)
-
-
-def repair_planning_references(run_dir: Path, step_id: str, state: dict, schema: dict, transport, *, specs=None) -> None:
+def repair_planning_references(run_dir: Path, step_id: str, state: dict, schema: dict, transport) -> None:
     seen = {}
     while True:
         fingerprint = sha256_bytes(canonical_json(state["payload"]))
@@ -9082,24 +8260,20 @@ def repair_planning_references(run_dir: Path, step_id: str, state: dict, schema:
         if seen[fingerprint] > 3:
             raise PausedError("Planning references", "Three passes made no progress; accepted planning records were preserved")
         state["payload"] = canonical_planning_aliases(run_dir, state["payload"], state.setdefault("aliases", []))
-        if step_id == "architecture_core":
-            state["payload"] = normalize_architecture_core_payload(state["payload"], run_dir)
-            issues = architecture_reference_issues(state["payload"], run_dir)
-            topology = state["payload"]["topology"]
-            nodes = [item["node_id"] for item in topology["nodes"]]
-            for field in ("entry_segment_id", "opening_branch_node_id"):
-                if topology[field] not in nodes:
-                    issues.append({"path": ["topology", field], "invalid": topology[field], "candidates": nodes, "mode": "replace"})
-            for index, identifier in enumerate(topology["reconvergence_node_ids"]):
-                if identifier not in nodes:
-                    issues.append({"path": ["topology", "reconvergence_node_ids", index], "invalid": identifier, "candidates": nodes, "mode": "replace"})
-            for index, edge in enumerate(topology["edges"]):
-                for field in ("from_node_id", "to_node_id"):
-                    if edge[field] not in nodes:
-                        issues.append({"path": ["topology", "edges", index, field], "invalid": edge[field], "candidates": nodes, "mode": "replace"})
-        else:
-            repair_packet_dependency_lists(run_dir, step_id, state, schema, transport)
-            issues = named_reference_issues(run_dir, state["payload"], "architecturePlanBatchPayload", specs=specs)
+        state["payload"] = normalize_architecture_core_payload(state["payload"], run_dir)
+        issues = architecture_reference_issues(state["payload"], run_dir)
+        topology = state["payload"]["topology"]
+        nodes = [item["node_id"] for item in topology["nodes"]]
+        for field in ("entry_segment_id", "opening_branch_node_id"):
+            if topology[field] not in nodes:
+                issues.append({"path": ["topology", field], "invalid": topology[field], "candidates": nodes, "mode": "replace"})
+        for index, identifier in enumerate(topology["reconvergence_node_ids"]):
+            if identifier not in nodes:
+                issues.append({"path": ["topology", "reconvergence_node_ids", index], "invalid": identifier, "candidates": nodes, "mode": "replace"})
+        for index, edge in enumerate(topology["edges"]):
+            for field in ("from_node_id", "to_node_id"):
+                if edge[field] not in nodes:
+                    issues.append({"path": ["topology", "edges", index, field], "invalid": edge[field], "candidates": nodes, "mode": "replace"})
         if not issues:
             save_planning_draft(run_dir, step_id, state)
             return
@@ -9108,11 +8282,6 @@ def repair_planning_references(run_dir: Path, step_id: str, state: dict, schema:
             path = list(issue["path"])
             field = path[-2] if isinstance(path[-1], int) else path[-1]
             choices, additions = list(issue["candidates"]), {}
-            if step_id == "architecture_core" and not execution_policy(run_dir).get("bounded_planning") and field in {"termination_targets", "requires", "hard_obligation_ids", "prerequisite_obligation_ids"}:
-                if len(state["payload"]["obligation_graph"]) < schema["properties"]["obligation_graph"]["maxItems"]:
-                    additions["__NEW_OBLIGATION__"] = ("obligation_graph", "obligation_id")
-                if field == "termination_targets" and len(state["payload"]["attractors"]) < schema["properties"]["attractors"]["maxItems"]:
-                    additions["__NEW_ATTRACTOR__"] = ("attractors", "attractor_id")
             if "relevance" in path:
                 choices.append("__NARRATIVE_HINT__")
             choices.extend(additions)
@@ -9121,9 +8290,9 @@ def repair_planning_references(run_dir: Path, step_id: str, state: dict, schema:
             key = sha256_bytes(canonical_json({"path": path, "invalid": issue["invalid"], "choices": choices}))[:16]
             selected.append((issue, additions, {"path": ["$resolutions", key],
                 "schema": {"type": "string", "enum": choices},
-                "reason": f"Resolve {issue['invalid']!r} at {reference_path(path)} using its meaning in the full draft. Choose __NARRATIVE_HINT__ for authored setup intent rather than a typed ID; it will be preserved and placed earlier. Choose a NEW option only for a missing local definition."}))
+                "reason": f"Resolve {issue['invalid']!r} at {reference_path(path)} using its meaning in the full draft. Choose __NARRATIVE_HINT__ for authored setup intent rather than a typed ID; it will be preserved in the planning audit. Choose a NEW option only for a missing local definition."}))
         planning_batch(run_dir, step_id, state, [task for _, _, task in selected], transport,
-            size=4 if execution_policy(run_dir).get("bounded_planning") else 16)
+            size=4)
         # Reverse order keeps original array indices stable when hints are removed.
         for issue, additions, task in reversed(selected):
             path = list(issue["path"])
@@ -9151,10 +8320,7 @@ def repair_planning_references(run_dir: Path, step_id: str, state: dict, schema:
 
 def allocate_core_draft(run_dir, schema, transport):
     scope = read_json(run_dir / "run-manifest.json")["scope"]
-    topology = planning_schema_node(schema["properties"]["topology"], schema)
     groups = {key: schema["properties"][key] for key in ("arcs", "attractors", "obligation_graph")}
-    if not scaffold_enabled(run_dir):
-        groups.update({key: topology["properties"][key] for key in ("nodes", "edges")})
     properties = {key: {"type": "integer", "minimum": max(node["minItems"], 4 if key == "nodes" else 3 if key == "edges" else 1),
         "maximum": min(node["maxItems"], scope["possible_scene_count"] if key in {"arcs", "nodes"} else node["maxItems"])}
         for key, node in groups.items()}
@@ -9175,8 +8341,7 @@ def allocate_core_draft(run_dir, schema, transport):
             continue
         parent = payload.setdefault("topology", {}) if group in {"nodes", "edges"} else payload
         parent[group] = [{identity: f"{prefix}_{index:03d}"} for index in range(1, result[group] + 1)]
-    if scaffold_enabled(run_dir):
-        payload["topology"] = scaffold_macro_topology()
+    payload["topology"] = scaffold_macro_topology()
     state = {"payload": payload, "values": {}, "hints": [], "unassigned": [], "incomplete": [],
         "checkpoint_version": 3, "ready": False}
     save_planning_draft(run_dir, "architecture_core", state)
@@ -9208,10 +8373,6 @@ def constrain_planning_ids(schema, payload, run_dir):
             old = planning_schema_node(value["properties"][name], schema)
             value["properties"][name] = (old | ({"items": {"enum": groups[kind]}, "uniqueItems": True} if groups[kind] else {"maxItems": 0})
                 if old.get("type") == "array" else {"type": "string", "enum": groups[kind]})
-
-
-def scaffold_enabled(run_dir):
-    return execution_policy(run_dir).get("scaffold_planning_version") in (1, 2)
 
 
 def scaffold_order(nodes):
@@ -9644,59 +8805,6 @@ def prepare_scaffold_expansion_v2(run_dir, state, core, targets, allocated, tran
         "Accepted contracts, unrelated connections and the latest amendments were checkpointed. Last problem: " + review["reason"])
 
 
-def scaffold_request_schema(run_dir, *, seed=False, allocated=(), targets=(), minimum=1):
-    schema = copy.deepcopy(definition_schema("scaffoldNode", load_protocol(run_dir)))
-    node = {key: value for key, value in schema.items() if key != "$defs"}
-    properties = node["properties"]
-    schema["$defs"]["scaffoldSupport"]["properties"]["genesis_source_ids"] = packet_dependency_schema(sorted(genesis_reference_catalog(run_dir)))
-    core = planning_core(run_dir)
-    properties["arc_id"] = {"enum": [item["arc_id"] for item in core["arcs"]]}
-    properties["kind"] = {"const": "ending" if seed else "scene"}
-    properties["terminal_role"] = {"enum": ["final", "premature"]} if seed else {"const": "none"}
-    hard = [item["obligation_id"] for item in core["obligation_graph"] if item["hardness"] == "hard"]
-    properties["prerequisite_obligation_ids"] = packet_dependency_schema(hard) if seed else {"type": "array", "maxItems": 0}
-    properties["attractor_id"] = {"enum": [item["attractor_id"] for item in core["attractors"] if item["kind"] == "ending"]} if seed else {"type": "null"}
-    if seed:
-        properties["node_id"] = {"enum": list(allocated)}
-        properties["successors"] = {"type": "array", "maxItems": 0}
-        properties["guarantees"]["minItems"] = 1
-    else:
-        properties["node_id"] = {"enum": list(allocated)}
-        properties["successors"]["minItems"] = 1
-        schema["$defs"]["scaffoldTransition"]["properties"]["to_node_id"] = {"enum": list(targets) + list(allocated)}
-    fields = {"nodes": {"type": "array", "minItems": minimum if seed else 1,
-        "maxItems": len(allocated), "items": node}, "complete": {"type": "boolean"}}
-    if not seed:
-        fields |= {"complete": {"type": "boolean"}, "opening_node_id": {"anyOf": [{"enum": list(allocated)}, {"type": "null"}]},
-                   "opening_support": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/scaffoldSupport"}}}
-    return {"type": "object", "additionalProperties": False, "required": list(fields), "properties": fields, "$defs": schema["$defs"]}
-
-
-def audit_scaffold_patch(run_dir, patch, frontier, transport):
-    source_ids = {identifier for node in patch["nodes"] for edge in node["successors"]
-        for support in edge["supports"] for identifier in support["genesis_source_ids"]}
-    source_ids.update(identifier for support in patch["opening_support"] for identifier in support["genesis_source_ids"])
-    sources = retrieve_original_sources(run_dir, [{"sources": [{"artifact_id": identifier} for identifier in sorted(source_ids)]}],
-        limit=None, strict=True, follow_sources=False) if source_ids else []
-    schema = {"type": "object", "additionalProperties": False, "required": ["supported", "reason"],
-        "properties": {"supported": {"type": "boolean"}, "reason": {"type": "string", "minLength": 1}}}
-    prompt = ("Check causal support in this uncommitted backward expansion. Node links and IDs were already validated. "
-        "Do the predecessor's declared guarantees actually support each chosen successor entry requirement? "
-        "Are Genesis citations accurate? Can this scene preserve its stated guarantees and conditions under EVERY "
-        "alternative entry case, without relying on another exclusive branch? Are these purposeful predecessors "
-        "rather than arbitrary bridges to meet a count? Distinguish intentions from established facts. "
-        "If complete, is its opening grounded in Genesis? A linear chapter is valid, and thematic development "
-        "does not require a new fact. Assess compatibility and support, not artistic taste. "
-        "Report a concrete unsupported requirement; do not invent replacement events.\n" +
-        canonical_json({"patch": patch, "existing_successors": frontier, "committed_genesis_sources": sources}).decode())
-    query = "scaffold_support_" + sha256_bytes(prompt.encode())[:16]
-    result, response = request_architecture_analysis(run_dir, query, prompt, schema, transport, planning_mode=True,
-        max_tokens=2048, pause_stage="Scaffold causal support", system_prompt="Verify causal support in an uncommitted plan. Return JSON only.")
-    preserve_planning_result(run_dir, "architecture_core", query, result, response, kind="scaffold_support")
-    if not result["supported"]:
-        raise SchemaError("Scaffold expansion has unsupported causal commitments: " + result["reason"])
-
-
 def prepare_causal_scaffold(run_dir, core, transport):
     if core.get("causal_scaffold"):
         validate_json_schema(core["causal_scaffold"], definition_schema("causalScaffold", load_protocol(run_dir)))
@@ -9706,7 +8814,6 @@ def prepare_causal_scaffold(run_dir, core, transport):
     path = run_dir / ".staging/causal-scaffold.json"
     scope = read_json(run_dir / "run-manifest.json")["scope"]
     genesis_ids = set(genesis_reference_catalog(run_dir))
-    two_pass = execution_policy(run_dir).get("scaffold_planning_version") == 2
     state = read_json(path) if path.exists() else {"version": 1, "nodes": [], "round": 0, "complete": False,
         "opening_node_id": None, "opening_support": [], "outcomes_complete": False}
     state.setdefault("outcomes_complete", state["complete"] or any(node["kind"] == "scene" for node in state["nodes"]))
@@ -9719,28 +8826,16 @@ def prepare_causal_scaffold(run_dir, core, transport):
         if capacity < 1:
             raise PausedError("Scaffold outcomes", "Outcome capacity exhausted before outcome planning closed; draft retained")
         allocated = [f"scaffold_outcome_{index:04d}" for index in range(offset + 1, offset + capacity + 1)]
-        schema = (scaffold_declaration_schema(run_dir, capacity, seed=True, minimum=2 if not offset else 1) if two_pass
-            else scaffold_request_schema(run_dir, seed=True, allocated=allocated, minimum=2 if not offset else 1))
-        prompt = ("Seed distinct terminal outcomes for backward causal planning in pages of up to four. Author concise contracts, no prose. "
-            "The first page includes a final resolution; premature stops are optional. Two outcomes are the minimum; targets are guidance. "
-            "Use a prefix of the allocated node IDs in order; prefix requirement/case IDs with their node ID. "
-            "Requirements are planned intentions, never committed facts. Each entry case describes an alternative sufficient prior "
-            "situation, not events the ending itself performs. Do not make every early ending depend on the main final revelation. "
-            "Set complete=true when enough distinct outcomes exist, including when reaching the hard ending limit. "
-            "No other outcomes will be added after this stage.\n" + canonical_json({
-                "scope": scope, "outcomes_accepted": offset, "allocated_node_ids": allocated,
+        schema = scaffold_declaration_schema(run_dir, capacity, seed=True, minimum=2 if not offset else 1)
+        prompt = ("Declare terminal outcomes as narrative contracts only. Do not emit node, case, requirement, or guarantee IDs. "
+            "The engine assigns those IDs from array order. Include a final outcome on the first page. Premature outcomes "
+            "have their own sufficient entry requirements, not every final revelation. Finish this outcome stage with "
+            "complete=true when enough distinct outcomes exist, and always at the hard ending limit. No prose.\n" +
+            canonical_json({"scope": scope, "outcomes_accepted": offset, "maximum_this_page": capacity,
                 "recent_outcome_contracts": state["nodes"][-4:], "genesis": committed_record(run_dir, "genesis"),
                 "arcs": core["arcs"], "attractors": core["attractors"]}).decode())
-        if two_pass:
-            prompt = ("Declare terminal outcomes as narrative contracts only. Do not emit node, case, requirement, or guarantee IDs. "
-                "The engine assigns those IDs from array order. Include a final outcome on the first page. Premature outcomes "
-                "have their own sufficient entry requirements, not every final revelation. Finish this outcome stage with "
-                "complete=true when enough distinct outcomes exist, and always at the hard ending limit. No prose.\n" +
-                canonical_json({"scope": scope, "outcomes_accepted": offset, "maximum_this_page": capacity,
-                    "recent_outcome_contracts": state["nodes"][-4:], "genesis": committed_record(run_dir, "genesis"),
-                    "arcs": core["arcs"], "attractors": core["attractors"]}).decode())
         def validate_seed(result):
-            authored = compile_scaffold_declarations(result["nodes"], allocated, seed=True) if two_pass else result["nodes"]
+            authored = compile_scaffold_declarations(result["nodes"], allocated, seed=True)
             if [node["node_id"] for node in authored] != allocated[:len(authored)]:
                 raise SchemaError("Use the allocated outcome IDs in order, preserving accepted outcomes")
             candidate = state | {"nodes": state["nodes"] + authored}
@@ -9754,7 +8849,7 @@ def prepare_causal_scaffold(run_dir, core, transport):
             validator=validate_seed, planning_mode=True, temperature=0.5, max_tokens=8192,
             pause_stage="Scaffold outcomes", system_prompt="Author only the requested uncommitted story contracts. Return JSON only.")
         preserve_planning_result(run_dir, "architecture_core", step, result, response, kind="scaffold_outcomes")
-        state["nodes"].extend(compile_scaffold_declarations(result["nodes"], allocated, seed=True) if two_pass else result["nodes"])
+        state["nodes"].extend(compile_scaffold_declarations(result["nodes"], allocated, seed=True))
         state["outcomes_complete"] = result["complete"]
         write_json(path, state)
     while not state["complete"]:
@@ -9767,43 +8862,7 @@ def prepare_causal_scaffold(run_dir, core, transport):
         allocated = [f"scaffold_scene_{count + index:05d}" for index in range(1, available + 1)]
         targets = frontier[:5]
         by_id = {node["node_id"]: node for node in state["nodes"]}
-        if two_pass:
-            result = prepare_scaffold_expansion_v2(run_dir, state, core, targets, allocated, transport)
-            state |= {"nodes": state["nodes"] + result["nodes"], "round": state["round"] + 1,
-                "complete": result["complete"], "opening_node_id": result["opening_node_id"], "opening_support": result["opening_support"]}
-            write_json(path, state)
-            continue
-        schema = scaffold_request_schema(run_dir, allocated=allocated, targets=targets)
-        admitted_cases = {edge["target_case_id"] for node in state["nodes"] for edge in node["successors"]}
-        pending_cases = {identifier: [case["case_id"] for case in by_id[identifier]["entry_cases"] if case["case_id"] not in admitted_cases] for identifier in frontier}
-        prompt = render_prompt(run_dir, "generation-scaffold.md", {"SCAFFOLD_CONTEXT": canonical_json({
-            "scope": scope, "scenes_accepted": count, "remaining_scene_capacity": scope["possible_scene_count"] - count,
-            "unresolved_frontier_count": len(frontier), "unresolved_entry_case_count": sum(map(len, pending_cases.values())), "allocated_node_ids": allocated,
-            "frontier_contracts": [by_id[identifier] | {"pending_entry_case_ids": pending_cases[identifier]} for identifier in targets],
-            "arcs": core["arcs"], "genesis": committed_record(run_dir, "genesis")}).decode()})
-        def validate_patch(result):
-            new_ids = [node["node_id"] for node in result["nodes"]]
-            if new_ids != allocated[:len(new_ids)] or set(new_ids).intersection(by_id):
-                raise SchemaError("Use the allocated node IDs in order, without replacing accepted nodes")
-            candidate = state | {"nodes": state["nodes"] + result["nodes"], "opening_node_id": result["opening_node_id"],
-                "opening_support": result["opening_support"]}
-            order, _roots = validate_scaffold(candidate, scope, genesis_ids, complete=result["complete"])
-            reaches_frontier = set(targets)
-            candidate_nodes = {node["node_id"]: node for node in candidate["nodes"]}
-            for identifier in reversed(order):
-                if any(edge["to_node_id"] in reaches_frontier for edge in candidate_nodes[identifier]["successors"]):
-                    reaches_frontier.add(identifier)
-            if not set(new_ids).issubset(reaches_frontier):
-                raise SchemaError("Every added scene must lead through its patch to an existing frontier successor")
-            if not result["complete"] and (result["opening_node_id"] is not None or result["opening_support"]):
-                raise SchemaError("Declare the opening only when the scaffold is complete")
-            audit_scaffold_patch(run_dir, result, [by_id[identifier] for identifier in targets], transport)
-        step = f"scaffold_expand_{state['round'] + 1:05d}"
-        print(f"Backward scaffold: {count} scenes, {len(frontier)} unresolved entrances; adding up to {available}", file=sys.stderr)
-        result, response = request_architecture_analysis(run_dir, step, prompt, schema, transport, validator=validate_patch,
-            planning_mode=True, temperature=0.5, max_tokens=8192, pause_stage="Scaffold expansion",
-            system_prompt="Author only a bounded backward expansion of the uncommitted story. Return JSON only.")
-        preserve_planning_result(run_dir, "architecture_core", step, result, response, kind="scaffold_expansion")
+        result = prepare_scaffold_expansion_v2(run_dir, state, core, targets, allocated, transport)
         state |= {"nodes": state["nodes"] + result["nodes"], "round": state["round"] + 1,
             "complete": result["complete"], "opening_node_id": result["opening_node_id"], "opening_support": result["opening_support"]}
         write_json(path, state)
@@ -9880,7 +8939,7 @@ def compile_scaffold_batches(run_dir, core):
             "architecture_core_commit_id": core["commit_id"], "story_format": "web", "batch_sequence": index,
             "batch_count": len(groups), "packet_plans": plans}
         state = {"payload": {"packet_plans": plans}, "record": record, "ready": True, "values": {},
-            "checkpoint_version": 3, "bulk_failed": False, "hints": [], "unassigned": []}
+            "checkpoint_version": 3}
         save_planning_draft(run_dir, step, state)
         records.append(record)
     return records
@@ -10107,8 +9166,6 @@ def request_scaffold_audit_tasks(run_dir, step_id, query, node, local, checks, e
 
 
 def audit_scaffold_guarantees(run_dir, step_id, artistic, plan, transport):
-    if not scaffold_enabled(run_dir):
-        return
     architecture = committed_record(run_dir, "architecture")
     local = scaffold_packet_context(run_dir, architecture, plan)
     content = artistic["scenes"] + artistic["endings"]
@@ -10122,15 +9179,6 @@ def audit_scaffold_guarantees(run_dir, step_id, artistic, plan, transport):
     checks += [(f"{node['node_id']}_preserve_{index:03d}", text) for index, text in enumerate(node["preserves"], 1)]
     entry_routes = scaffold_entry_routes(architecture, node)
     expected = {(check, case, entry) for check, _description in checks for case, entry in entry_routes}
-    quote_schema = {"type": "object", "additionalProperties": False, "required": ["source_id", "quote"],
-        "properties": {"source_id": {"enum": sorted(units)}, "quote": {"type": "string", "minLength": 1}}}
-    schema = {"type": "object", "additionalProperties": False, "required": ["checks"], "properties": {
-        "checks": {"type": "array", "minItems": len(expected), "maxItems": len(expected), "items": {"type": "object", "additionalProperties": False,
-            "required": ["check_id", "case_id", "entry_from_slot", "supported", "reason", "evidence_quotes"], "properties": {
-                "check_id": {"enum": sorted({check for check, _case, _entry in expected})},
-                "entry_from_slot": {"enum": sorted({entry for _case, entry in entry_routes})},
-                "case_id": {"enum": [case["case_id"] for case in node["entry_cases"]]}, "supported": {"type": "boolean"},
-                "reason": {"type": "string", "minLength": 1}, "evidence_quotes": {"type": "array", "items": quote_schema}}}}}}
     allowed_sources = {(case, entry): {slot} for case, entry in entry_routes}
     for transition in local["incoming"]:
         permitted = allowed_sources[(transition["target_case_id"], transition["from_slot_id"])]
@@ -10162,17 +9210,9 @@ def audit_scaffold_guarantees(run_dir, step_id, artistic, plan, transport):
                     raise SchemaError("Scaffold audit cites evidence from an inapplicable alternative entry case")
                 if not any(quote["quote"] in text for text in units[quote["source_id"]]):
                     raise SchemaError("Scaffold audit quotation is absent from its immutable source")
-    if not expected:
-        result = {"checks": []}
-    elif execution_policy(run_dir).get("scaffold_planning_version") == 2:
-        result, response = request_scaffold_audit_tasks(run_dir, step_id, query, node, local, checks, entry_routes, allowed_sources, units, transport)
-        validate(result)
-        preserve_planning_result(run_dir, step_id, query, result, response, kind="scaffold_evidence", phase="validation")
-    else:
-        result, response = request_architecture_analysis(run_dir, query, prompt, schema, transport, validator=validate,
-            phase="validation", planning_mode=True, context_purpose="semantic", max_tokens=8192,
-            pause_stage="Scaffold evidence", system_prompt="Verify hard narrative contracts against original prose. Return JSON only.")
-        preserve_planning_result(run_dir, step_id, query, result, response, kind="scaffold_evidence", phase="validation")
+    result, response = request_scaffold_audit_tasks(run_dir, step_id, query, node, local, checks, entry_routes, allowed_sources, units, transport)
+    validate(result)
+    preserve_planning_result(run_dir, step_id, query, result, response, kind="scaffold_evidence", phase="validation")
     unsupported = [check for check in result["checks"] if not check["supported"]]
     if unsupported:
         write_json(path.with_suffix(".unsupported.json"), result)
@@ -10193,18 +9233,13 @@ def audit_scaffold_guarantees(run_dir, step_id, artistic, plan, transport):
 def prepare_core_draft(run_dir: Path, transport) -> dict:
     if committed_record(run_dir, "architecture_core"):
         return committed_record(run_dir, "architecture_core")
-    prompt, context = architecture_core_prompt(run_dir)
     schema = copy.deepcopy(definition_schema("architectureCorePayload", load_protocol(run_dir)))
     schema["$defs"]["obligation"].pop("allOf", None)
-    if scaffold_enabled(run_dir):
-        schema["properties"]["topology"] = copy.deepcopy(schema["$defs"]["architectureCore"]["properties"]["topology"])
-        schema["properties"]["topology"]["const"] = scaffold_macro_topology()
+    schema["properties"]["topology"] = copy.deepcopy(schema["$defs"]["architectureCore"]["properties"]["topology"])
+    schema["properties"]["topology"]["const"] = scaffold_macro_topology()
     path = run_dir / ".staging/architecture_core.planning.json"
-    if execution_policy(run_dir).get("bounded_planning"):
-        state = read_json(path) if path.exists() else allocate_core_draft(run_dir, schema, transport)
-        constrain_planning_ids(schema, state["payload"], run_dir)
-    else:
-        state = staged_planning_request(run_dir, "architecture_core", prompt, context, schema, transport)
+    state = read_json(path) if path.exists() else allocate_core_draft(run_dir, schema, transport)
+    constrain_planning_ids(schema, state["payload"], run_dir)
     if state.get("ready"):
         return state["record"]
     fill_planning_shape(run_dir, "architecture_core", state, schema, transport)
@@ -10233,49 +9268,6 @@ def prepare_core_draft(run_dir: Path, transport) -> dict:
             f"Remove the dependency cycle {cycle}; preserve meaningful prerequisites without a cycle.", transport) if allowed else []
         save_planning_draft(run_dir, "architecture_core", state)
         cycle = architecture_obligation_cycle(payload)
-    if not scaffold_enabled(run_dir):
-        topology = payload["topology"]
-        opening = topology["opening_branch_node_id"]
-        branches = [item for item in topology["edges"] if item["from_node_id"] == opening and item["relation"] == "branch"]
-        if len(branches) != 3:
-            allowed = [item["node_id"] for item in topology["nodes"] if item["node_id"] != opening]
-            if len(allowed) < 3:
-                while len(allowed) < 3:
-                    identifier = deterministic_id("draft_node", opening, str(len(topology["nodes"])))
-                    topology["nodes"].append({"node_id": identifier})
-                    allowed.append(identifier)
-                fill_planning_shape(run_dir, "architecture_core", state, schema, transport)
-                repair_planning_references(run_dir, "architecture_core", state, schema, transport)
-                return prepare_core_draft(run_dir, transport)
-            maximum_edges = planning_schema_node(schema["properties"]["topology"], schema)["properties"]["edges"]["maxItems"]
-            if len(topology["edges"]) - len(branches) + 3 > maximum_edges:
-                raise PausedError("Planning topology", "No edge capacity for the three opening paths; draft retained")
-            targets = planning_value(run_dir, "architecture_core", state, ["topology", "$opening_targets"],
-                {"type": "array", "items": {"enum": allowed}, "minItems": 3, "maxItems": 3, "uniqueItems": True},
-                "Select the three materially different opening paths; the engine constructs their branch edges.", transport)
-            topology["edges"] = [item for item in topology["edges"] if item not in branches]
-            for target in targets:
-                topology["edges"].append({"edge_id": deterministic_id("draft_edge", opening, target),
-                    "from_node_id": opening, "to_node_id": target, "relation": "branch", "hard_obligation_ids": []})
-        reached = {topology["entry_segment_id"]}
-        while True:
-            expanded = reached | {item["to_node_id"] for item in topology["edges"] if item["from_node_id"] in reached}
-            if expanded != reached:
-                reached = expanded
-                continue
-            missing = [item["node_id"] for item in topology["nodes"] if item["node_id"] not in reached]
-            if not missing:
-                break
-            target = missing[0]
-            maximum_edges = planning_schema_node(schema["properties"]["topology"], schema)["properties"]["edges"]["maxItems"]
-            if len(topology["edges"]) >= maximum_edges:
-                raise PausedError("Planning topology", f"No edge capacity to connect {target}; draft retained")
-            parent = planning_value(run_dir, "architecture_core", state, ["topology", "$connect", target],
-                {"type": "string", "enum": sorted(reached)},
-                f"Choose a reachable predecessor for the disconnected node {target}, preserving the intended narrative route. The engine will add a progression edge.", transport)
-            topology["edges"].append({"edge_id": deterministic_id("draft_edge", parent, target), "from_node_id": parent,
-                "to_node_id": target, "relation": "progression", "hard_obligation_ids": []})
-            save_planning_draft(run_dir, "architecture_core", state)
     validate_json_schema(payload, schema)
     state["record"] = build_architecture_core(run_dir, payload)
     validate_architecture_core_for_run(state["record"], run_dir)
@@ -10284,232 +9276,33 @@ def prepare_core_draft(run_dir: Path, transport) -> dict:
     return state["record"]
 
 
-def prepare_plan_draft(run_dir: Path, specs: list[dict], sequence: int, count: int, transport) -> dict:
-    step = f"architecture_plan_batch_{sequence:04d}"
-    committed = next((item for item in committed_records(run_dir, "architecture_plan_batch") if item["batch_sequence"] == sequence), None)
-    if committed:
-        return committed
-    prompt, context = architecture_plan_prompt(run_dir, specs, sequence, count)
-    prior = [item["packet_slot_id"] for item in planned_packet_specs(planning_core(run_dir))]
-    schema = architecture_plan_batch_schema(run_dir, specs, prior_packet_ids=prior[:prior.index(specs[0]["packet_slot_id"])])
-    path = run_dir / ".staging" / f"{step}.planning.json"
-    if execution_policy(run_dir).get("bounded_planning"):
-        state = read_json(path) if path.exists() else {"payload": {"packet_plans": [
-            {"packet_slot_id": spec["packet_slot_id"]} for spec in specs]}, "values": {}, "hints": [],
-            "unassigned": [], "incomplete": [], "checkpoint_version": 3, "ready": False}
-        save_planning_draft(run_dir, step, state)
-    else:
-        state = staged_planning_request(run_dir, step, prompt, context, schema, transport)
-    if state.get("ready"):
-        return state["record"]
-    supplied = state["payload"].get("packet_plans", [])
-    supplied = supplied if isinstance(supplied, list) else []
-    annotations = []
-    for spec in specs:
-        matches = [item for item in supplied if isinstance(item, dict) and item.get("packet_slot_id") == spec["packet_slot_id"]]
-        annotations.append(matches[0] if len(matches) == 1 else {"packet_slot_id": spec["packet_slot_id"]})
-    for item in supplied:
-        if item not in annotations and item not in state["unassigned"]:
-            state["unassigned"].append(item)
-    for key in list(state["payload"]):
-        if key != "packet_plans":
-            state["hints"].append({"source_path": [key], "text": json.dumps(state["payload"][key], ensure_ascii=False)})
-    state["payload"] = {"packet_plans": annotations}
-    repair_packet_dependency_lists(run_dir, step, state, schema, transport)
-    if specs[0]["packet_slot_id"] == prior[0]:
-        annotations[0]["depends_on_packet_slot_ids"] = []
-    fill_planning_shape(run_dir, step, state, schema, transport)
-    repair_planning_references(run_dir, step, state, schema, transport, specs=specs)
-    annotations = state["payload"]["packet_plans"]
-    for index, (spec, annotation) in enumerate(zip(specs, annotations)):
-        allowed = prior[:prior.index(spec["packet_slot_id"])]
-        annotation_schema = architecture_plan_annotation_schema(run_dir, spec, allowed)
-        node = annotation_schema["$defs"]["packetPlanAnnotation"]["properties"]["attractor_ids"]
-        if _collect_schema_errors(annotation["attractor_ids"], node, annotation_schema, "$"):
-            annotation["attractor_ids"] = planning_value(run_dir, step, state, ["packet_plans", index, "attractor_ids"],
-                node, "Select the lawful attractor pressure; an ending packet selects exactly one ending attractor.", transport)
-    state["record"] = build_architecture_plan_batch(run_dir, state["payload"], specs, sequence, count)
-    state["ready"] = True
-    save_planning_draft(run_dir, step, state)
-    return state["record"]
-
-
-def place_planning_setups(run_dir: Path, core: dict, records: list[dict], transport) -> None:
-    core_path = run_dir / ".staging/architecture_core.planning.json"
-    if not core_path.exists():
-        return
-    state = read_json(core_path)
-    if state.get("setups_complete"):
-        return
-    all_specs = planned_packet_specs(core)
-    all_slots = [slot for spec in all_specs for slot in spec["scene_slot_ids"] + spec["ending_slot_ids"]]
-    owners = {slot: spec["packet_slot_id"] for spec in all_specs for slot in spec["scene_slot_ids"]}
-    guidance_limit = load_protocol(run_dir)["$defs"]["stringList"]["maxItems"]
-    origins = [("architecture_core", state)]
-    for index in range(1, len(records) + 1):
-        step = f"architecture_plan_batch_{index:04d}"
-        origins.append((step, read_json(run_dir / ".staging" / f"{step}.planning.json")))
-    tasks = state.setdefault("setups", [])
-    if not state.get("setups_collected"):
-        for record in records:
-            for plan in record["packet_plans"]:
-                if plan["packet_kind"] != "ending":
-                    continue
-                for identifier in plan["attractor_ids"]:
-                    attractor = next(item for item in core["attractors"] if item["attractor_id"] == identifier)
-                    requirements = [("seed", text) for text in attractor["soft_seed_conditions"]]
-                    requirements += [("prerequisite", next(item["description"] for item in core["obligation_graph"] if item["obligation_id"] == obligation))
-                                     for obligation in attractor["prerequisite_obligation_ids"]]
-                    for kind, text in requirements:
-                        tasks.append({"text": text, "payoff_packet": plan["packet_slot_id"], "kind": kind, "attractor_id": identifier})
-        for step, origin in origins:
-            for hint in origin["hints"]:
-                task = dict(hint) | {"kind": "authored_hint", "origin_step": step}
-                path = hint["source_path"]
-                if step != "architecture_core" and len(path) > 1 and isinstance(path[1], int):
-                    task["payoff_packet"] = origin["payload"]["packet_plans"][path[1]]["packet_slot_id"]
-                tasks.append(task)
-        state["setups_collected"] = True
-        save_planning_draft(run_dir, "architecture_core", state)
-    for index, task in enumerate(tasks):
-        if task.get("attached"):
-            continue
-        if "setup_slot_id" not in task or "instruction" not in task:
-            pending = []
-            guidance_counts = {item["packet_slot_id"]: len(item["soft_guidance"])
-                               for draft in planning_batches_view(run_dir) for item in draft["packet_plans"]}
-            for target_index in range(index, min(index + 4, len(tasks))):
-                target = tasks[target_index]
-                if target.get("attached") or "setup_slot_id" in target and "instruction" in target:
-                    continue
-                payoff = next((item for item in all_specs if item["packet_slot_id"] == target.get("payoff_packet")), all_specs[-1])
-                payoff_slots = payoff["scene_slot_ids"] or payoff["ending_slot_ids"]
-                boundary = all_slots.index(payoff_slots[-1] if payoff["scene_slot_ids"] else payoff_slots[0])
-                allowed = [slot for slot in owners if all_slots.index(slot) < boundary
-                           and guidance_counts.get(owners[slot], 0) < guidance_limit]
-                if not allowed:
-                    raise PausedError("Backward planning", f"No earlier setup capacity for {target['text']!r}")
-                prefix_length = max(len(f"Setup in {slot} for {target.get('attractor_id', 'authored hint')}: ") for slot in allowed)
-                properties = {"setup_slot_id": {"type": "string", "enum": allowed},
-                              "instruction": {"type": "string", "minLength": 1, "maxLength": 12000 - prefix_length}}
-                node = {"type": "object", "properties": properties, "required": list(properties)}
-                missing = {key: value for key, value in properties.items() if key not in target}
-                pending.append({"path": ["$setups", target_index],
-                    "schema": {"type": "object", "additionalProperties": False, "properties": missing, "required": list(missing)},
-                    "preserve_schema": node, "root_schema": node,
-                    "reason": "Place this requirement in an earlier scene and write the coherent setup that earns its payoff without revealing it: " + canonical_json(target).decode()})
-            planning_batch(run_dir, "architecture_core", state, pending, transport)
-        task = tasks[index]
-        payoff = next((item for item in all_specs if item["packet_slot_id"] == task.get("payoff_packet")), all_specs[-1])
-        slot = task["setup_slot_id"]
-        marker = f"Setup in {slot} for {task.get('attractor_id', 'authored hint')}: {task['instruction']}"
-        owner = owners[slot]
-        for step, draft in origins[1:]:
-            draft = read_json(run_dir / ".staging" / f"{step}.planning.json")
-            for annotation in draft["payload"]["packet_plans"]:
-                if annotation["packet_slot_id"] == owner and marker not in annotation["soft_guidance"]:
-                    if len(annotation["soft_guidance"]) >= guidance_limit:
-                        raise PausedError("Backward planning", f"No guidance capacity in {owner}; setup retained")
-                    annotation["soft_guidance"].append(marker)
-                if annotation["packet_slot_id"] == payoff["packet_slot_id"] and owner != payoff["packet_slot_id"]:
-                    annotation["depends_on_packet_slot_ids"] = list(dict.fromkeys(annotation["depends_on_packet_slot_ids"] + [owner]))
-            draft["record"]["packet_plans"] = [spec | annotation for annotation in draft["payload"]["packet_plans"]
-                for spec in all_specs if spec["packet_slot_id"] == annotation["packet_slot_id"]]
-            save_planning_draft(run_dir, step, draft)
-        task["attached"] = True
-        save_planning_draft(run_dir, "architecture_core", state)
-    state["setups_complete"] = True
-    save_planning_draft(run_dir, "architecture_core", state)
-
-
-def prepare_navigation_contract(run_dir, core, records, transport):
-    if execution_policy(run_dir).get("completion_contract_version") != 1:
-        return
-    architecture = architecture_from_parts(core, records)
-    try:
-        navigation_contract_route(architecture)
-        return
-    except SchemaError as error:
-        reason = error.reason
-    if committed_records(run_dir, "architecture_plan_batch"):
-        raise PausedError("Navigation planning", "Committed navigation cannot be changed: " + reason)
-    plans = architecture["packet_plans"]
-    scenes = sorted(slot for plan in plans for slot in plan["scene_slot_ids"])
-    slots = sorted(slot for plan in plans for slot in plan["scene_slot_ids"] + plan["ending_slot_ids"])
-    allocations = {plan["packet_slot_id"]: plan["scene_slot_ids"] for plan in plans}
-    schema = {"type": "object", "additionalProperties": False, "required": ["routes"], "properties": {
-        "routes": {"type": "object", "additionalProperties": False, "required": scenes,
-            "properties": {slot: {"$ref": "#/$defs/targets"} for slot in scenes}}}, "$defs": {
-        "targets": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": True, "items": {"enum": slots}}}}
-    def apply_routes(candidate, routes):
-        for plan in candidate["packet_plans"]:
-            plan["required_navigation"] = {slot: routes[slot] for slot in allocations[plan["packet_slot_id"]]}
-    def validate(result):
-        candidate = copy.deepcopy(architecture)
-        apply_routes(candidate, result["routes"])
-        navigation_contract_route(candidate)
-    prompt = ("Author ONLY navigation targets for this uncommitted work. Preserve all other planning and source material. "
-        "Every scene needs playable exits. All planned scenes and endings must be reachable from the opening, and every scene must have a route to an ending. "
-        "Reader loops and reconvergence are allowed. Use allocated technical slots only. The later scene author will write the actual choice labels and transitions. "
-        "Do not write prose, generic fallback links, or metadata about committed events.\nPROBLEM\n" + reason +
-        "\nPLAN INTERFACES\n" + canonical_json([{key: plan.get(key) for key in ("packet_slot_id", "scene_slot_ids", "ending_slot_ids",
-            "branch_path_relation", "attractor_ids", "required_navigation")} for plan in plans]).decode())
-    query = "architecture_navigation_" + sha256_bytes(prompt.encode())[:12]
-    result, response = request_architecture_analysis(run_dir, query, prompt, schema, transport, validator=validate,
-        response_name="navigationContract", pause_stage="Navigation planning", system_prompt="Plan only the requested uncommitted navigation graph. Return JSON only.",
-        planning_mode=True)
-    preserve_planning_result(run_dir, "architecture_core", query, result, response, kind="navigation_contract")
-    for record in records:
-        apply_routes(record, result["routes"])
-        step = f"architecture_plan_batch_{record['batch_sequence']:04d}"
-        state = read_json(run_dir / ".staging" / f"{step}.planning.json")
-        apply_routes(state["payload"], result["routes"])
-        state["record"] = record
-        save_planning_draft(run_dir, step, state)
-
-
 def execute_planning_phases(run_dir: Path, transport=http_json) -> list[dict]:
     core = prepare_core_draft(run_dir, transport)
-    if scaffold_enabled(run_dir):
-        core = prepare_causal_scaffold(run_dir, core, transport)
-        records = compile_scaffold_batches(run_dir, core)
-        batches = plan_batches(core)
-    else:
-        batches = plan_batches(core)
-        records = [prepare_plan_draft(run_dir, specs, index, len(batches), transport) for index, specs in enumerate(batches, 1)]
-        place_planning_setups(run_dir, core, records, transport)
-        records = [read_json(run_dir / ".staging" / f"architecture_plan_batch_{index:04d}.planning.json")["record"]
-                   if not next((item for item in committed_records(run_dir, "architecture_plan_batch") if item["batch_sequence"] == index), None)
-                   else next(item for item in committed_records(run_dir, "architecture_plan_batch") if item["batch_sequence"] == index)
-                   for index in range(1, len(batches) + 1)]
-        prepare_navigation_contract(run_dir, core, records, transport)
+    core = prepare_causal_scaffold(run_dir, core, transport)
+    records = compile_scaffold_batches(run_dir, core)
+    batches = plan_batches(core)
     protocol = load_protocol(run_dir)
     for record in [core] + records:
         validate_json_schema(record, protocol["$defs"][RECORD_DEFS[record["record_type"]]], protocol)
         validate_declared_id_uniqueness(record)
     for index, (record, specs) in enumerate(zip(records, batches), 1):
         validate_architecture_plan_batch(record, run_dir, specs, index, len(batches))
-    if scaffold_enabled(run_dir):
-        navigation_contract_route(architecture_from_parts(core, records))
+    navigation_contract_route(architecture_from_parts(core, records))
     validate_architecture(architecture_from_parts(core, records), read_json(run_dir / "run-manifest.json"), set(_source_index(run_dir)))
     for step, record in [("architecture_core", core)] + [(f"architecture_plan_batch_{index:04d}", record) for index, record in enumerate(records, 1)]:
         if committed_record(run_dir, record["record_type"]) and (step == "architecture_core" or any(
             item["batch_sequence"] == record["batch_sequence"] for item in committed_records(run_dir, "architecture_plan_batch"))):
             continue
         state = read_json(run_dir / ".staging" / f"{step}.planning.json")
-        assembled = state.get("checkpoint_version") == 3
-        response = state.get("bulk_response")
-        if assembled or state.get("bulk_failed", False):
-            response = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(state["payload"], ensure_ascii=False)}}],
-                        "usage": {}, "_cathedrals_assembled_from_fields": True}
+        response = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(state["payload"], ensure_ascii=False)}}],
+                    "usage": {}, "_cathedrals_assembled_from_fields": True}
         attempt = max((item["attempt"] for item in step_entries(run_dir, step)), default=0) + 1
         commit_record(run_dir, record, json.dumps(state["payload"], ensure_ascii=False), response,
             planned_step_id=step, attempt=attempt, step_phase="architecture",
             prompt=state.get("prompt", "Engine assembly of checkpointed planning batches; see planning-draft and repair audit."),
             context=state.get("context", canonical_json(state["payload"]).decode()),
-            parameters=(state.get("bulk_response") or {}).get("_cathedrals_request", {}).get("parameters", {
-                "seed": step_seed(read_json(run_dir / 'generation-brief.json')['generation_seed'], step), "assembly": "checkpointed_batches"}),
-            branch_relation="macroarchitecture", usage_already_ledgered=assembled or state.get("bulk_usage_ledgered", state.get("bulk_failed", False)))
+            parameters={"seed": step_seed(read_json(run_dir / 'generation-brief.json')['generation_seed'], step),
+                "assembly": "checkpointed_batches"}, branch_relation="macroarchitecture", usage_already_ledgered=True)
     return batches
 
 
@@ -10795,12 +9588,11 @@ def validate_complete_work(run_dir: Path) -> dict:
     by_slot = {packet["packet_slot_id"]: packet for packet in packets}
     reasons = []
     warnings = []
-    if execution_policy(run_dir).get("completion_contract_version") == 1:
-        try:
-            navigation_contract_route(architecture)
-            validate_navigation_payload(run_dir, architecture, {}, {"scenes": [], "endings": []})
-        except SchemaError as error:
-            reasons.append(error.reason)
+    try:
+        navigation_contract_route(architecture)
+        validate_navigation_payload(run_dir, architecture, {}, {"scenes": [], "endings": []})
+    except SchemaError as error:
+        reasons.append(error.reason)
 
     def warn(code: str, message: str) -> None:
         warnings.append({"stage": "mechanical_validation", "code": code, "message": message})
@@ -10896,7 +9688,7 @@ def validate_complete_work(run_dir: Path) -> dict:
                     reachable.add(edge["resolved_content_id"])
                     changed = True
         missing_content = content_ids - reachable
-        if execution_policy(run_dir).get("scoped_sources") and not any(item["ending_id"] in reachable for item in endings):
+        if not any(item["ending_id"] in reachable for item in endings):
             reasons.append("No committed ending is reachable from the opening through playable links.")
         if missing_content:
             warn("reachability_quality", f"Committed content is unreachable from the entry scene: {', '.join(sorted(missing_content)[:8])}.")
@@ -11021,192 +9813,10 @@ ARTISTIC_SCHEMA = {
 }
 
 
-def request_analysis(run_dir: Path, step_id: str, prompt: str, *, transport=http_json) -> dict:
-    result_path = run_dir / "validation" / f"{step_id}.json"
-    raw_path = run_dir / "validation" / f"{step_id}.api.json"
-    commit_path = run_dir / "validation" / f".{step_id}.commit.json"
-    if commit_path.exists():
-        meta = read_json(commit_path)
-        entry = meta["ledger_entry"]
-        matches = [item for item in step_entries(run_dir, step_id) if item["commit_status"] == "COMMITTED"]
-        if not matches:
-            entries = ledger_entries(run_dir)
-            if entry["previous_entry_hash"] != (entries[-1]["entry_hash"] if entries else None):
-                raise IntegrityError(f"Cannot reconcile analysis commit {step_id}")
-            append_ledger_entry(run_dir, entry)
-        elif matches[0] != entry:
-            raise IntegrityError(f"Analysis ledger metadata changed for {step_id}")
-        if not raw_path.exists():
-            write_json(raw_path, meta["api_response"], mode=0o444, exclusive=True)
-        if not result_path.exists():
-            write_json(result_path, meta["verdict"], mode=0o444, exclusive=True)
-        if sha256_bytes(canonical_json(read_json(result_path))) != entry["output_hash"]:
-            raise IntegrityError(f"Committed analysis verdict changed for {step_id}")
-        ensure_index(run_dir)
-        return meta["verdict"]
-    if result_path.exists() or raw_path.exists():
-        raise IntegrityError(f"Analysis output exists without commit metadata: {step_id}")
-    ensure_index(run_dir)
-    state = load_state(run_dir)
-    brief = read_json(run_dir / "generation-brief.json")
-    seed = step_seed(brief["generation_seed"], step_id)
-    parameters = {"temperature": 0.0, "max_tokens": 4096, "seed": seed, "stream": True, "stream_options": {"include_usage": True}}
-    payload = {
-        "model": state["model"],
-        "messages": [
-            {"role": "system", "content": "Judge the completed immutable work. Do not author, rewrite, or suggest replacement fiction."},
-            {"role": "user", "content": prompt},
-        ],
-        **parameters,
-        "response_format": {"type": "json_schema", "json_schema": {"name": "artistic_verdict", "strict": True, "schema": ARTISTIC_SCHEMA}},
-    }
-    attempt = 1 + len(step_entries(run_dir, step_id))
-    started_at = utc_now()
-    response = None
-    content = None
-    current_attempt = attempt
-    for retry in range(3):
-        try:
-            response, content = provider_response(
-                transport,
-                api_url(brief["lm_studio_base_url"], "/v1/chat/completions"),
-                payload,
-                float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")),
-                stream_path=run_dir / "validation" / f"{step_id}-attempt{current_attempt}.api.sse",
-                preserve=lambda value: write_json(
-                    run_dir / "validation" / f"{step_id}-attempt{current_attempt}.api.json",
-                    value,
-                    mode=0o444,
-                    exclusive=True,
-                ),
-            )
-            break
-        except CathedralsError as error:
-            failed_response = error.response if isinstance(error, (TruncationError, IncompleteResponseError)) else None
-            append_failed_attempt(
-                run_dir,
-                step_id=step_id,
-                attempt=current_attempt,
-                phase="artistic_acceptance",
-                prompt=prompt,
-                context=prompt,
-                parameters=parameters,
-                started_at=started_at,
-                failure_class=error.failure_class,
-                step_type="analysis",
-                output_hash=sha256_bytes(canonical_json(failed_response)) if failed_response else None,
-                usage=failed_response.get("usage", {}) if failed_response else {},
-            )
-            if error.failure_class not in RETRYABLE_PROVIDER_FAILURES or retry == 2:
-                raise
-            current_attempt += 1
-    try:
-        verdict = parse_structured_content(content)
-        validate_json_schema(verdict, ARTISTIC_SCHEMA)
-    except SchemaError:
-        append_failed_attempt(
-            run_dir,
-            step_id=step_id,
-            attempt=current_attempt,
-            phase="artistic_acceptance",
-            prompt=prompt,
-            context=prompt,
-            parameters=parameters,
-            started_at=started_at,
-            failure_class="malformed_response",
-            output_hash=sha256_bytes(content.encode()),
-            step_type="analysis",
-            usage=response.get("usage", {}) if isinstance(response, dict) else {},
-        )
-        raise
-    output_hash = sha256_bytes(canonical_json(verdict))
-    current = load_state(run_dir)
-    entry = new_ledger_entry(
-        run_dir,
-        planned_step_id=step_id,
-        attempt=current_attempt,
-        step_type="analysis",
-        step_phase="artistic_acceptance",
-        parent_state_hash=current["canonical_state_hash"],
-        prompt_hash=sha256_bytes(prompt.encode()),
-        context_hash=sha256_bytes(prompt.encode()),
-        provider="LM Studio",
-        model=current["model"],
-        parameters=parameters,
-        seed=seed,
-        started_at=started_at,
-        output_hash=output_hash,
-        generated_ids=[],
-        past_constraint_ids=[],
-        future_obligation_ids=[],
-        motif_ids=[],
-        branch_relation=None,
-        commit_status="COMMITTED",
-        state_hash_after=current["canonical_state_hash"],
-        failure_class="none",
-        usage=response.get("usage", {}),
-    )
-    write_json(commit_path, {"verdict": verdict, "api_response": response, "ledger_entry": entry}, mode=0o444, exclusive=True)
-    append_ledger_entry(run_dir, entry)
-    write_json(raw_path, response, mode=0o444, exclusive=True)
-    write_json(result_path, verdict, mode=0o444, exclusive=True)
-    ensure_index(run_dir)
-    return verdict
-
-
-def artistic_acceptance(run_dir: Path, *, transport=http_json) -> dict:
-    packet_verdicts = []
-    acceptance_law = (engine_root(run_dir) / "canon/acceptance-tests.md").read_text(encoding="utf-8")
-    architecture = committed_record(run_dir, "architecture")
-    records = all_committed_records(run_dir)
-    packets = [
-        packet_from_chunks(
-            plan,
-            [record for record in records if record.get("record_type") == "creative_packet" and record["packet_slot_id"] == plan["packet_slot_id"]],
-        )
-        for plan in architecture["packet_plans"]
-    ]
-    packets = [packet for packet in packets if packet]
-    for packet in packets:
-        step_id = f"artistic_review_{packet['packet_slot_id']}"
-        prompt = bounded_context(
-            [
-                ("ARTISTIC ACCEPTANCE LAW", acceptance_law),
-                ("IMMUTABLE PACKET SOURCE", packet),
-                ("INSTRUCTION", "Return PASS only if this source contributes viable Cathedrals literature. Judge; do not repair or propose replacement prose."),
-            ],
-            30000,
-        )
-        packet_verdicts.append({"packet_slot_id": packet["packet_slot_id"], "verdict": request_analysis(run_dir, step_id, prompt, transport=transport)})
-    final_prompt = bounded_context(
-        [
-            ("ARTISTIC ACCEPTANCE LAW", acceptance_law),
-            ("IMMUTABLE GENESIS", committed_record(run_dir, "genesis")),
-            ("IMMUTABLE ARCHITECTURE", committed_record(run_dir, "architecture")),
-            ("SOURCE-GROUNDED PACKET VERDICTS", packet_verdicts),
-            ("CANONICAL PAST CONSTRAINTS", _read_state_map(run_dir, "canonical-facts.json")),
-            ("CHARACTER KNOWLEDGE STATE", _read_state_map(run_dir, "knowledge-state.json")),
-            ("FUTURE OBLIGATION STATE", _read_state_map(run_dir, "obligations.json")),
-            ("MOTIF PRESSURE STATE", _read_state_map(run_dir, "motifs.json")),
-            ("PROSPECTIVE FEASIBILITY", _read_state_map(run_dir, "prospective-plan.json")),
-            ("INSTRUCTION", "Return the whole-work PASS or FAIL GENERATION verdict. Any packet failure is evidence against acceptance. Do not repair, rewrite, or resample."),
-        ],
-        42000,
-    )
-    verdict = request_analysis(run_dir, "whole_work_artistic_acceptance", final_prompt, transport=transport)
-    if any(item["verdict"]["result"] == "FAIL GENERATION" for item in packet_verdicts):
-        verdict = {"result": "FAIL GENERATION", "reasons": ["At least one immutable packet failed source-level artistic acceptance."] + verdict["reasons"]}
-    write_json(run_dir / "validation/artistic.json", verdict)
-    append_deterministic_step(run_dir, "artistic_acceptance_verdict", "artistic_acceptance", sha256_bytes(canonical_json(verdict)))
-    return verdict
-
-
 def project_web(run_dir: Path) -> tuple[Path, dict]:
     project = run_dir / "projection/web"
     if project.exists():
         shutil.rmtree(project)
-    (project / "src/lib").mkdir(parents=True)
-    (project / "src/pages").mkdir(parents=True)
     (project / "public/source").mkdir(parents=True)
     manifest = read_json(run_dir / "run-manifest.json")
     genesis = committed_record(run_dir, "genesis")
@@ -11241,84 +9851,24 @@ def project_web(run_dir: Path) -> tuple[Path, dict]:
             write_atomic(project / "public/source" / f"{artifact['artifact_id']}.md", artifact["body_mdx"].encode())
         for ending in packet["endings"]:
             write_atomic(project / "public/source" / f"{ending['ending_id']}.md", ending["prose_mdx"].encode())
-    write_json(
-        project / "package.json",
-        {
-            "name": slugify(manifest["generation_brief"]["project_name"]).replace("_", "-"),
-            "private": True,
-            "type": "module",
-            "scripts": {"build": "astro build"},
-            "dependencies": {"astro": ASTRO_VERSION, "markdown-it": MARKDOWN_IT_VERSION},
-        },
-    )
-    write_atomic(project / "astro.config.mjs", b"import { defineConfig } from 'astro/config';\nexport default defineConfig({ output: 'static' });\n")
-    markdown_module = r'''import MarkdownIt from 'markdown-it';
-const renderer=new MarkdownIt({html:false,linkify:false,typographer:false,breaks:false});
-export const renderMarkdown=source=>renderer.render(source);
-'''
     house_style = r'''*{box-sizing:border-box}html{background:var(--bg);color:var(--text);font-family:var(--body-font)}body{margin:0;min-height:100vh;background-color:var(--bg);background-image:var(--texture);transition:background-color var(--transition),color var(--transition)}main{width:min(46rem,calc(100% - 2rem));margin:auto;padding:var(--page-top) 0 8rem}header{border-bottom:var(--frame);margin-bottom:calc(var(--space)*1.35);padding-bottom:var(--space)}h1,h2,h3{font-family:var(--heading-font);font-weight:500;letter-spacing:var(--heading-track);line-height:1.12}.kicker,.trace{color:var(--muted);font:.78rem system-ui,sans-serif;letter-spacing:.12em;text-transform:uppercase}.trace{margin-top:.75rem;opacity:calc(.55 + var(--route-pressure))}.prose,.artifact-body{font-size:var(--prose-size);line-height:1.75;overflow-wrap:anywhere}.prose>*,.artifact-body>*{max-width:68ch}.prose blockquote,.artifact-body blockquote{border-left:3px solid var(--accent);margin-left:0;padding-left:1rem;color:var(--muted)}.prose li+li,.artifact-body li+li{margin-top:.4rem}.choices{display:grid;gap:.75rem;margin-top:calc(var(--space)*1.7)}.choice,.begin{display:block;color:var(--text);background:var(--surface);border:var(--frame);padding:1rem;text-decoration:none;box-shadow:0 0 1.5rem color-mix(in srgb,var(--accent) var(--route-glow),transparent);transition:background var(--transition),border-color var(--transition)}.choice:hover,.choice:focus-visible,.begin:hover,.begin:focus-visible{border-color:var(--accent);outline:3px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:3px}details{background:var(--surface);border:var(--frame);margin:calc(var(--space)*1.2) 0;padding:1rem;letter-spacing:var(--artifact-track)}summary{cursor:pointer;font-family:var(--heading-font)}button{font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--muted);padding:.55rem .75rem;cursor:pointer}.theme-toggle{position:absolute;inset:1rem 1rem auto auto}.ending-surface{border-top:var(--ending-frame);padding-top:var(--space)}:root[data-theme=light]{--bg:var(--light-bg);--surface:var(--light-surface);--text:var(--light-text);--muted:var(--light-muted);--accent:var(--light-accent);--danger:var(--light-danger)}@media(max-width:40rem){main{padding-top:4.5rem}.theme-toggle{inset:.75rem .75rem auto auto}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition-duration:0ms!important}}'''
     style = art_direction_css(direction) + house_style
     state_script = r'''const body=document.body,key=`cathedrals:${body.dataset.generation}:reader-state:v1`;let state=JSON.parse(localStorage.getItem(key)||'{"path":[],"values":{}}');const apply=effects=>effects.forEach(e=>{const v=state.values[e.key];if(e.operation==='set')state.values[e.key]=e.value;else if(e.operation==='increment')state.values[e.key]=(v||0)+e.value;else if(e.operation==='add')state.values[e.key]=[...new Set([...(v||[]),e.value])];else if(e.operation==='remove')state.values[e.key]=(v||[]).filter(x=>x!==e.value)});const satisfies=c=>{const v=state.values[c.key];return c.operator==='equals'?v===c.value:c.operator==='not_equals'?v!==c.value:c.operator==='gte'?v>=c.value:c.operator==='lte'?v<=c.value:c.operator==='contains'?Array.isArray(v)&&v.includes(c.value):!Array.isArray(v)||!v.includes(c.value)};const current=body.dataset.current;if(state.path.at(-1)!==current){state.path.push(current);apply(JSON.parse(body.dataset.effects||'[]'));localStorage.setItem(key,JSON.stringify(state))}document.querySelector('.trace').textContent=state.path.join(' / ');for(const link of document.querySelectorAll('.choice')){const conditions=JSON.parse(link.dataset.conditions),effects=JSON.parse(link.dataset.effects);link.hidden=!conditions.every(satisfies);link.addEventListener('click',()=>{apply(effects);localStorage.setItem(key,JSON.stringify(state))})}document.querySelector('.reset')?.addEventListener('click',()=>{localStorage.removeItem(key);location.href='/'})'''
     theme_script = r'''const root=document.documentElement,key='cathedrals:theme';const saved=localStorage.getItem(key);root.dataset.theme=saved||'dark';document.querySelector('.theme-toggle')?.addEventListener('click',()=>{root.dataset.theme=root.dataset.theme==='light'?'dark':'light';localStorage.setItem(key,root.dataset.theme)});'''
     state_script = "(() => {\n" + state_script + "\n})();"
     theme_script = "(() => {\n" + theme_script + "\n})();"
-    index_page = r'''---
-import fs from 'node:fs';
-const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));
----
-<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{work.generated_title}</title></head><body><button class="theme-toggle" aria-label="Switch day or night theme">◐</button><main><div class="kicker">{work.project_name}</div><h1>{work.generated_title}</h1><p>A complete static Cathedrals work.</p><a class="begin" href={`/scenes/${work.entry_content_id}/`}>Enter the work</a></main><script is:inline src="/theme.js"></script></body></html>
-'''
-    scene_page = r'''---
-import fs from 'node:fs';
-import {renderMarkdown} from '../../lib/markdown.mjs';
-const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));
-export function getStaticPaths(){const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));return work.scenes.map(scene=>({params:{sceneId:scene.scene_id},props:{scene,artifacts:scene.artifact_ids.map(id=>work.artifacts.find(a=>a.artifact_id===id)).filter(Boolean),edges:scene.choice_edge_ids.map(id=>work.decision_edges.find(e=>e.edge_id===id)).filter(e=>e&&e.availability==='playable')}}))}
-const {scene,artifacts,edges}=Astro.props;
-const pathFor=id=>work.scenes.some(s=>s.scene_id===id)?`/scenes/${id}/`:`/endings/${id}/`;
----
-<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{scene.title} · {work.generated_title}</title></head><body data-generation={work.generation_id} data-current={scene.scene_id} data-effects={JSON.stringify(scene.state_effects)}><button class="theme-toggle" aria-label="Switch day or night theme">◐</button><main><header><div class="kicker">{work.generated_title}</div><h1>{scene.title}</h1><div class="trace" aria-live="polite"></div></header><article><div class="prose" set:html={renderMarkdown(scene.prose_mdx)}/>{artifacts.map(a=><details><summary>{a.title}</summary><div class="artifact-body" set:html={renderMarkdown(a.body_mdx)}/><a href={`/artifacts/${a.artifact_id}/`}>Open as evidence</a></details>)}<nav class="choices" aria-label="Story choices">{edges.map(e=><a class="choice" href={pathFor(e.resolved_content_id)} data-conditions={JSON.stringify(e.state_conditions)} data-effects={JSON.stringify(e.state_effects)}>{e.label}</a>)}</nav></article></main><script is:inline src="/theme.js"></script><script is:inline src="/state.js"></script></body></html>
-'''
-    ending_page = r'''---
-import fs from 'node:fs';
-import {renderMarkdown} from '../../lib/markdown.mjs';
-const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));
-export function getStaticPaths(){const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));return work.endings.map(ending=>({params:{endingId:ending.ending_id},props:{ending,edges:work.decision_edges.filter(e=>e.from_content_id===ending.ending_id&&e.availability==='playable')}}))}
-const {ending,edges}=Astro.props;const pathFor=id=>work.scenes.some(s=>s.scene_id===id)?`/scenes/${id}/`:`/endings/${id}/`;
----
-<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{ending.title} · {work.generated_title}</title></head><body data-generation={work.generation_id} data-current={ending.ending_id} data-effects={JSON.stringify(ending.state_effects)}><button class="theme-toggle" aria-label="Switch day or night theme">◐</button><main class="ending-surface"><header><div class="kicker">Ending · {work.generated_title}</div><h1>{ending.title}</h1><div class="trace" aria-live="polite"></div></header><div class="prose" set:html={renderMarkdown(ending.prose_mdx)}/><nav class="choices" aria-label="Ending choices">{edges.map(e=><a class="choice" href={pathFor(e.resolved_content_id)} data-conditions={JSON.stringify(e.state_conditions)} data-effects={JSON.stringify(e.state_effects)}>{e.label}</a>)}{ending.resolved_redirect_content_id&&<a class="choice" href={pathFor(ending.resolved_redirect_content_id)} data-conditions="[]" data-effects="[]">Continue</a>}</nav><button class="reset">Start over</button></main><script is:inline src="/theme.js"></script><script is:inline src="/state.js"></script></body></html>
-'''
-    artifact_page = r'''---
-import fs from 'node:fs';
-import {renderMarkdown} from '../../lib/markdown.mjs';
-const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));
-export function getStaticPaths(){const work=JSON.parse(fs.readFileSync('./public/work.json','utf8'));return work.artifacts.map(artifact=>({params:{artifactId:artifact.artifact_id},props:{artifact}}))}const {artifact}=Astro.props;
----
-<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="stylesheet" href="/style.css"/><title>{artifact.title} · {work.generated_title}</title></head><body><button class="theme-toggle" aria-label="Switch day or night theme">◐</button><main><header><div class="kicker">Evidence · {work.generated_title}</div><h1>{artifact.title}</h1></header><div class="artifact-body" set:html={renderMarkdown(artifact.body_mdx)}/><a class="begin" href="/">Return to work</a></main><script is:inline src="/theme.js"></script></body></html>
-'''
-    for relative in ("scenes/[sceneId].astro", "endings/[endingId].astro", "artifacts/[artifactId].astro"):
-        (project / "src/pages" / Path(relative).parent).mkdir(parents=True, exist_ok=True)
     write_atomic(project / "public/style.css", style.encode())
     write_atomic(project / "public/state.js", state_script.encode())
     write_atomic(project / "public/theme.js", theme_script.encode())
-    write_atomic(project / "src/lib/markdown.mjs", markdown_module.encode())
-    write_atomic(project / "src/pages/index.astro", index_page.encode())
-    write_atomic(project / "src/pages/scenes/[sceneId].astro", scene_page.encode())
-    write_atomic(project / "src/pages/endings/[endingId].astro", ending_page.encode())
-    write_atomic(project / "src/pages/artifacts/[artifactId].astro", artifact_page.encode())
     hashes = {
         str(path.relative_to(project)): sha256_file(path)
         for path in sorted(project.rglob("*"))
         if path.is_file()
     }
-    projection = {"format": "web", "renderer": "astro", "source_hashes": hashes}
+    projection = {"format": "web", "renderer": "static_html", "source_hashes": hashes}
     write_json(run_dir / "validation/projection.json", projection)
     append_deterministic_step(run_dir, "complete_projection", "projection", sha256_bytes(canonical_json(projection)))
     return project, {"scenes": len(scenes), "artifacts": len(artifacts), "endings": len(endings)}
-
-
-def parse_node_version(value: str) -> tuple[int, int, int] | None:
-    match = re.match(r"v?(\d+)\.(\d+)\.(\d+)", value.strip())
-    return tuple(map(int, match.groups())) if match else None
 
 
 def baseline_markdown(value: str) -> str:
@@ -11388,49 +9938,6 @@ def build_static_baseline(project: Path) -> None:
         body = f'<header><div class="kicker">Evidence · {html.escape(work["generated_title"])}</div><h1>{html.escape(artifact["title"])}</h1></header><div class="artifact-body">{baseline_markdown(artifact["body_mdx"])}</div><a class="begin" href="/">Return to work</a>'
         target = destination / "artifacts" / artifact["artifact_id"] / "index.html"
         write_atomic(target, page(f'{artifact["title"]} · {work["generated_title"]}', body).encode())
-
-
-def download(url: str, destination: Path) -> None:
-    request = urllib.request.Request(url, headers={"User-Agent": "Cathedrals generator"})
-    with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
-
-
-def ensure_node(output_fn=print) -> tuple[Path, Path]:
-    system_node = shutil.which("node")
-    system = run_command([system_node, "--version"]) if system_node else None
-    version = parse_node_version(system.stdout) if system and system.returncode == 0 else None
-    if version and version >= NODE_MINIMUM and version[0] % 2 == 0 and shutil.which("npm"):
-        return Path(shutil.which("node")), Path(shutil.which("npm"))
-    machine = platform.machine().lower()
-    architecture = "x64" if machine in {"x86_64", "amd64"} else "arm64" if machine in {"aarch64", "arm64"} else None
-    if not architecture:
-        raise CathedralsError("Web toolchain", f"No pinned Node binary is configured for {machine}", "build_failure")
-    base = RUNTIME_ROOT / "toolchains/node" / NODE_VERSION
-    node = base / f"node-v{NODE_VERSION}-linux-{architecture}/bin/node"
-    npm = node.parent / "npm"
-    if node.exists() and npm.exists():
-        return node, npm
-    output_fn(f"      Downloading pinned Node {NODE_VERSION} into .cathedrals/toolchains/node/")
-    base.mkdir(parents=True, exist_ok=True)
-    archive_name = f"node-v{NODE_VERSION}-linux-{architecture}.tar.xz"
-    release = f"https://nodejs.org/download/release/v{NODE_VERSION}"
-    with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT / "cache") as temporary:
-        archive = Path(temporary) / archive_name
-        checksums = Path(temporary) / "SHASUMS256.txt"
-        download(f"{release}/{archive_name}", archive)
-        download(f"{release}/SHASUMS256.txt", checksums)
-        expected = next((line.split()[0] for line in checksums.read_text().splitlines() if line.endswith(f"  {archive_name}")), None)
-        if not expected or sha256_file(archive) != expected:
-            raise CathedralsError("Web toolchain", "Pinned Node download failed SHA-256 verification", "build_failure")
-        with tarfile.open(archive, "r:xz") as bundle:
-            try:
-                bundle.extractall(base, filter="data")
-            except TypeError:
-                if any(member.name.startswith("/") or ".." in Path(member.name).parts for member in bundle.getmembers()):
-                    raise CathedralsError("Web toolchain", "Unsafe path in Node archive", "build_failure")
-                bundle.extractall(base)
-    return node, npm
 
 
 class RenderedProse(HTMLParser):
@@ -11505,40 +10012,11 @@ def static_build_problems(project, work):
 
 def build_web(run_dir: Path, project: Path, output_fn=print) -> dict:
     build_static_baseline(project)
-    work = read_json(project / "public/work.json")
-    reasons = static_build_problems(project, work)
-    verdict = {"result": "FAIL" if reasons else "PASS", "reasons": reasons or ["The dependency-free static baseline emitted a complete reader and immutable work data."]}
+    reasons = static_build_problems(project, read_json(project / "public/work.json"))
+    verdict = {"result": "FAIL" if reasons else "PASS", "reasons": reasons or ["Static pages, prose, links, assets, and immutable sources are complete."]}
     write_json(run_dir / "validation/build.json", verdict)
     if reasons:
         raise CathedralsError("Static build validation", reasons[0], "build_failure")
-    enhancement = {"result": "NOT_RUN", "reasons": ["No checked-in npm lockfile is present; the dependency-free baseline is the published build."]}
-    lockfile = project / "package-lock.json"
-    if lockfile.exists():
-        try:
-            node, npm = ensure_node(output_fn)
-            environment = os.environ.copy()
-            environment["PATH"] = str(node.parent) + os.pathsep + environment.get("PATH", "")
-            environment["npm_config_cache"] = str(RUNTIME_ROOT / "cache/npm")
-            install = run_command([npm, "ci", "--offline", "--no-audit", "--no-fund"], cwd=project, env=environment)
-            write_atomic(run_dir / "logs/npm-ci.log", (install.stdout + install.stderr).encode())
-            if install.returncode:
-                enhancement = {"result": "WARNING", "reasons": ["Optional npm enhancement could not install from the local cache; baseline retained."]}
-            else:
-                build = run_command([npm, "run", "build"], cwd=project, env=environment)
-                write_atomic(run_dir / "logs/astro-build.log", (build.stdout + build.stderr).encode())
-                problems = static_build_problems(project, work) if not build.returncode else ["Astro build failed"]
-                enhancement = {"result": "PASS", "reasons": ["Locked optional Astro enhancement built and validated successfully."]} if not problems else {"result": "WARNING", "reasons": problems}
-                if problems:
-                    build_static_baseline(project)
-        except Exception as error:
-            enhancement = {"result": "WARNING", "reasons": [f"Optional npm enhancement unavailable: {type(error).__name__}: {error}"]}
-            build_static_baseline(project)
-    reasons = static_build_problems(project, work)
-    verdict = {"result": "FAIL" if reasons else "PASS", "reasons": reasons or ["Final static pages, prose, links, assets, and immutable sources are complete."]}
-    write_json(run_dir / "validation/build.json", verdict)
-    if reasons:
-        raise CathedralsError("Static build validation", reasons[0], "build_failure")
-    write_json(run_dir / "validation/npm-enhancement.json", enhancement)
     append_deterministic_step(run_dir, "static_baseline_build", "build_validation", sha256_bytes(canonical_json(verdict)))
     return verdict
 
@@ -11599,7 +10077,6 @@ def make_finalization(run_dir: Path, status: str, failure_class: str, reason: st
     artistic = read_json(run_dir / "validation/artistic.json") if (run_dir / "validation/artistic.json").exists() else {"result": "NOT_RUN", "reasons": [reason or "Not reached."]}
     build = read_json(run_dir / "validation/build.json") if (run_dir / "validation/build.json").exists() else {"result": "NOT_RUN", "reasons": [reason or "Not reached."]}
     warnings = read_json(run_dir / "validation/warnings.json") if (run_dir / "validation/warnings.json").exists() else []
-    enhancement = read_json(run_dir / "validation/npm-enhancement.json") if (run_dir / "validation/npm-enhancement.json").exists() else {"result": "NOT_RUN", "reasons": ["Not reached."]}
     ready = status == "READY_TO_PLAY"
     if not ready and reason:
         target = mechanical if mechanical["result"] == "NOT_RUN" else build if build["result"] == "NOT_RUN" else None
@@ -11630,7 +10107,7 @@ def make_finalization(run_dir: Path, status: str, failure_class: str, reason: st
         "artistic_acceptance": artistic,
         "static_build_validation": build,
         "warnings": warnings,
-        "npm_enhancement": enhancement,
+        "npm_enhancement": {"result": "NOT_RUN", "reasons": ["The static publisher has no npm enhancement step."]},
         "complete_work_barrier_satisfied": ready,
         "playable": ready,
         "failure_class": failure_class,
@@ -11660,7 +10137,7 @@ def publish_success(run_dir: Path, project: Path, finalization: dict) -> Path:
     staging = run_dir / "publish-staging"
     if staging.exists():
         shutil.rmtree(staging)
-    shutil.copytree(project, staging / "web", ignore=shutil.ignore_patterns("node_modules", ".astro"))
+    shutil.copytree(project, staging / "web")
     copy_provenance(run_dir, staging / "provenance")
     write_json(staging / "provenance/finalization.json", finalization)
     parent.mkdir(parents=True, exist_ok=True)
@@ -11772,13 +10249,6 @@ def execute_run(run_dir: Path, output_fn=print, transport=http_json) -> tuple[Pa
     output_fn("[07] Static baseline build          ✓")
     artistic = {"result": "NOT_RUN", "reasons": ["Artistic review is advisory and is not part of the publication gate."]}
     write_json(run_dir / "validation/artistic.json", artistic)
-    enhancement_path = run_dir / "validation/npm-enhancement.json"
-    enhancement = read_json(enhancement_path) if enhancement_path.exists() else {"result": "NOT_RUN", "reasons": ["Optional npm enhancement was not run."]}
-    warnings = read_json(run_dir / "validation/warnings.json") if (run_dir / "validation/warnings.json").exists() else []
-    if enhancement.get("result") != "PASS":
-        message = (enhancement.get("reasons") or ["Optional npm enhancement was not run."])[0]
-        warnings.append({"stage": "build", "code": "npm_enhancement_unavailable", "message": message})
-    write_json(run_dir / "validation/warnings.json", warnings)
     build_path, _ = finalize_success(run_dir, project)
     return build_path, counts, read_json(run_dir / "generation-brief.json")
 
@@ -11903,7 +10373,10 @@ def main(argv=None, *, input_fn=input, output_fn=print, transport=http_json) -> 
         run_dir = choose_resume(input_fn, output_fn)
         if run_dir:
             launcher = snapshot_root(run_dir) / "cathedrals"
-            if launcher.exists() and Path(__file__).resolve() != launcher.resolve():
+            if not launcher.is_file() or not (snapshot_root(run_dir) / "engine").is_dir():
+                print_failure(run_dir, IntegrityError("The saved engine snapshot is incomplete. Restore this run's engine-snapshot/cathedrals and engine/ before resuming."), output_fn)
+                return 1
+            if Path(__file__).resolve() != launcher.resolve():
                 if sha256_file(launcher) != sha256_file(Path(__file__)):
                     output_fn("This run uses a different frozen engine snapshot. Installation updates do not apply when resuming.\n"
                         "Start a new generation to use the installed engine.\n")

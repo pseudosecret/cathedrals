@@ -211,8 +211,7 @@ inference.
 
 Project all required content, render Markdown with raw HTML disabled, build the
 dependency-free static reader, validate route/state behavior, and verify the complete
-build uses only deterministic client-side state. A locked npm/Astro enhancement may
-run afterward; its failure preserves and publishes the baseline with a warning.
+build uses only deterministic client-side state. The publisher has no Node or npm step.
 
 ## 5. Advisory Artistic Review
 

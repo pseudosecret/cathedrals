@@ -56,7 +56,7 @@ class GeneratorDiagnosticsTests(unittest.TestCase):
         state.parent.mkdir()
         state.write_text("{}")
         output = []
-        with mock.patch.object(RUNNER, "ensure_runtime_layout"), mock.patch.object(RUNNER, "choose_resume", return_value=self.run), mock.patch.object(
+        with mock.patch.object(RUNNER, "snapshot_root", return_value=RUNNER.ROOT), mock.patch.object(RUNNER, "ensure_runtime_layout"), mock.patch.object(RUNNER, "choose_resume", return_value=self.run), mock.patch.object(
                 RUNNER, "ensure_resume_ready", side_effect=KeyError("source_id")), mock.patch.object(
                 RUNNER, "finalize_failure", side_effect=RuntimeError("Cannot finalize")):
             status = RUNNER.main([], output_fn=output.append, transport=mock.Mock(side_effect=AssertionError("Provider forbidden")))

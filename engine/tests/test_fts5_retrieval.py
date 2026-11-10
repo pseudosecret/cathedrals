@@ -61,7 +61,7 @@ class FTS5RetrievalTests(unittest.TestCase):
         law.chmod(0o644)
         law.write_text("Synthetic engine law.")
         for patch in (
-            mock.patch.object(RUNNER, "packet_root_sources", return_value=[]),
+            mock.patch.object(RUNNER, "scoped_root_sources", return_value=[]),
             mock.patch.object(RUNNER, "instruction_profile", return_value=("Synthetic engine law.", {"purpose": "fixture"})),
             mock.patch.object(RUNNER, "plan_batch_for", return_value={"commit_id": "fixture_batch"}),
         ):
@@ -69,12 +69,17 @@ class FTS5RetrievalTests(unittest.TestCase):
             self.addCleanup(patch.stop)
         self.architecture = {"architecture_core_commit_id": "fixture_core", "obligation_graph": [], "attractors": [], "arcs": [], "packet_plans": []}
 
-    def commit(self, number, *, prose=None, title=None, change=None):
+    def commit(self, number, *, prose=None, title=None, change=None, required=False):
         record = packet(self.run.name, number)
         if prose is not None:
             record["scenes"][0]["prose_mdx"] = prose
         if title is not None:
             record["scenes"][0]["title"] = title
+        if required:
+            record["constraint_delta"]["new_obligations"] = [{"obligation_id": f"obligation_{number}", "kind": "promise",
+                "description": "Synthetic prerequisite evidence.", "status": "active", "created_by_ids": [record["scenes"][0]["scene_id"]],
+                "requires": [], "hardness": "hard", "universality": "local", "resolution_modes": ["revelation"], "range": "local",
+                "termination_targets": [], "sources": record["constraint_delta"]["canonical_facts"][0]["sources"], "relevance": {}}]
         if change:
             change(record)
         return RUNNER.commit_record(self.run, record, RUNNER.canonical_json(record).decode(), {},
@@ -178,16 +183,16 @@ class FTS5RetrievalTests(unittest.TestCase):
 
     def test_whole_predecessor_is_required_and_discovery_is_deduplicated(self):
         prose = "rareword complete predecessor material"
-        self.commit(1, prose=prose)
+        self.commit(1, prose=prose, required=True)
         receipt = {}
-        context = self.context(plan(relevance={"keywords": ["rareword"]}, depends_on_packet_slot_ids=["packet_000001"]), receipt=receipt)
+        context = self.context(plan(relevance={"keywords": ["rareword"]}, depends_on_packet_slot_ids=["packet_000001"], advance_obligation_ids=["obligation_1"]), receipt=receipt)
         self.assertEqual(context.count(prose), 1)
         self.assertTrue(any(item["reason"] == "covered_by_required_context" for item in receipt["omissions"]))
         self.assertTrue(receipt["selected_sources"][0]["required"])
-        self.commit(2, prose="x" * 160000)
+        self.commit(2, prose="x" * 160000, required=True)
         transport = mock.Mock()
-        oversized = plan(depends_on_packet_slot_ids=["packet_000002"])
-        with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: self.architecture if kind == "architecture" else {"record_type": "genesis"}), mock.patch.object(
+        oversized = plan(depends_on_packet_slot_ids=["packet_000002"], advance_obligation_ids=["obligation_2"])
+        with mock.patch.object(RUNNER, "packet_payload_schema", return_value={}), mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: self.architecture if kind == "architecture" else {"record_type": "genesis"}), mock.patch.object(
             RUNNER, "ensure_frozen_geomancy", return_value={"assignments": []}
         ), self.assertRaises(RUNNER.PausedError):
             RUNNER.request_packet_slice(self.run, self.architecture, oversized, transport)
@@ -203,8 +208,8 @@ class FTS5RetrievalTests(unittest.TestCase):
         self.assertLessEqual(len(RUNNER.retrieve_original_sources(self.run, events)), 24)
 
     def test_tool_discovery_cannot_overflow_required_context_or_consume_correction_space(self):
-        self.commit(1, prose="Required complete predecessor.")
-        assignment = plan(depends_on_packet_slot_ids=["packet_000001"])
+        self.commit(1, prose="Required complete predecessor.", required=True)
+        assignment = plan(depends_on_packet_slot_ids=["packet_000001"], advance_obligation_ids=["obligation_1"])
         step = RUNNER.packet_step_id(assignment)
         provenance = {"source_id": "shared_discovery", "source_commit_id": "commit_discovery", "source_hash": "a" * 64}
         records = [provenance | {"record_pointer": "/large", "immutable_source": "x" * 180000},

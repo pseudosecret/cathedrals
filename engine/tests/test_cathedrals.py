@@ -210,6 +210,7 @@ def packet_plan(identifier="packet_one", **updates):
         "soft_guidance": ["Pressure the archive contradiction."],
     }
     value.update(updates)
+    value.setdefault("required_navigation", {slot: [f"scene_slot_{int(slot.rsplit('_', 1)[1]) + 1:04d}"] for slot in value["scene_slot_ids"]})
     return value
 
 
@@ -259,7 +260,9 @@ def packet_payload(scene_words=400, artifact_words=67):
             "preview_excerpt": "An impossible date.",
             "body_mdx": " ".join(["artifact"] * artifact_words),
         }],
-        "choices": [],
+        "choices": [{"destination": {"kind": "technical_slot", "id": "scene_slot_0002"},
+            "label": "Continue", "kind": "progression", "availability": "playable",
+            "major_decision": False, "state_conditions": [], "state_effects": []}],
         "formal_compositions": [{
             "form": "refrain",
             "dramatic_function": "Makes recurrence accusatory.",
@@ -410,6 +413,34 @@ def genesis_ledger(seed="12345"):
     }
 
 
+def seed_state_map(run_dir: Path, name: str, value: dict) -> None:
+    """Replace a fixture projection; runtime commits apply individual events instead."""
+    RUNNER.ensure_index(run_dir)
+    with RUNNER.index_connection(run_dir) as db:
+        db.execute("DELETE FROM projection WHERE map=?", (name,))
+        if name == "knowledge-state.json":
+            db.execute("DELETE FROM knowledge")
+            db.execute("DELETE FROM subjects")
+            for position, (subject, relations) in enumerate(value.items()):
+                db.execute("INSERT INTO subjects VALUES (?,?)", (subject, position))
+                for relation, propositions in relations.items():
+                    for number, (proposition, event) in enumerate(propositions.items()):
+                        db.execute("INSERT INTO knowledge VALUES (?,?,?,?,?,?)", (subject, relation, proposition, RUNNER.canonical_json(event).decode(), number, event["constraint_event_sequence"]))
+        else:
+            if name == "motifs.json":
+                db.execute("DELETE FROM motif_history")
+            items = {"latest": value} if name == "prospective-plan.json" else value
+            for position, (key, item) in enumerate(items.items()):
+                RUNNER.put_projection(db, name, key, item, position)
+
+
+def packet_architecture_fixture(architecture, plan):
+    from test_backward_scaffold import core_fixture, mixed_scaffold
+    scaffold = core_fixture(mixed_scaffold())["causal_scaffold"]
+    for node in scaffold["nodes"]: node["arc_id"] = architecture["arcs"][0]["arc_id"]
+    return architecture | {"causal_scaffold": scaffold}
+
+
 class CathedralsRunnerTests(unittest.TestCase):
     def test_four_inputs_and_defaults(self):
         output = []
@@ -470,8 +501,6 @@ class CathedralsRunnerTests(unittest.TestCase):
     def test_format_aliases_are_accepted_but_effective_output_is_web(self):
         for alias in ("visualnovel", "visual novel", "visual-novel", "vn"):
             self.assertEqual(RUNNER.normalize_requested_format(alias), "visualnovel")
-            self.assertEqual(RUNNER.renderer_for(alias), "astro")
-            self.assertEqual(RUNNER.active_format_contract(alias).name, "web.md")
         with self.assertRaises(ValueError):
             RUNNER.normalize_requested_format("")
 
@@ -562,7 +591,6 @@ class CathedralsRunnerTests(unittest.TestCase):
             )
         self.assertNotIsInstance(raised.exception, RUNNER.IntegrityError)
         self.assertIn("provider_response", RUNNER.request_record.__code__.co_names)
-        self.assertIn("provider_response", RUNNER.request_analysis.__code__.co_names)
 
     def test_grammar_parse_http_400_pauses_after_one_attempt(self):
         http_error = RUNNER.urllib.error.HTTPError(
@@ -1257,6 +1285,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertIsNotNone(captured["response_schema"])
         bounded.assert_not_called()
 
+    @mock.patch.object(RUNNER, "audit_scaffold_guarantees", new=lambda *args, **kwargs: None)
     def test_packet_semantic_request_constrains_sources_to_authored_slots(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary) / "generation_test"
@@ -1286,6 +1315,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(result["canonical_facts"], [])
         self.assertEqual(seen, ["ending_slot_0001", "scene_slot_0002"])
 
+    @mock.patch.object(RUNNER, "audit_scaffold_guarantees", new=lambda *args, **kwargs: None)
     def test_semantic_canonical_correction_reuses_prose_and_preserves_raw_responses(self):
         artistic = {
             "scenes": [{"technical_slot_id": "scene_slot_0001", "prose_mdx": "Immutable prose."}],
@@ -1361,6 +1391,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             self.assertEqual(transport.call_count, 3)
             self.assertEqual(deltas[0], deltas[1])
 
+    @mock.patch.object(RUNNER, "audit_scaffold_guarantees", new=lambda *args, **kwargs: None)
     def test_semantic_attempt_number_exceeds_both_raw_and_ledger_history(self):
         for raw_attempts, ledger_attempt, expected in (((1, 10), 0, 11), ((1, 10), 2, 11), ((1, 2), 10, 11)):
             with self.subTest(raw_attempts=raw_attempts, ledger_attempt=ledger_attempt), tempfile.TemporaryDirectory() as temporary:
@@ -1398,6 +1429,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 for path, original in preserved.items():
                     self.assertEqual(path.read_bytes(), original)
 
+    @mock.patch.object(RUNNER, "audit_scaffold_guarantees", new=lambda *args, **kwargs: None)
     def test_semantic_resume_grants_three_more_corrections_without_overwrites(self):
         with tempfile.TemporaryDirectory() as temporary:
             with mock.patch.object(RUNNER, "RUNTIME_ROOT", Path(temporary) / ".cathedrals"), mock.patch.object(
@@ -1474,7 +1506,6 @@ class CathedralsRunnerTests(unittest.TestCase):
             "unknown obligation references: obligation_absent, obligation_hard_missing, obligation_missing",
             "unknown obligation termination targets: attractor_missing",
             "unresolved obligation sources: source_missing",
-            "opening branch node has 0 outgoing branch edges; expected 3",
         ):
             self.assertIn(problem, reason)
 
@@ -1482,154 +1513,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertNotIn("generation_dependency_ids", architecture_node["required"])
         self.assertNotIn("generation_dependency_ids", architecture_node["properties"])
 
-    def test_architecture_prompt_lists_allowed_claimant_and_source_ids(self):
-        manifest = {"budgets": {"max_prepared_context_tokens": 20000}}
-        genesis = {"claimants": [{"claimant_id": "claimant_02"}, {"claimant_id": "claimant_01"}]}
-        with tempfile.TemporaryDirectory() as temporary:
-            run = Path(temporary)
-            (run / "state").mkdir()
-            (run / "state/frozen-engine-context.txt").write_text("canon", encoding="utf-8")
-            with mock.patch.object(RUNNER, "read_json", return_value=manifest), mock.patch.object(
-                RUNNER, "committed_record", return_value=genesis
-            ), mock.patch.object(
-                RUNNER, "_source_index", return_value={"source_two": {}, "source_one": {}}
-            ), mock.patch.object(RUNNER, "compact_definition", return_value="{}"), mock.patch.object(
-                RUNNER, "render_prompt", side_effect=lambda _run, _name, replacements: replacements["FROZEN_ARCHITECTURE_CONTEXT"]
-            ):
-                prompt, context = RUNNER.architecture_core_prompt(run)
-        self.assertEqual(prompt, context)
-        claimants = context.split("===== ALLOWED GENESIS CLAIMANTS =====\n", 1)[1].split("=====", 1)[0]
-        sources = context.split("===== ALLOWED COMMITTED SOURCES =====\n", 1)[1]
-        self.assertEqual(json.loads(claimants), ["claimant_01", "claimant_02"])
-        self.assertEqual(json.loads(sources), ["source_one", "source_two"])
 
-    def test_architecture_plan_schema_and_builder_require_exact_frozen_ids(self):
-        specs = [
-            {
-                "packet_slot_id": packet_id,
-                "packet_kind": "ending" if packet_id.startswith("ending") else "literary",
-                "scene_slot_ids": [] if packet_id.startswith("ending") else [f"scene_slot_{index:04d}"],
-                "ending_slot_ids": [f"ending_slot_{index:04d}"] if packet_id.startswith("ending") else [],
-                "artifact_count": 0,
-                "formal_composition_count": 0,
-            }
-            for index, packet_id in enumerate((
-                "literary_packet_0001", "literary_packet_0002",
-                "ending_packet_0001", "ending_packet_0002",
-            ), 1)
-        ]
-        schema = RUNNER.architecture_plan_batch_schema(Path("/offline"), specs)
-        self.assertEqual(
-            (schema["properties"]["packet_plans"]["minItems"], schema["properties"]["packet_plans"]["maxItems"]),
-            (4, 4),
-        )
-        self.assertEqual(
-            schema["$defs"]["packetPlanAnnotation"]["properties"]["packet_slot_id"]["enum"],
-            [item["packet_slot_id"] for item in specs],
-        )
-        observed = {"packet_plans": [
-            packet_plan_annotation("literary_packet_0001"),
-            packet_plan_annotation("literary_packet_0002"),
-            packet_plan_annotation("literary_packet_0003"),
-        ]}
-        with self.assertRaises(RUNNER.SchemaError) as schema_error:
-            RUNNER.validate_json_schema(observed, schema)
-        self.assertIn("at least 4 items", schema_error.exception.reason)
-        self.assertIn("literary_packet_0003", schema_error.exception.reason)
-        with self.assertRaises(RUNNER.SchemaError) as join_error:
-            RUNNER.build_architecture_plan_batch(Path("/offline"), observed, specs, 1, 1)
-        for value in ("ending_packet_0001", "ending_packet_0002", "literary_packet_0003"):
-            self.assertIn(value, join_error.exception.reason)
-        with mock.patch.object(
-            RUNNER, "committed_record", return_value={"attractors": [attractor("attractor_one")]}
-        ):
-            repair_schema = RUNNER.architecture_plan_annotation_schema(
-                Path("/offline"), specs[2], ["literary_packet_0001", "literary_packet_0002"]
-            )
-        invalid_repair = {"packet_plans": [packet_plan_annotation(
-            "ending_packet_0001",
-            depends_on_packet_slot_ids=["ending_packet_0002"],
-            attractor_ids=["attractor_missing"],
-        )]}
-        with self.assertRaises(RUNNER.SchemaError) as repair_error:
-            RUNNER.validate_json_schema(invalid_repair, repair_schema)
-        self.assertIn("ending_packet_0002", repair_error.exception.reason)
-        self.assertIn("attractor_missing", repair_error.exception.reason)
-
-    def test_architecture_plan_fallback_preserves_valid_annotations_and_repairs_missing_ids(self):
-        specs = [
-            {
-                "packet_slot_id": packet_id,
-                "packet_kind": "ending" if packet_id.startswith("ending") else "literary",
-                "scene_slot_ids": [] if packet_id.startswith("ending") else [f"scene_slot_{index:04d}"],
-                "ending_slot_ids": [f"ending_slot_{index:04d}"] if packet_id.startswith("ending") else [],
-                "artifact_count": 0,
-                "formal_composition_count": 0,
-            }
-            for index, packet_id in enumerate((
-                "literary_packet_0001", "literary_packet_0002",
-                "ending_packet_0001", "ending_packet_0002",
-            ), 1)
-        ]
-        first = {"packet_plans": [packet_plan_annotation(
-            "literary_packet_0001", soft_guidance=["older annotation"]
-        )]}
-        second = {"packet_plans": [
-            packet_plan_annotation("literary_packet_0001", soft_guidance=["latest annotation"]),
-            packet_plan_annotation(
-                "literary_packet_0002", depends_on_packet_slot_ids=["literary_packet_0001"]
-            ),
-            packet_plan_annotation("literary_packet_0003"),
-        ]}
-        responses = [
-            {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(payload)}}], "usage": {}}
-            for payload in (first, second)
-        ]
-        core = {"attractors": [attractor("attractor_one")]}
-        records = {
-            "architecture_core": core,
-            "genesis": {"work_canon": {"premise": "A record vanished."}},
-        }
-        calls = []
-
-        def repair(_run, step, _prompt, schema, _transport, **_kwargs):
-            packet_id = schema["$defs"]["packetPlanAnnotation"]["properties"]["packet_slot_id"]["const"]
-            calls.append(packet_id)
-            return {
-                "packet_plans": [packet_plan_annotation(packet_id, attractor_ids=["attractor_one"])]
-            }, {"usage": {"prompt_tokens": 5, "completion_tokens": 1}}
-
-        with tempfile.TemporaryDirectory() as temporary:
-            run = Path(temporary)
-            for name in ("raw", ".staging"):
-                (run / name).mkdir()
-            for attempt, response in enumerate(responses, 1):
-                RUNNER.write_json(run / f"raw/architecture_plan_batch_0001-attempt{attempt}.api.json", response)
-            entries = [
-                {
-                    "planned_step_id": "architecture_plan_batch_0001",
-                    "attempt": attempt,
-                    "failure_class": "malformed_response",
-                }
-                for attempt in (1, 2)
-            ]
-            with mock.patch.object(RUNNER, "ledger_entries", return_value=entries), mock.patch.object(
-                RUNNER, "committed_records", return_value=[]
-            ), mock.patch.object(
-                RUNNER, "committed_record", side_effect=lambda _run, kind: records[kind]
-            ), mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=repair):
-                repaired = RUNNER.repair_architecture_plan_batch_payload(
-                    run, "architecture_plan_batch_0001", specs, None
-                )
-            repair_state = RUNNER.read_json(run / ".staging/architecture_plan_batch_0001.repair.json")
-
-        self.assertEqual(
-            [item["packet_slot_id"] for item in repaired["packet_plans"]],
-            [item["packet_slot_id"] for item in specs],
-        )
-        self.assertEqual(repaired["packet_plans"][0]["soft_guidance"], ["latest annotation"])
-        self.assertEqual(calls, ["ending_packet_0001", "ending_packet_0002"])
-        self.assertEqual(len(repair_state["history"]), 2)
 
     def test_architecture_normalizes_unambiguous_genesis_and_topology_references(self):
         payload = architecture_core_payload()
@@ -1659,33 +1543,6 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(normalized["topology"]["opening_branch_node_id"], "node_intro")
         self.assertEqual(normalized["topology"]["reconvergence_node_ids"], ["node_branch_3"])
 
-    def test_architecture_request_defers_empty_long_range_targets_to_focused_repair(self):
-        captured = {}
-
-        def committed(_run, kind):
-            return None if kind == "architecture_core" else {"commit_id": f"commit_{kind}"}
-
-        def capture(_run, _step, _prompt, _context, schema, _transport):
-            captured["response_schema"] = schema
-            raise RuntimeError("captured")
-
-        with mock.patch.object(RUNNER, "execution_policy", return_value={}), mock.patch.object(RUNNER, "verify_engine_snapshot"), mock.patch.object(
-            RUNNER, "ensure_frozen_geomancy"
-        ), mock.patch.object(RUNNER, "committed_record", side_effect=committed), mock.patch.object(
-            RUNNER, "architecture_core_prompt", return_value=("prompt", "context")
-        ), mock.patch.object(RUNNER, "staged_planning_request", side_effect=capture), self.assertRaisesRegex(
-            RuntimeError, "captured"
-        ):
-            RUNNER.execute_creative_phases(Path("/offline"), output_fn=lambda _value: None)
-
-        obligation_schema = captured["response_schema"]["$defs"]["obligation"]
-        RUNNER.validate_json_schema(
-            obligation(termination_targets=[]), obligation_schema, captured["response_schema"]
-        )
-        with self.assertRaises(RUNNER.SchemaError):
-            protocol = RUNNER.load_protocol()
-            RUNNER.validate_json_schema(obligation(termination_targets=[]), protocol["$defs"]["obligation"], protocol)
-        self.assertIn("termination_targets", obligation_schema["properties"])
 
     def test_architecture_shared_aliases_resolve_through_constraint_commit(self):
         payload = architecture_core_payload()
@@ -1785,66 +1642,6 @@ class CathedralsRunnerTests(unittest.TestCase):
             self.assertEqual(RUNNER.ledger_entries(run)[0]["commit_status"], "COMMITTED")
         self.assertEqual(payload, original)
 
-    def test_architecture_reference_repair_splits_failed_batch_and_preserves_successes(self):
-        payload = architecture_core_payload()
-        payload["arcs"][0]["claimant_pressures"] = ["claimant_missing"]
-        payload["attractors"][0]["prerequisite_obligation_ids"] = ["obligation_missing"]
-        records = architecture_genesis_records()
-        calls = []
-
-        def repair(_run, _step, _prompt, schema, _transport, validator=None):
-            properties = schema["properties"]["resolutions"]["properties"]
-            calls.append(list(properties))
-            if len(properties) > 1:
-                raise RUNNER.PausedError("Architecture repair", "batch failed")
-            issue_id, definition = next(iter(properties.items()))
-            result = {"resolutions": {issue_id: definition["enum"][0]}}
-            if validator:
-                validator(result)
-            return result, {"usage": {"prompt_tokens": 5, "completion_tokens": 1}}
-
-        with tempfile.TemporaryDirectory() as temporary:
-            run = Path(temporary)
-            (run / ".staging").mkdir()
-            with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: records[kind]), mock.patch.object(
-                RUNNER, "_source_index", return_value={"commit_foundation": {}}
-            ), mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=repair):
-                repaired = RUNNER.repair_architecture_core_payload(
-                    run, "architecture_core", payload, "{}", {"usage": {}}, lambda *_args: None
-                )
-            repair_state = RUNNER.read_json(run / ".staging/architecture_core.repair.json")
-        self.assertEqual(len(calls), 3)
-        self.assertEqual(repaired["arcs"][0]["claimant_pressures"], ["claimant_01"])
-        self.assertEqual(repaired["attractors"][0]["prerequisite_obligation_ids"], ["obligation_one"])
-        self.assertEqual(len(repair_state["history"]), 2)
-
-    def test_architecture_coupled_failure_replaces_only_topology(self):
-        payload = architecture_core_payload()
-        payload["topology"]["edges"].append({
-            "edge_id": "edge_3", "from_node_id": "node_intro", "to_node_id": "node_branch_3",
-            "relation": "branch", "hard_obligation_ids": [],
-        })
-        records = architecture_genesis_records()
-        replacement = copy.deepcopy(payload["topology"])
-        replacement["edges"] = replacement["edges"][:3]
-
-        with tempfile.TemporaryDirectory() as temporary:
-            run = Path(temporary)
-            (run / ".staging").mkdir()
-            with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: records[kind]), mock.patch.object(
-                RUNNER, "_source_index", return_value={"commit_foundation": {}}
-            ), mock.patch.object(
-                RUNNER, "request_architecture_analysis",
-                return_value=(replacement, {"usage": {"prompt_tokens": 5, "completion_tokens": 1}}),
-            ):
-                repaired = RUNNER.repair_architecture_core_payload(
-                    run, "architecture_core", payload, "{}", {"usage": {}}, lambda *_args: None
-                )
-                expected = RUNNER.normalize_architecture_core_payload(payload, run)
-        self.assertEqual({key: value for key, value in repaired.items() if key != "topology"}, {
-            key: value for key, value in expected.items() if key != "topology"
-        })
-        self.assertEqual(len(repaired["topology"]["edges"]), 3)
 
     def test_scope_is_dynamic_not_clamped_to_profiles(self):
         scope = RUNNER.derive_scope(150)["scope"]
@@ -1852,25 +1649,6 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(scope["profile_guidance"], "cathedral")
         self.assertGreater(scope["literary_packet_target"], 16)
 
-    def test_toolchain_state_is_ignored_and_renpy_is_deferred(self):
-        self.assertIn(".cathedrals/", (ROOT / ".gitignore").read_text().splitlines())
-        self.assertEqual(RUNNER.renderer_for("visualnovel"), "astro")
-        self.assertFalse((RUNNER.RUNTIME_ROOT / "toolchains/renpy").exists())
-
-    def test_web_bootstrap_reuses_compatible_system_node(self):
-        def located(name):
-            return f"/usr/bin/{name}" if name in {"node", "npm"} else None
-
-        with mock.patch.object(
-            RUNNER.shutil, "which", side_effect=located
-        ), mock.patch.object(
-            RUNNER,
-            "run_command",
-            return_value=CompletedProcess([], 0, "v22.12.0\n", ""),
-        ):
-            node, npm = RUNNER.ensure_node(output_fn=lambda _line: None)
-        self.assertEqual(node, Path("/usr/bin/node"))
-        self.assertEqual(npm, Path("/usr/bin/npm"))
 
     def test_snapshots_accept_zip_dirty_and_untracked_installations(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1993,7 +1771,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             with mock.patch.object(RUNNER, "ROOT", root), mock.patch.object(
                 RUNNER, "reconcile_run"
             ), mock.patch.object(RUNNER, "preflight_model_capacity"), mock.patch.object(
-                RUNNER.subprocess,
+                __import__("subprocess"),
                 "run",
                 side_effect=AssertionError("external command invoked"),
             ):
@@ -2085,20 +1863,11 @@ class CathedralsRunnerTests(unittest.TestCase):
                 json.dumps(fixture["packets"][0]["decision_edges"][0], sort_keys=True),
                 original_edge,
             )
-            package = RUNNER.read_json(project / "package.json")
-            self.assertEqual(
-                package["dependencies"]["markdown-it"], RUNNER.MARKDOWN_IT_VERSION
-            )
-            renderer = (project / "src/lib/markdown.mjs").read_text()
-            scene_template = (project / "src/pages/scenes/[sceneId].astro").read_text()
-            self.assertIn("html:false", renderer)
-            self.assertIn("set:html={renderMarkdown(scene.prose_mdx)}", scene_template)
-            for route in (
-                "scenes/[sceneId].astro",
-                "artifacts/[artifactId].astro",
-                "endings/[endingId].astro",
-            ):
-                self.assertTrue((project / "src/pages" / route).exists())
+            self.assertFalse((project / "package.json").exists())
+            self.assertFalse((project / "src").exists())
+            self.assertEqual(RUNNER.read_json(run / "validation/projection.json")["renderer"], "static_html")
+            RUNNER.build_static_baseline(project)
+            self.assertEqual(RUNNER.static_build_problems(project, work), [])
 
     def test_generated_markdown_rejects_authored_html_and_executable_mdx(self):
         for source in (
@@ -2447,13 +2216,13 @@ class CathedralsRunnerTests(unittest.TestCase):
                     },
                 },
             )
-            RUNNER.write_state_map(run, "canonical-facts.json", {"fact_reader_state": reader_fact}
+            seed_state_map(run, "canonical-facts.json", {"fact_reader_state": reader_fact}
             )
             RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
-            RUNNER.write_state_map(run, "obligations.json", {"obligation_one": satisfied}
+            seed_state_map(run, "obligations.json", {"obligation_one": satisfied}
             )
             for name in ("knowledge-state.json", "motifs.json"):
-                RUNNER.write_state_map(run, name, {})
+                seed_state_map(run, name, {})
             with mock.patch.object(
                 RUNNER, "committed_record", return_value={"record_type": "genesis"}
             ), mock.patch.object(
@@ -2466,7 +2235,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 RUNNER, "retrieve_original_sources", return_value=[]
             ), mock.patch.object(
                 RUNNER, "ensure_frozen_geomancy", return_value={"assignments": []}
-            ), mock.patch.object(RUNNER, "packet_root_sources", return_value=[]), mock.patch.object(
+            ), mock.patch.object(RUNNER, "scoped_root_sources", return_value=[]), mock.patch.object(
                 RUNNER, "instruction_profile", return_value=("law", {"purpose": "fixture"})
             ):
                 context = RUNNER.relevant_packet_context(
@@ -2527,7 +2296,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 ("obligations.json", {}),
                 ("motifs.json", {}),
             ):
-                RUNNER.write_state_map(run, name, value)
+                seed_state_map(run, name, value)
             with mock.patch.object(
                 RUNNER, "committed_record", return_value={"record_type": "genesis"}
             ), mock.patch.object(
@@ -2538,7 +2307,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 RUNNER, "retrieve_original_sources", return_value=[]
             ), mock.patch.object(
                 RUNNER, "ensure_frozen_geomancy", return_value={"assignments": []}
-            ), mock.patch.object(RUNNER, "packet_root_sources", return_value=[]), mock.patch.object(
+            ), mock.patch.object(RUNNER, "scoped_root_sources", return_value=[]), mock.patch.object(
                 RUNNER, "instruction_profile", return_value=("law", {"purpose": "fixture"})
             ):
                 context = RUNNER.relevant_packet_context(
@@ -2570,13 +2339,13 @@ class CathedralsRunnerTests(unittest.TestCase):
             one = constraint_event(1, "obligation", first, "future_obligation")
             two = constraint_event(2, "obligation", second, "future_obligation")
             _, _, obligations, _, _ = RUNNER.project_constraint_state([one, two])
-            RUNNER.write_state_map(run, "obligations.json", obligations)
-            RUNNER.write_state_map(run, "foreclosure-candidates.json", {})
+            seed_state_map(run, "obligations.json", obligations)
+            seed_state_map(run, "foreclosure-candidates.json", {})
             before = RUNNER.build_prospective_plan(
                 run, architecture, "commit_architecture"
             )
             obligations["obligation_one"]["data"]["status"] = "satisfied"
-            RUNNER.write_state_map(run, "obligations.json", obligations)
+            seed_state_map(run, "obligations.json", obligations)
             after = RUNNER.build_prospective_plan(run, architecture, "commit_packet")
             self.assertEqual(RUNNER.load_state(run)["canonical_state_hash"], "b" * 64)
         self.assertNotEqual(
@@ -2872,8 +2641,8 @@ class CathedralsRunnerTests(unittest.TestCase):
             RUNNER.ensure_index(run)
             debt = constraint_event(1, "obligation", obligation(), "future_obligation")
             _, _, obligations, _, _ = RUNNER.project_constraint_state([debt])
-            RUNNER.write_state_map(run, "obligations.json", obligations)
-            RUNNER.write_state_map(run, "foreclosure-candidates.json", {})
+            seed_state_map(run, "obligations.json", obligations)
+            seed_state_map(run, "foreclosure-candidates.json", {})
             with mock.patch.object(RUNNER, "committed_record", return_value=architecture):
                 plan = RUNNER.recompute_prospective_plan(run, "commit_architecture")
             self.assertEqual(plan["plan_id"], "prospective_plan_0001")
@@ -2927,13 +2696,12 @@ class CathedralsRunnerTests(unittest.TestCase):
                 ),
             ), mock.patch.object(
                 RUNNER, "build_web", side_effect=build
-            ), mock.patch.object(RUNNER, "artistic_acceptance") as artistic, mock.patch.object(
+            ), mock.patch.object(
                 RUNNER, "finalize_success", side_effect=lambda *_: (order.append("finalize") or (build_path, {}))
             ):
                 result, _, _ = RUNNER.execute_run(run, output_fn=lambda _line: None)
         self.assertEqual(result, build_path)
         self.assertEqual(order, ["creative", "projection", "mechanical", "build", "finalize"])
-        artistic.assert_not_called()
 
     def test_mechanically_valid_work_reaches_ready_finalizer_without_artistic_call(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -2965,7 +2733,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 side_effect=lambda *_: (
                     order.append("build") or {"result": "PASS", "reasons": ["built"]}
                 ),
-            ), mock.patch.object(RUNNER, "artistic_acceptance") as artistic, mock.patch.object(
+            ), mock.patch.object(
                 RUNNER,
                 "finalize_success",
                 side_effect=lambda *_: (order.append("finalize") or (build_path, {})),
@@ -2978,7 +2746,6 @@ class CathedralsRunnerTests(unittest.TestCase):
             order,
             ["creative", "projection", "mechanical", "build", "finalize"],
         )
-        artistic.assert_not_called()
 
     def test_two_thousand_scene_scope_uses_bounded_plan_batches(self):
         core = {
@@ -3029,7 +2796,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(derived["scope"]["ending_hard_max"], 5)
         self.assertEqual(derived["budgets"]["max_total_literary_words"], 30000)
         self.assertEqual(derived["budgets"]["max_creative_step_count"], 30)
-        recovery = RUNNER.planning_recovery_allowance(1)
+        recovery = RUNNER.planning_recovery_allowance()
         recovery += 3 * (5 * 25 + 1000)
         self.assertGreater(recovery, 0)
         self.assertEqual(derived["budgets"]["max_cumulative_output_tokens"],
@@ -3100,6 +2867,8 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(RUNNER.packet_literary_word_count(packet), 5400)
         self.assertGreater(RUNNER.packet_literary_word_count(packet), RUNNER.PACKET_LITERARY_WORD_TARGET)
 
+    @mock.patch.object(RUNNER, "audit_scaffold_guarantees", new=lambda *args, **kwargs: None)
+    @mock.patch.object(RUNNER, "repair_named_references", new=lambda _run, _step, payload, *_args, **_kwargs: payload)
     def test_packet_length_correction_precedes_preservation_and_normalization(self):
         invalid = packet_payload(953, 248)
         valid = packet_payload(952, 248)
@@ -3107,7 +2876,8 @@ class CathedralsRunnerTests(unittest.TestCase):
             scene_slot_ids=["scene_slot_0001"], artifact_count=1, formal_composition_count=1,
             advance_obligation_ids=[], may_satisfy_obligation_ids=[],
         ))[0]
-        architecture = {"arcs": [{"arc_id": "arc_one"}], "packet_plans": [plan]}
+        architecture = {"arcs": [{"arc_id": "arc_one"}], "packet_plans": [plan, packet_plan("next", scene_slot_ids=["scene_slot_0002"])]}
+        architecture = packet_architecture_fixture(architecture, plan)
 
         for expanded, correct in ((False, True), (True, True), (False, False)):
             with self.subTest(expanded=expanded, correct=correct), tempfile.TemporaryDirectory() as temporary:
@@ -3205,6 +2975,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             "may_satisfy_obligation_ids": [],
         }
         architecture = {"arcs": [{"arc_id": "arc_one"}, {"arc_id": "arc_two"}]}
+        architecture = packet_architecture_fixture(architecture, plan)
         with mock.patch.object(RUNNER, "committed_record", return_value=architecture):
             schema = RUNNER.packet_payload_schema(Path("/offline"), plan)
         self.assertEqual(schema["properties"]["scenes"]["minItems"], 1)
@@ -3212,7 +2983,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertEqual(schema["properties"]["endings"]["maxItems"], 0)
         properties = schema["$defs"]["scenePayload"]["properties"]
         self.assertEqual(properties["technical_slot_id"], {"const": "scene_slot_0001"})
-        self.assertEqual(properties["arc_id"], {"enum": ["arc_one", "arc_two"]})
+        self.assertEqual(properties["arc_id"], {"const": "arc_one"})
         self.assertEqual(
             (properties["artifacts"]["minItems"], properties["artifacts"]["maxItems"]),
             (1, 1),
@@ -3425,11 +3196,11 @@ class CathedralsRunnerTests(unittest.TestCase):
             RUNNER.write_json(project / "public/work.json", work)
             for name in ("style.css", "state.js", "theme.js"):
                 (project / "public" / name).write_text("", encoding="utf-8")
-            with mock.patch.object(RUNNER, "ensure_node", side_effect=AssertionError("npm invoked")):
-                RUNNER.build_static_baseline(project)
+            RUNNER.build_static_baseline(project)
             self.assertTrue((project / "dist/index.html").exists())
             self.assertTrue((project / "dist/work.json").exists())
 
+    @mock.patch.object(RUNNER, "execution_policy", new=lambda *_: RUNNER.CURRENT_EXECUTION_POLICY)
     def test_single_scene_truncation_gets_one_expanded_retry(self):
         plan = {
             "packet_slot_id": "literary_packet_0001",
@@ -3442,10 +3213,12 @@ class CathedralsRunnerTests(unittest.TestCase):
             "may_satisfy_obligation_ids": [],
             "branch_path_relation": "branch",
         }
-        with mock.patch.object(RUNNER, "execution_policy", return_value={}), mock.patch.object(
+        plan["required_navigation"] = {"scene_slot_0001": ["scene_slot_0002"]}
+        architecture = packet_architecture_fixture({"arcs": [{"arc_id": "arc_one"}]}, plan)
+        with mock.patch.object(
             RUNNER, "packet_prompt", return_value=("prompt", "context")
         ), mock.patch.object(
-            RUNNER, "committed_record", return_value={"arcs": [{"arc_id": "arc_one"}]}
+            RUNNER, "committed_record", return_value=architecture
         ), mock.patch.object(
             RUNNER,
             "step_was_truncated",

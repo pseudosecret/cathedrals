@@ -8,10 +8,9 @@ from pathlib import Path
 from unittest import mock
 
 from test_cathedrals import RUNNER
-from test_backward_scaffold import POLICY as LEGACY_POLICY, core_fixture, node
+from test_backward_scaffold import POLICY, core_fixture, node
 
 
-POLICY = LEGACY_POLICY | {"scaffold_planning_version": 2}
 GENESIS = {"commit_genesis": "Synthetic immutable premise."}
 
 

@@ -191,6 +191,7 @@ class ReferenceResolutionTests(unittest.TestCase):
             destination = next(item for item in issues if item["invalid"] == "missing_destination")
             self.assertNotIn("claimant_slot_01", destination["candidates"])
 
+    @mock.patch.object(RUNNER, "audit_scaffold_guarantees", new=lambda *args, **kwargs: None)
     def test_metadata_corrects_multiple_labels_without_regenerating_facts_or_prose(self):
         records = self.records()
         artistic = {"scenes": [{"technical_slot_id": "scene_slot_0002", "prose_mdx": "Immutable synthetic prose."}], "endings": []}
@@ -211,6 +212,7 @@ class ReferenceResolutionTests(unittest.TestCase):
         self.assertEqual([item["proposition_id"] for item in normalized["knowledge_changes"]], ["fact_01", "fact_02"])
         self.assertEqual(artistic["scenes"][0]["prose_mdx"], "Immutable synthetic prose.")
 
+    @mock.patch.object(RUNNER, "audit_scaffold_guarantees", new=lambda *args, **kwargs: None)
     def test_paused_lookup_resumes_original_metadata_and_ledgers_every_response_once(self):
         records = self.records()
         artistic = {"scenes": [{"technical_slot_id": "scene_slot_0002", "prose_mdx": "Immutable synthetic prose."}], "endings": []}
@@ -241,7 +243,7 @@ class ReferenceResolutionTests(unittest.TestCase):
         original_prose = {}
         normalization_counts = {}
 
-        bounded = bool(getattr(self, "policy", None))
+        bounded = True
         def desired_core():
             value = architecture_core_payload()
             foundation = RUNNER.committed_record(self.run, "genesis_foundation")
@@ -275,7 +277,7 @@ class ReferenceResolutionTests(unittest.TestCase):
             if name == "architectureLayout":
                 value = desired_core()
                 return api_response({key: len(value["topology"][key] if key in {"nodes", "edges"} else value[key])
-                    for key in ("arcs", "attractors", "obligation_graph", "nodes", "edges")})
+                    for key in schema["properties"]})
             if name in {"planningValue", "planningBatchValues"}:
                 def resolve(path, node):
                     if bounded and not any(isinstance(part, str) and part.startswith("$") for part in path) and path[0] in {"arcs", "attractors", "obligation_graph", "topology", "saturation_rationale", "packet_plans"}:
@@ -307,30 +309,42 @@ class ReferenceResolutionTests(unittest.TestCase):
                 value["work_canon"]["central_incident"]["subjects"] = ["missing_claimant"]
             elif name == "genesisCastPayload":
                 value = {"claimants": [claimant_expansion(f"claimant_{index:02d}") for index in range(1, 6)], "characters": []}
-            elif name == "architectureCorePayload":
-                value = architecture_core_payload()
-                value["obligation_graph"][0]["termination_targets"].append("attractor_missing")
-                foundation = RUNNER.committed_record(self.run, "genesis_foundation")
-                value["obligation_graph"][0].update(created_by_ids=[foundation["commit_id"]], sources=[{
-                    "artifact_type": "genesis", "artifact_id": foundation["commit_id"], "source_locator": "Synthetic foundation."}])
-                value["arcs"] = [copy.deepcopy(value["arcs"][0]) | {"arc_id": f"arc_draft_{index}"} for index in range(1, 5)]
-                response = api_response(value)
-                response["choices"][0]["finish_reason"] = "length"
-                return response
             elif name == "architectureRepair":
-                if "resolutions" in schema["properties"]:
-                    value = {"resolutions": {key: "UNRESOLVED" for key in schema["properties"]["resolutions"]["properties"]}}
+                fields = schema.get("properties", schema.get("anyOf", [{}])[0].get("properties", {}))
+                if "nodes" in fields:
+                    seed = "complete" in fields
+                    context = json.loads(prompt.split("\n", 1)[1] if seed else prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
+                    offset = context.get("outcomes_accepted", context.get("scenes_accepted", 0))
+                    count = min(context.get("maximum_this_page", context.get("allocated_capacity", 0)),
+                        (5 if seed else getattr(self, "scene_count", 20)) - offset)
+                    declarations = [{"arc_id": "arc_001", "purpose": f"Synthetic purpose {offset + index}.",
+                        "intended_change": "Synthetic development.", "entry_cases": [{"requirements": [] if seed else ["Synthetic committed premise."]}],
+                        "guarantees": ["Synthetic terminal change."] if seed else [], "preserves": []}
+                        for index in range(count)]
+                    if seed:
+                        for item in declarations:
+                            item.update(terminal_role="final", attractor_id=fields["nodes"]["items"]["properties"]["attractor_id"]["enum"][0],
+                                prerequisite_obligation_ids=[])
+                    value = {"nodes": declarations} | ({"complete": offset + count == 5} if seed else {})
+                elif "connections" in fields:
+                    context = json.loads(prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
+                    targets = context["successor_interfaces"]
+                    scenes = [target for target in targets if target["kind"] == "scene"]
+                    chosen = scenes[-1:] if scenes else targets
+                    value = {"connections": {target["node_id"]: {"entry_case_id": target["entry_cases"][0]["case_id"], "supports": {r["requirement_id"]: {"evidence_ids": [next(iter(context["genesis_sources"]))], "reason": "Synthetic premise support."} for r in target["entry_cases"][0]["requirements"]}}
+                        for target in chosen}}
+                elif "opening" in fields:
+                    context = json.loads(prompt.split("\n", 1)[1])
+                    value = {"opening": None if context["remaining_scenes"] else {"supports": {r["requirement_id"]: {"evidence_ids": [next(iter(context["genesis_sources"]))], "reason": "Synthetic premise support."} for r in context["opening"]["entry_cases"][0]["requirements"]}}}
+                elif "supported" in fields:
+                    value = {"supported": True, "reason": "Synthetic plan review.", "contract_repairs": {}, "connection_repairs": {}}
+                elif "tasks" in fields:
+                    context = json.loads(prompt.split("LOCAL AUDIT CONTEXT\n\n", 1)[1])
+                    value = {"tasks": {identifier: {"supported": True, "reason": "Synthetic evidence check.",
+                        "evidence_quotes": [{"source_id": task["source_ids"][0], "quote": context["immutable_source_units"][task["source_ids"][0]][0]}]}
+                        for identifier, task in context["tasks"].items()}}
                 else:
-                    value = {"replacement": "attractor_missing", "new_obligation": None,
-                        "new_attractor": architecture_core_payload()["attractors"][0] | {"attractor_id": "attractor_missing", "kind": "claimant"}}
-            elif name == "architecturePlanBatchPayload":
-                core = RUNNER.planning_core(self.run)
-                value = {"packet_plans": [{"packet_slot_id": spec["packet_slot_id"], "initial_priority": index,
-                    "depends_on_packet_slot_ids": [], "branch_path_relation": "Synthetic relation.",
-                    "attractor_ids": [core["attractors"][0]["attractor_id"]] if spec["packet_kind"] == "ending" else [],
-                    "relevance": {"technical_slot_ids": spec["scene_slot_ids"] + spec["ending_slot_ids"],
-                        "motif_ids": ["motif_pencil"], "state_keys": ["intro_phase"] if index == 1 else ["contamination"]},
-                    "soft_guidance": []} for index, spec in enumerate(RUNNER.planned_packet_specs(core), 1)]}
+                    self.fail(f"Unexpected scaffold schema: {fields}")
             elif name == "creativePacketPayload":
                 group = "scenes" if schema["properties"]["scenes"]["maxItems"] else "endings"
                 definition = "scenePayload" if group == "scenes" else "endingPayload"
@@ -350,12 +364,12 @@ class ReferenceResolutionTests(unittest.TestCase):
                 item = value[group][0]
                 item["artifacts"] = [copy.deepcopy(template["artifacts"][0]) for _ in range(properties["artifacts"]["minItems"])]
                 item["formal_compositions"] = [copy.deepcopy(template["formal_compositions"][0]) for _ in range(properties["formal_compositions"]["minItems"])]
-                if bounded and group == "scenes":
-                    number = int(slot.rsplit("_", 1)[1])
-                    target = f"scene_slot_{number + 1:04d}" if number < self.scene_count else "ending_slot_0001"
+                if group == "scenes":
+                    plan = next(plan for plan in RUNNER.committed_record(self.run, "architecture")["packet_plans"] if slot in plan["scene_slot_ids"])
                     item["choices"] = [{"destination": {"kind": "technical_slot", "id": target},
                         "label": "Follow the synthetic evidence.", "kind": "progression", "availability": "playable",
-                        "major_decision": False, "state_conditions": [], "state_effects": []}]
+                        "major_decision": False, "state_conditions": [], "state_effects": []}
+                        for target in plan["required_navigation"][slot]]
                 original_prose[slot] = item["prose_mdx"]
             elif name == "semanticCorrectionCategory":
                 return api_response({"category": "obligation_updates"})
@@ -411,8 +425,27 @@ class ReferenceResolutionTests(unittest.TestCase):
                 self.fail(f"Unexpected request {name}")
             return api_response(value)
 
-        with mock.patch.object(RUNNER, "ROOT", self.root):
+        import shutil
+        shutil.copytree(RUNNER.engine_root(self.run), self.root / "engine")
+        recompute = RUNNER.recompute_prospective_plan
+        interrupted = False
+        def checkpoint(*args, **kwargs):
+            nonlocal interrupted
+            result = recompute(*args, **kwargs)
+            if getattr(self, "interrupt_after_first_packet", False) and not interrupted and RUNNER.committed_records(self.run, "creative_packet"):
+                interrupted = True
+                raise KeyboardInterrupt("Synthetic interruption after a durable packet")
+            return result
+        with mock.patch.object(RUNNER, "ROOT", self.root), mock.patch.object(RUNNER, "recompute_prospective_plan", side_effect=checkpoint):
+            if getattr(self, "interrupt_after_first_packet", False):
+                with self.assertRaises(KeyboardInterrupt):
+                    RUNNER.execute_run(self.run, output_fn=lambda _: None, transport=transport)
+                archives = {path: path.read_bytes() for path in (self.run / "committed").rglob("*") if path.is_file()}
+                prefix = (self.run / "ledger.jsonl").read_bytes()
             build_path, counts, _brief = RUNNER.execute_run(self.run, output_fn=lambda _: None, transport=transport)
+            if getattr(self, "interrupt_after_first_packet", False):
+                self.assertTrue((self.run / "ledger.jsonl").read_bytes().startswith(prefix))
+                for path, original in archives.items(): self.assertEqual(path.read_bytes(), original)
         self.assertEqual(counts["scenes"], getattr(self, "scene_count", 20))
         with RUNNER.index_connection(self.run) as db:
             kinds = {row[0] for row in db.execute("SELECT DISTINCT kind FROM search_documents")}
@@ -436,13 +469,13 @@ class ReferenceResolutionTests(unittest.TestCase):
         self.assertEqual(calls.count("architectureCorePayload"), 0 if bounded else 1)
         self.assertGreater(calls.count("planningValue"), 0)
         self.assertGreater(calls.count("planningBatchValues"), 0)
-        self.assertEqual(calls.count("architectureRepair"), 0)
+        self.assertGreater(calls.count("architectureRepair"), 0)
         self.assertEqual(normalization_counts["scene_slot_0002"], 1)
         self.assertEqual(normalization_counts["scene_slot_0006"], 1)
         failures = [entry for entry in RUNNER.ledger_entries(self.run) if entry["commit_status"] == "FAILED_BEFORE_COMMIT"]
-        self.assertEqual(len(failures), 4 if bounded else 5)
-        self.assertEqual(calls.count("semanticCategoryPage"), 3)
-        self.assertEqual(calls.count("semanticCorrectionCategory"), 1)
+        self.assertEqual(len(failures), 3)
+        self.assertEqual(calls.count("semanticCategoryPage"), 2)
+        self.assertEqual(calls.count("semanticCorrectionCategory"), 0)
         self.assertEqual(calls.count("epistemicCorrection"), 1)
         self.assertEqual({item["failure_class"] for item in failures}, {"provider_truncation", "malformed_response"})
         core_commit = next(path for path in RUNNER.committed_directories(self.run) if path.name.endswith("-architecture_core"))
@@ -450,10 +483,12 @@ class ReferenceResolutionTests(unittest.TestCase):
         self.assertTrue(core_api["_cathedrals_assembled_from_fields"])
         self.assertEqual(core_api["choices"][0]["finish_reason"], "stop")
         planning = RUNNER.read_json(core_commit / "planning-draft.json")
-        self.assertTrue(planning["setups_complete"])
-        self.assertTrue(all(item["attached"] for item in planning["setups"]))
+        self.assertEqual(planning["checkpoint_version"], 3)
         finalization = RUNNER.read_json(self.run / "finalization.json")
         self.assertEqual(finalization["run_status"], "READY_TO_PLAY")
+        self.assertEqual(finalization["npm_enhancement"]["result"], "NOT_RUN")
+        self.assertFalse(any(warning["code"] == "npm_enhancement_unavailable" for warning in finalization["warnings"]))
+        self.assertEqual(RUNNER.read_json(self.run / "validation/projection.json")["renderer"], "static_html")
         self.assertTrue((build_path / "index.html").exists())
         for record in RUNNER.committed_records(self.run, "creative_packet"):
             for item in record["scenes"] + record["endings"]:

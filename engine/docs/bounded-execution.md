@@ -2,7 +2,7 @@
 
 New interactive runs freeze `execution_policy` in the immutable manifest. Existing runs retain their original launcher and policy. Installation updates never replace a run's snapshot.
 
-The compiler requests a small architecture layout, allocates stable IDs, and authors coherent records in batches of at most four. Accepted fields survive repairs. Foreign key schemas constrain known arcs, obligations, attractors, entities and topology nodes. Reference repairs cannot expand a compiled layout by inventing more obligations. Cycles and disconnected routes still require model decisions; the engine constructs their envelopes and checks the resulting graph. Existing whole-draft checkpoints retain their recovery path.
+The compiler requests a small architecture layout, allocates stable IDs, and authors coherent records in batches of at most four. Accepted fields survive repairs. Foreign key schemas constrain known arcs, obligations, attractors, entities and topology nodes. Reference repairs cannot expand a compiled layout by inventing more obligations. Cycles and disconnected routes still require model decisions; the engine constructs their envelopes and checks the resulting graph. Current checkpoints preserve accepted contracts and fields. Older checkpoint formats execute only through their saved launchers.
 
 Planning calls contain frozen law and brief, global world canon, compact source/entity/plan catalogs, retained target records and referenced neighbors. They do not routinely send the entire assembled draft and cast. Packet context includes global world and composition law, relevant entities and current constraints, assigned obligations, complete mandatory prerequisite evidence and deterministic predecessor contracts. Contracts contain typed changes and navigation with commit/hash references; they do not replace literary evidence with generated summaries. Mandatory context that exceeds capacity pauses explicitly.
 
@@ -20,7 +20,7 @@ The browser reader isolates theme and story-state scripts so their variables can
 
 ## Verification
 
-Run `python3 -m unittest discover -s engine/tests` and `python3 engine/tests/validate-generation-protocol.py`. `test_thirty_scene_acceptance.py` exercises a complete synthetic 30-scene run, including focused reference, semantic and epistemic recovery, then checks `READY_TO_PLAY`, immutable literary bytes and exact usage accounting.
+Run `python3 -m unittest discover -s engine/tests` and `python3 engine/tests/validate-generation-protocol.py`. `test_thirty_scene_acceptance.py` exercises a complete synthetic 30-scene run, including focused reference, semantic and epistemic recovery and interruption/resume, then checks `READY_TO_PLAY`, immutable literary bytes and exact usage accounting.
 
 To export that synthetic publication for browser testing:
 

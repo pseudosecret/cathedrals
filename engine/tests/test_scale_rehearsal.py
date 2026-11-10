@@ -1,3 +1,4 @@
+from test_cathedrals import seed_state_map
 #!/usr/bin/env python3
 """Cathedral-scale deterministic rehearsal; never contacts a model or authors fiction."""
 
@@ -258,6 +259,8 @@ def scale_constraint_fixture():
             "relevance": {"branch_ids": [f"branch_{number:02d}"], "keywords": ["synthetic"]},
             "soft_guidance": ["Synthetic terminal pressure."],
         })
+    for plan in plans:
+        plan["may_satisfy_obligation_ids"] = [item["obligation_id"] for item in obligations]
     architecture = {"commit_id": "commit_architecture", "obligation_graph": obligations, "attractors": attractors, "packet_plans": plans}
     events = []
 
@@ -346,8 +349,8 @@ class ScaleRehearsalTests(unittest.TestCase):
             self.assertEqual(len(motifs), 12)
 
             RUNNER.save_state(run, RUNNER.initial_run_state("synthetic_scale", "a" * 64, "b" * 64, "offline"))
-            RUNNER.write_state_map(run, "obligations.json", obligations)
-            RUNNER.write_state_map(run, "foreclosure-candidates.json", {})
+            seed_state_map(run, "obligations.json", obligations)
+            seed_state_map(run, "foreclosure-candidates.json", {})
             committed = []
             original_sources = [RUNNER.canonical_json(record) for record in records]
             started = time.perf_counter()
@@ -356,18 +359,23 @@ class ScaleRehearsalTests(unittest.TestCase):
             ):
                 for number, record in enumerate(records, 1):
                     committed.append(record)
-                    RUNNER.recompute_prospective_plan(run, f"commit_scale_{number:03d}")
+                    if number == len(records):
+                        with self.assertRaisesRegex(RUNNER.PausedError, "No remaining literary plan"):
+                            RUNNER.recompute_prospective_plan(run, f"commit_scale_{number:03d}")
+                    else:
+                        RUNNER.recompute_prospective_plan(run, f"commit_scale_{number:03d}")
                 blocked = RUNNER._read_state_map(run, "prospective-plan.json")
                 self.assertFalse(any(item["packet_slot_id"].startswith("packet_slot_ending") for item in blocked["packet_order"]))
-                obligations["obligation_001"] = copy.deepcopy(obligations["obligation_001"])
-                obligations["obligation_001"]["data"]["status"] = "satisfied"
-                obligations["obligation_001"]["resolution_event"] = {"sources": [source(150)]}
-                RUNNER.write_state_map(run, "obligations.json", obligations)
+                for identifier in RUNNER.ending_prerequisite_ids(architecture, obligations):
+                    obligations[identifier] = copy.deepcopy(obligations[identifier])
+                    obligations[identifier]["data"]["status"] = "satisfied"
+                    obligations[identifier]["resolution_event"] = {"sources": [source(150)]}
+                seed_state_map(run, "obligations.json", obligations)
                 eligible = RUNNER.recompute_prospective_plan(run, "commit_satisfaction")
             elapsed = time.perf_counter() - started
             self.assertIn("packet_slot_ending_01", {item["packet_slot_id"] for item in eligible["packet_order"]})
             self.assertEqual(original_sources, [RUNNER.canonical_json(record) for record in records])
-            self.assertEqual(len((run / "planning/prospective-plans.jsonl").read_text().splitlines()), PACKET_COUNT + 1)
+            self.assertEqual(len((run / "planning/prospective-plans.jsonl").read_text().splitlines()), PACKET_COUNT)
             state = RUNNER.load_state(run)
             self.assertEqual([state[key] for key in ("committed_rewrite_count", "committed_regeneration_count", "backtrack_count")], [0, 0, 0])
             self.assertLess(elapsed, 10)
@@ -461,8 +469,8 @@ class ScaleRehearsalTests(unittest.TestCase):
             (run / "state").mkdir(parents=True)
             (run / "planning").mkdir()
             RUNNER.save_state(run, RUNNER.initial_run_state("synthetic_resume", "a" * 64, "b" * 64, "offline"))
-            RUNNER.write_state_map(run, "obligations.json", obligations)
-            RUNNER.write_state_map(run, "foreclosure-candidates.json", {})
+            seed_state_map(run, "obligations.json", obligations)
+            seed_state_map(run, "foreclosure-candidates.json", {})
             for checkpoint in checkpoints:
                 prefix = record_bytes[:checkpoint]
                 ledger = b"".join(RUNNER.canonical_json({"sequence": number + 1, "record_hash": RUNNER.sha256_bytes(value)}) for number, value in enumerate(prefix))
@@ -476,6 +484,11 @@ class ScaleRehearsalTests(unittest.TestCase):
                 committed_scenes = [scene for packet in committed_packets for scene in packet["scenes"]]
                 slot_state = RUNNER.technical_slot_map(committed_scenes, [])
                 self.assertEqual(len(slot_state), checkpoint * 3)
+                if checkpoint == len(records):
+                    for identifier in RUNNER.ending_prerequisite_ids(architecture, obligations):
+                        obligations[identifier]["data"]["status"] = "satisfied"
+                        obligations[identifier]["resolution_event"] = {"sources": [source(150)]}
+                    seed_state_map(run, "obligations.json", obligations)
                 with mock.patch.object(RUNNER, "all_committed_records", return_value=records[:checkpoint]):
                     first_plan = RUNNER.build_prospective_plan(run, architecture, f"checkpoint_{checkpoint:03d}")
                     resumed_plan = RUNNER.build_prospective_plan(run, architecture, f"checkpoint_{checkpoint:03d}")

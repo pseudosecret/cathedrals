@@ -79,7 +79,7 @@ Fail when:
 - a stateful variant is cosmetic
 - formal-composition anchors or required source evidence are absent
 - generated Markdown contains authored HTML/executable MDX, raw HTML is enabled in the renderer, or deterministic projection changes literary bytes
-- graph/state/frontmatter/static Astro compilation fails
+- graph/state/frontmatter/static HTML compilation fails
 
 ## Constraint-Topology Validation
 
@@ -146,7 +146,7 @@ play.
 ## Complete-Work and Runtime Acceptance
 
 `READY_TO_PLAY` requires complete generated canon, all planned content and state
-variants, decision graph, projections, mechanical pass, artistic pass, static Astro
+variants, decision graph, projections, mechanical pass, advisory artistic-review status, static HTML
 build, build validation, hashes, and complete-work barrier. A failed or incomplete
 run has `playable: false` and terminal state `FAILED_GENERATION`.
 
@@ -165,7 +165,7 @@ merely recap. Findings are verdicts, not revision instructions.
 
 ## Build Acceptance
 
-The accepted run must compile into an Astro static site with prose-dominant,
+The accepted run must compile into an static HTML site with prose-dominant,
 intentionally art-directed surfaces; mobile readability; accessible interaction;
 light/dark contrast; clear choices; meaningful artifact presentation; ceremonial
 endings; path visualization; client-side state only; and no runtime AI or server

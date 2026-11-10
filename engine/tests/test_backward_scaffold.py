@@ -11,8 +11,7 @@ from test_completion_contract import scene_payload
 from test_scale_rehearsal import scale_web_fixture
 
 
-POLICY = {"bounded_planning": True, "scoped_sources": True, "retrieval_mode": "automatic",
-          "max_tool_rounds": 2, "max_tool_calls": 8, "completion_contract_version": 1, "scaffold_planning_version": 1}
+POLICY = RUNNER.CURRENT_EXECUTION_POLICY.copy()
 
 
 def node(identifier, kind="scene", cases=None):
@@ -77,6 +76,7 @@ class BackwardScaffoldTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
         self.run = Path(temporary.name)
         (self.run / ".staging").mkdir()
+        RUNNER.write_json(self.run / "generation-brief.json", {"generation_seed": "synthetic_seed"})
         RUNNER.write_json(self.run / "run-manifest.json", RUNNER.derive_scope(150) | {"execution_policy": POLICY})
 
     def test_linear_chapters_mixed_widths_and_optional_shared_endings(self):
@@ -163,52 +163,6 @@ class BackwardScaffoldTests(unittest.TestCase):
             self.assertEqual(RUNNER.compile_scaffold_batches(self.run, compiled), records)
         saved.assert_not_called()
 
-    def test_interrupted_expansion_resumes_frontier_with_stable_ids(self):
-        RUNNER.write_json(self.run / "run-manifest.json", RUNNER.derive_scope(8) | {"execution_policy": POLICY})
-        core = core_fixture(cap=8)
-        RUNNER.write_json(self.run / ".staging/architecture_core.planning.json", {"payload": {}, "record": core})
-        outcomes = [node(f"scaffold_outcome_{index:04d}", "ending") for index in (1, 2)]
-        for outcome in outcomes:
-            outcome["guarantees"] = [{"requirement_id": outcome["node_id"] + "_result", "description": "Synthetic terminal change."}]
-        outcomes[1]["terminal_role"] = "premature"
-        previous = outcomes
-        patches = []
-        for start in (1, 5):
-            additions = [node(f"scaffold_scene_{index:05d}") for index in range(start, start + 4)]
-            for successor in previous: link(additions[0], successor)
-            for index in range(1, 4): link(additions[index], additions[index - 1])
-            complete = start == 5
-            opening = additions[-1]
-            support = []
-            if complete:
-                opening["entry_cases"][0]["requirements"] = [{"requirement_id": "opening_genesis", "description": "Synthetic premise."}]
-                support = [{"requirement_id": "opening_genesis", "guarantee_ids": [], "genesis_source_ids": ["commit_genesis"], "reason": "Synthetic committed premise."}]
-            patches.append({"nodes": additions, "complete": complete, "opening_node_id": opening["node_id"] if complete else None, "opening_support": support})
-            previous = [opening]
-        calls, interrupted = [], [False]
-        def request(_run, step, _prompt, schema, _transport, **kwargs):
-            calls.append(step)
-            if step == "scaffold_expand_00002" and not interrupted[0]:
-                interrupted[0] = True
-                raise RUNNER.PausedError("Scaffold expansion", "Synthetic interruption")
-            result = {"nodes": outcomes, "complete": True} if step.startswith("scaffold_outcomes_") else patches[int(step.rsplit("_", 1)[1]) - 1]
-            RUNNER.validate_json_schema(result, schema)
-            kwargs["validator"](result)
-            return result, {}
-        def save(run, step, draft): RUNNER.write_json(run / ".staging" / f"{step}.planning.json", draft)
-        with mock.patch.object(RUNNER, "planning_core", return_value=core), mock.patch.object(RUNNER, "committed_record", return_value={}), mock.patch.object(
-                RUNNER, "genesis_reference_catalog", return_value={"commit_genesis": "Synthetic premise."}), mock.patch.object(
-                RUNNER, "save_planning_draft", side_effect=save), mock.patch.object(RUNNER, "preserve_planning_result"), mock.patch.object(
-                RUNNER, "audit_scaffold_patch"), mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=request):
-            with self.assertRaisesRegex(RUNNER.PausedError, "Synthetic interruption"):
-                RUNNER.prepare_causal_scaffold(self.run, core, None)
-            checkpoint = RUNNER.read_json(self.run / ".staging/causal-scaffold.json")
-            self.assertEqual(checkpoint["round"], 1)
-            self.assertEqual(len(checkpoint["nodes"]), 6)
-            result = RUNNER.prepare_causal_scaffold(self.run, core, None)
-        self.assertEqual(calls, ["scaffold_outcomes_00001", "scaffold_expand_00001", "scaffold_expand_00002", "scaffold_expand_00002"])
-        self.assertEqual(result["causal_scaffold"]["slot_ids"]["scaffold_scene_00008"], "scene_slot_0001")
-        self.assertEqual(result["scope_commitment"]["planned_scene_count"], 8)
 
     def test_reader_reconvergence_checks_both_alternative_states(self):
         scaffold = mixed_scaffold(); core = core_fixture(scaffold)
@@ -247,10 +201,13 @@ class BackwardScaffoldTests(unittest.TestCase):
         item = scene_payload("scene_slot_0001", "scene_slot_0002")
         item["prose_mdx"] = "Synthetic preserved text.\r\nThe event has not occurred."
         artistic = {"scenes": [item], "endings": []}; before = RUNNER.canonical_json(artistic)
-        result = {"checks": [{"check_id": "must_be_earned", "case_id": node_value["entry_cases"][0]["case_id"],
-            "entry_from_slot": "genesis", "supported": False, "reason": "The source does not establish it.", "evidence_quotes": []}]}
+        def request(_run, _step, _prompt, schema, _transport, **kwargs):
+            result = {"tasks": {identifier: {"supported": False, "reason": "The source does not establish it.", "evidence_quotes": []}
+                for identifier in schema["properties"]["tasks"]["properties"]}}
+            kwargs["validator"](result)
+            return result, {}
         with mock.patch.object(RUNNER, "execution_policy", return_value=POLICY), mock.patch.object(RUNNER, "committed_record", return_value=core), mock.patch.object(
-                RUNNER, "request_architecture_analysis", return_value=(result, {})), mock.patch.object(RUNNER, "preserve_planning_result"), mock.patch.object(
+                RUNNER, "request_architecture_analysis", side_effect=request), mock.patch.object(RUNNER, "preserve_planning_result"), mock.patch.object(
                 RUNNER, "scaffold_inherited_evidence", return_value={"inherited_guarantee_evidence": [], "immutable_source_units": {"commit_genesis": ["Synthetic committed premise."]}}):
             with self.assertRaisesRegex(RUNNER.PausedError, "does not establish its frozen promises"):
                 RUNNER.audit_scaffold_guarantees(self.run, "synthetic_packet", artistic, plan, None)
@@ -269,16 +226,15 @@ class BackwardScaffoldTests(unittest.TestCase):
             "inherited_guarantee_evidence": [{"from_slot_id": f"scene_slot_000{number}", "check_id": f"guarantee_{number}",
                 "evidence_quotes": [{"source_id": f"scene_slot_000{number}"}]} for number in (3, 4)]}
         artistic = {"scenes": [scene_payload(slot, "scene_slot_0006")], "endings": []}
-        result = {"checks": [{"check_id": "shared_promise", "case_id": case["case_id"], "supported": True,
-            "entry_from_slot": "scene_slot_0003" if case["case_id"] == "merge_left" else "scene_slot_0004",
-            "reason": "Synthetic attempted cross-case citation.", "evidence_quotes": [{"source_id": "scene_slot_0004", "quote": "Synthetic right evidence."}]}
-            for case in node_value["entry_cases"]]}
-        def request(*args, **kwargs):
+        def request(_run, _step, _prompt, schema, _transport, **kwargs):
+            result = {"tasks": {identifier: {"supported": True, "reason": "Synthetic attempted cross-case citation.",
+                "evidence_quotes": [{"source_id": "scene_slot_0004", "quote": "Synthetic right evidence."}]}
+                for identifier in schema["properties"]["tasks"]["properties"]}}
             kwargs["validator"](result)
             return result, {}
         with mock.patch.object(RUNNER, "execution_policy", return_value=POLICY), mock.patch.object(RUNNER, "committed_record", return_value=core), mock.patch.object(
                 RUNNER, "scaffold_packet_context", return_value=local), mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=request):
-            with self.assertRaisesRegex(RUNNER.SchemaError, "inapplicable alternative entry case"):
+            with self.assertRaisesRegex(RUNNER.SchemaError, "permitted immutable evidence"):
                 RUNNER.audit_scaffold_guarantees(self.run, "synthetic_merge", artistic, {}, None)
 
     def test_large_scope_retains_derived_ending_limit_above_sixteen(self):

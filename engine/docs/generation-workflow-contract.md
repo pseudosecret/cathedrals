@@ -12,8 +12,8 @@ checkpointed. Only a single Genesis-grounded opening closes the frontier. Compil
 slots, authored-exit requirements, actual scope, and writing dependencies afterward.
 Scene count is a ceiling, not a requirement to fill. Write prose forward; audit hard
 guarantees against immutable source quotations for every admitted entry case.
-The older allocation and navigation repair sections below describe legacy policies;
-scaffold runs bypass those stages. See engine/docs/backward-scaffold.md.
+The current engine has one scaffold policy. Older runs delegate to their saved
+launcher before current schemas are applied. See engine/docs/backward-scaffold.md.
 
 ## Invariant
 
@@ -94,12 +94,13 @@ view, headed by the constraint commit.
 
 ### Phase B — Macroarchitecture
 
-Using frozen engine canon and completed Genesis, commit a bounded macroarchitecture
-core containing topology, arcs, attractors, and initial obligations. Deterministically
-preallocate content slots, then commit packet plans in batches of at most eight.
-Attractors freeze terminal transformations rather than terminal choreography. All
-plan batches commit before literary prose begins; tentative realization order is not
-canonical.
+Use frozen law and completed Genesis to allocate stable macro IDs, then author
+arcs, attractors and obligations in bounded record batches. Routing at this point is
+only a small macro projection. Declare terminal outcomes, expand predecessors and
+verify the grounded opening as described above. Compile technical slots, navigation
+and packet dependencies from the accepted scaffold. All architecture batches commit
+before prose. Attractors freeze terminal transformations rather than choreography;
+prospective realization order remains noncanonical.
 
 ### Phase C — Forward Literary Packets
 
@@ -140,25 +141,18 @@ termination, and typed relevance references. Slot repairs must preserve the froz
 one-to-one allocation. A source-grounded mapping is required; `UNRESOLVED` returns to
 bounded correction, with the existing explicit Genesis expansion path preserved.
 
-Planning tries one broad core or plan-batch draft with up to 21,800 output tokens
-when context permits, then recovers pending content in coherent batches. Defaults
-are four records, sixteen reference resolutions, or four backward setup requirements
-per batch, with an 8,192-token output ceiling. Unknown collection counts are resolved
-together. A failed batch preserves independently valid entries and members, then
-splits only the unsuccessful remainder. Isolated values retain three attempts per
-invocation. The engine supplies containers, IDs, and initial active obligation status.
+Planning allocates macro IDs and collection sizes before requesting coherent batches
+of up to four records. Reference-resolution batches contain at most sixteen tasks.
+A failed batch preserves valid entries and members, then splits only its unsuccessful
+remainder. Isolated values retain three attempts per invocation. The engine supplies
+containers, IDs and initial active obligation status. No whole-map repair or separate
+backward-setup placement pass remains in current operation.
 
-Initial core and plan-batch builders render all required context sections as compact
-complete data before checking the final request. Lists, including empty lists, remain
-whole arrays. Required law, canon, catalogs, allocations, and geomancy may not be
-silently dropped by preliminary packing estimates. The final conservative UTF-8
-estimate remains authoritative. New manifests freeze a separate model-derived
-planning ceiling, reserving the safety margin and the existing minimum response
-allowance. All planning request paths use it; manifests without it retain their
-existing prepared-input ceiling. Other phases' input limits, output caps, and safety
-reserves remain unchanged. Per-request output fitting always uses the smaller frozen
-and loaded model windows. A complete request that genuinely cannot fit pauses with
-saved work retained.
+Scoped requests retain frozen law, global canon, relevant records and mandatory
+source evidence. Complete required data must fit the frozen phase ceiling and the
+loaded context window, including output and safety reserve. Otherwise pause with
+saved work intact. Read-only retrieval may add verified source units; it cannot
+replace direct retrieval of mandatory proof or weaken the strict authoring schema.
 
 Complete parsed members and array elements survive inside unfinished containers;
 the engine never invents JSON closure or treats a truncated array prefix as its final
@@ -274,10 +268,9 @@ New-run budget derivation adds a pooled allowance of three successful reference
 repairs per possible scene/ending chunk to the existing analysis allowance. The
 corresponding cumulative token ceilings freeze with the run; this capacity never
 causes calls when references are already valid.
-Calculation version 10 retains the reserve of three attempts per schema-bounded planning
-field, plus earlier placement and instruction values for ending requirements and
-preserved hints. Object arrays use schema cardinality limits; primitive arrays count
-as one value. These are conservative recovery limits, not expected usage. Per-request
+The planning reserve covers three attempts per macro planning field. Scaffold
+declaration, connection, amendment and audit recovery have their own bounded
+allowance. Object arrays use schema cardinality limits; primitive arrays count as one value. These are conservative recovery limits, not expected usage. Per-request
 output and whole-work literary limits remain unchanged.
 It also reserves semantic recovery capacity for three attempts per event and five
 category completions per possible scene/ending. Page responses are charged once and
@@ -303,8 +296,8 @@ interpret earlier evidence and create consequences, but may not retcon it.
 
 Project committed records without literary change, validate hard integrity, links,
 state, safety, and full-plan coverage, then build the dependency-free static reader.
-Artistic and structural quality findings are warnings. A locked npm/Astro enhancement
-is optional and cannot veto the baseline. On hard-gate success, publish only the new
+Artistic and structural quality findings are warnings. The static publisher has no
+package installation or optional build step. On hard-gate success, publish only the new
 generated-work tree before crossing the complete-work barrier.
 
 ## 3. Commit Semantics
@@ -513,8 +506,9 @@ one scene and then the next. The root README is not edited or silently redefined
 
 ## Bounded execution policy
 
-For manifests with `execution_policy.bounded_planning`, engine-allocated layout
-and coherent record batches replace whole-core-first planning. Up to four records
+Every current manifest freezes bounded planning, scoped sources, completion contract
+version 1 and scaffold planning version 2. Engine-allocated layout and coherent
+record batches precede scaffold compilation. Up to four records
 are authored per batch; accepted fields are checkpointed. Scoped contexts retain
 frozen law, global canon, relevant entities, obligations and full mandatory proof.
 Read-only retrieval is a separate bounded analysis stage; final authoring retains

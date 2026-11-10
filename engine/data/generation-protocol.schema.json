@@ -252,7 +252,7 @@
             "playable_status": { "const": "READY_TO_PLAY" }
           }
         },
-        "execution_policy": {"type": "object", "additionalProperties": false, "required": ["bounded_planning", "scoped_sources", "retrieval_mode", "max_tool_rounds", "max_tool_calls"], "properties": {"bounded_planning": {"type": "boolean"}, "scoped_sources": {"type": "boolean"}, "retrieval_mode": {"enum": ["tools", "automatic"]}, "max_tool_rounds": {"const": 2}, "max_tool_calls": {"const": 8}, "completion_contract_version": {"const": 1}, "scaffold_planning_version": {"enum": [1, 2]}}}
+        "execution_policy": {"type": "object", "additionalProperties": false, "required": ["bounded_planning", "scoped_sources", "retrieval_mode", "max_tool_rounds", "max_tool_calls", "completion_contract_version", "scaffold_planning_version"], "properties": {"bounded_planning": {"const": true}, "scoped_sources": {"const": true}, "retrieval_mode": {"enum": ["tools", "automatic"]}, "max_tool_rounds": {"const": 2}, "max_tool_calls": {"const": 8}, "completion_contract_version": {"const": 1}, "scaffold_planning_version": {"const": 2}}}
       }
     },
     "workCanon": {
@@ -1158,7 +1158,7 @@
         "title": { "$ref": "#/$defs/nonEmptyString" },
         "ending_type": { "enum": ["commitment", "foreclosure", "contamination", "release", "redirective", "other"] },
         "attractor_id": { "$ref": "#/$defs/id" },
-        "satisfied_prerequisite_obligation_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+        "satisfied_prerequisite_obligation_ids": { "type": "array", "minItems": 0, "items": { "$ref": "#/$defs/id" } },
         "prerequisite_evidence_source_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
         "claimant_pressure_ids": { "$ref": "#/$defs/idList" },
         "entry_conditions": { "$ref": "#/$defs/stateConditions" },

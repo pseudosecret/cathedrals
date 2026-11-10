@@ -4,7 +4,7 @@
 
 Read `engine/data/work-instance.yaml` first. While its phase is `engine_revision`,
 mutate only its declared write roots. Do not generate work canon, generation planning
-artifacts, prose, a graph, or Astro story pages.
+artifacts, prose, a graph, or HTML story pages.
 
 ## End-User Run
 
@@ -43,8 +43,7 @@ It then owns this sequence:
 13. Deterministically project all committed content and validate protocol, hashes,
     graph, technical destinations, state, counts, Markdown, constraint provenance, and budgets.
 14. Build and validate the dependency-free static baseline.
-15. Attempt the locked npm/Astro enhancement when locally available; warn on failure.
-16. On hard-gate success publish only the new generated-work tree. Write
+15. On hard-gate success publish only the new generated-work tree. Write
     `finalization.json`: `READY_TO_PLAY` only after every barrier passes;
     otherwise `FAILED_GENERATION` with `playable: false`.
 
@@ -242,8 +241,7 @@ focused audit verifies exact source support for proposed satisfaction. Ongoing w
 produces no resolution update and retains the existing obligation.
 
 The final static build is checked for actual prose, routes, assets and exact source
-exports. Optional Astro output undergoes the same checks; failed or incomplete
-enhancements restore the dependency-free baseline. See
+exports. There is one static HTML build path, with no package installation. See
 [completion-contract implementation](completion-contract.md).
 
 Older manifests without the optional planning ceiling use their existing prepared

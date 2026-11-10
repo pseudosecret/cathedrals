@@ -11,7 +11,7 @@ from test_cathedrals import RUNNER, architecture_core_payload, architecture_gene
 from test_reference_resolution import api_response, planning_response
 from test_provider_streaming import Stream, event
 
-POLICY = {"bounded_planning": True, "scoped_sources": True, "retrieval_mode": "automatic", "max_tool_rounds": 2, "max_tool_calls": 8}
+POLICY = RUNNER.CURRENT_EXECUTION_POLICY.copy()
 
 
 def call(name="get_plan_items", args=None, identity="call_one"):
@@ -120,7 +120,7 @@ class BoundedExecutionTests(unittest.TestCase):
         seen = []
         def transport(_method, _url, request, **kwargs):
             name = request["response_format"]["json_schema"]["name"]
-            if name == "architectureLayout": return api_response(counts)
+            if name == "architectureLayout": return api_response({key: counts[key] for key in request["response_format"]["json_schema"]["schema"]["properties"]})
             seen.append(request)
             def resolve(path, _node):
                 value = desired

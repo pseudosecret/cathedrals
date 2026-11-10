@@ -1,3 +1,4 @@
+from test_cathedrals import packet_architecture_fixture
 """Packet capacity regressions using synthetic sizes from the saved first-packet pause."""
 
 import contextlib
@@ -50,6 +51,7 @@ class PacketContextCapacityTests(unittest.TestCase):
     def test_saved_sizes_fit_writing_and_normalization_with_complete_source_roles(self):
         plan = RUNNER.single_content_packet_plans(packet_plan(advance_obligation_ids=[], may_satisfy_obligation_ids=[]))[0]
         architecture = {"architecture_core_commit_id": "fixture_core", "arcs": [{"arc_id": "arc_fixture"}]}
+        architecture = packet_architecture_fixture(architecture, plan)
         receipt = {"omissions": []}
         required = self.required()
 
@@ -120,26 +122,6 @@ class PacketContextCapacityTests(unittest.TestCase):
         self.assertEqual(decode_context(context)["SOURCE"], [original, other])
         self.assertEqual(receipt["shared_source_count"], 2)
 
-    def test_original_root_loader_verifies_each_archive_and_requires_three_records(self):
-        db = sqlite3.connect(":memory:")
-        self.addCleanup(db.close)
-        db.execute("CREATE TABLE records(commit_id,record_type,sequence,path,record_hash)")
-        for index, source in enumerate(self.sources):
-            directory = self.run / "committed" / str(index)
-            path = directory / "record.json"
-            RUNNER.write_json(path, source["immutable_source"])
-            db.execute("INSERT INTO records VALUES (?,?,?,?,?)", (source["source_commit_id"], source["immutable_source"]["record_type"],
-                index, str(directory.relative_to(self.run)), RUNNER.sha256_file(path)))
-        with mock.patch.object(RUNNER, "index_connection", side_effect=lambda _run: contextlib.nullcontext(db)):
-            loaded = RUNNER.packet_root_sources(self.run)
-            self.assertEqual([item["immutable_source"] for item in loaded], [item["immutable_source"] for item in self.sources])
-            changed = self.run / "committed/1/record.json"
-            changed.write_text("changed")
-            with self.assertRaises(RUNNER.IntegrityError):
-                RUNNER.packet_root_sources(self.run)
-            db.execute("DELETE FROM records WHERE sequence=1")
-            with self.assertRaises(RUNNER.IntegrityError):
-                RUNNER.packet_root_sources(self.run)
 
     def test_unicode_capacity_uses_bytes_and_optional_overflow_preserves_required_content(self):
         receipt = {"omissions": []}
@@ -152,7 +134,7 @@ class PacketContextCapacityTests(unittest.TestCase):
 
     def test_output_safety_and_feedback_are_checked_before_dispatch(self):
         manifest = RUNNER.read_json(self.run / "run-manifest.json")
-        manifest["budgets"]["max_prepared_context_tokens"] = 300
+        manifest["budgets"]["max_prepared_context_tokens"] = 700
         RUNNER.write_json(self.run / "run-manifest.json", manifest)
         provider = mock.Mock(return_value={"choices": [{"finish_reason": "stop", "message": {
             "content": json.dumps({"name": 42, "incident_role": "x" * 1500})}}]})

@@ -166,6 +166,7 @@ class ProviderStreamingTests(unittest.TestCase):
         self.assertTrue((self.run / "raw/stream_test-attempt2.api.json").exists())
         self.assertEqual(len([e for e in RUNNER.ledger_entries(self.run) if e["failure_class"] == "provider_incomplete_response"]), 1)
 
+    @mock.patch.object(RUNNER, "audit_scaffold_guarantees", new=lambda *args, **kwargs: None)
     def test_every_request_path_pauses_after_one_timeout(self):
         operations = [
             lambda: RUNNER.request_record(self.run, expected_record_type="genesis_foundation", step_id="creative_timeout",
@@ -174,7 +175,6 @@ class ProviderStreamingTests(unittest.TestCase):
             lambda: RUNNER.resolve_named_reference(self.run, "reference_timeout", {"path": ["test"], "kind": "test",
                 "invalid": "missing", "context": "synthetic", "candidates": {"fact_01": "Synthetic fact."}}),
             lambda: RUNNER.request_semantic_normalization(self.run, "semantic_timeout", {"scenes": [], "endings": []}, "context"),
-            lambda: RUNNER.request_analysis(self.run, "analysis_timeout", "prompt"),
         ]
         for operation in operations:
             before = len(RUNNER.ledger_entries(self.run))
@@ -213,6 +213,7 @@ class ProviderStreamingTests(unittest.TestCase):
         run = self.root / "resume_snapshot"
         launcher = run / "engine-snapshot/cathedrals"
         launcher.parent.mkdir(parents=True)
+        (launcher.parent / "engine").mkdir()
         for different in (True, False):
             with self.subTest(different=different):
                 launcher.write_bytes(b"# Preserved older engine.\n" if different else Path(RUNNER.__file__).read_bytes())
@@ -243,31 +244,6 @@ class ProviderStreamingTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[0], calls[1])
 
-    def test_invalid_focused_corrections_exhaust_without_regenerating_draft(self):
-        payload = valid_architecture_payload()
-        payload["obligation_graph"][0]["termination_targets"].append("attractor_missing")
-        records = architecture_genesis_records()
-        calls = []
-
-        def transport(_method, _url, request, **_kwargs):
-            schema = request["response_format"]["json_schema"]["schema"]
-            calls.append(request["response_format"]["json_schema"]["name"])
-            result = {"resolutions": {key: "UNRESOLVED" for key in schema["properties"]["resolutions"]["properties"]}} if "resolutions" in schema["properties"] else {}
-            return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(result)}}]}
-
-        arguments = dict(expected_record_type="architecture_core", step_id="architecture_core", phase="architecture",
-            prompt="prompt", context="context", branch_relation="root", temperature=0.7,
-            response_definition="architectureCorePayload",
-            payload_repairer=lambda step, value, content, response: RUNNER.repair_architecture_core_payload(
-                self.run, step, value, content, response, transport))
-        response = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(payload)}}]}
-        with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: records.get(kind)), mock.patch.object(
-            RUNNER, "_source_index", return_value={"commit_foundation": {}}
-        ), self.assertRaisesRegex(RUNNER.PausedError, "exhausted 3 focused"):
-            RUNNER.request_record(self.run, transport=lambda *a, **kw: response, **arguments)
-        self.assertEqual(calls, ["architectureRepair"] * 4)
-        self.assertEqual(RUNNER.read_json(self.run / ".staging/architecture_core.artistic.json"), payload)
-        self.assertFalse((self.run / "finalization.json").exists())
 
     def test_repair_budget_is_enforced_before_a_provider_call(self):
         manifest = RUNNER.read_json(self.run / "run-manifest.json")
@@ -279,151 +255,7 @@ class ProviderStreamingTests(unittest.TestCase):
         self.assertEqual(raised.exception.failure_class, "budget_exhaustion")
         transport.assert_not_called()
 
-    def test_architecture_resume_reuses_draft_and_lookup_without_double_accounting(self):
-        payload = valid_architecture_payload()
-        payload["obligation_graph"][0]["termination_targets"].append("attractor_missing")
-        arguments = dict(expected_record_type="architecture_core", step_id="architecture_core", phase="architecture",
-            prompt="prompt", context="context", branch_relation="root", temperature=0.7,
-            response_definition="architectureCorePayload",
-            payload_repairer=lambda step, value, content, response: RUNNER.repair_architecture_core_payload(
-                self.run, step, value, content, response, transport),
-            record_builder=mock.Mock(side_effect=RUNNER.PausedError("test", "before commit")))
-        calls = []
 
-        def transport(_method, _url, request, **_kwargs):
-            name = request["response_format"]["json_schema"]["name"]
-            schema = request["response_format"]["json_schema"]["schema"]
-            calls.append(name)
-            if name == "architectureCorePayload":
-                value = payload
-            elif "resolutions" in schema["properties"]:
-                value = {"resolutions": {key: "UNRESOLVED" for key in schema["properties"]["resolutions"]["properties"]}}
-            elif calls.count("architectureRepair") == 2:
-                raise RUNNER.IncompleteResponseError("simulated timeout")
-            else:
-                value = {"replacement": "attractor_missing", "new_obligation": None,
-                    "new_attractor": copy.deepcopy(payload["attractors"][0]) | {"attractor_id": "attractor_missing"}}
-            return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(value)}}],
-                    "usage": {"prompt_tokens": 11, "completion_tokens": 7}}
-
-        records = architecture_genesis_records()
-        with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: records.get(kind)), mock.patch.object(
-            RUNNER, "_source_index", return_value={"commit_foundation": {}}
-        ):
-            for _ in range(2):
-                with self.assertRaises(RUNNER.PausedError):
-                    RUNNER.request_record(self.run, transport=transport, **arguments)
-        history = RUNNER.read_json(self.run / ".staging/architecture_core.repair.json")["history"]
-        self.assertEqual(calls, ["architectureCorePayload", "architectureRepair", "architectureRepair", "architectureRepair"])
-        self.assertEqual(len(history), 2)
-        self.assertEqual(sum(item["api_response"]["usage"]["completion_tokens"] for item in history), 14)
-        failures = [entry for entry in RUNNER.ledger_entries(self.run) if entry["failure_class"] == "provider_incomplete_response"]
-        self.assertEqual(len(failures), 1)
-        self.assertEqual(failures[0]["step_type"], "analysis")
-
-    def test_architecture_preserves_draft_with_a_reference_that_fails_id_pattern(self):
-        payload = valid_architecture_payload()
-        payload["arcs"][0]["claimant_pressures"] = ["Claimant One"]
-        records = architecture_genesis_records()
-        calls = []
-
-        def transport(_method, _url, request, **_kwargs):
-            schema = request["response_format"]["json_schema"]["schema"]
-            calls.append(request["response_format"]["json_schema"]["name"])
-            result = {"resolutions": {key: "claimant_01" for key in schema["properties"]["resolutions"]["properties"]}} if "resolutions" in schema["properties"] else payload
-            return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(result)}}]}
-
-        with mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: records.get(kind)), mock.patch.object(
-            RUNNER, "_source_index", return_value={"commit_foundation": {}}
-        ), self.assertRaises(RUNNER.PausedError):
-            RUNNER.request_record(self.run, expected_record_type="architecture_core", step_id="architecture_core", phase="architecture",
-                prompt="prompt", context="context", branch_relation="root", temperature=0.7,
-                response_definition="architectureCorePayload", transport=transport,
-                payload_repairer=lambda step, value, content, response: RUNNER.repair_architecture_core_payload(
-                    self.run, step, value, content, response, transport),
-                record_builder=mock.Mock(side_effect=RUNNER.PausedError("test", "before commit")))
-        self.assertEqual(calls, ["architectureCorePayload", "architectureRepair"])
-        self.assertEqual(RUNNER.read_json(self.run / ".staging/architecture_core.artistic.json"), payload)
-        repaired = RUNNER.read_json(self.run / ".staging/architecture_core.repair.json")["payload"]
-        self.assertEqual(repaired["arcs"][0]["claimant_pressures"], ["claimant_01"])
-
-
-class ArchitectureLocalRepairTests(unittest.TestCase):
-    def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.run = Path(self.temporary.name)
-        self.records = architecture_genesis_records()
-        for patch in (mock.patch.object(RUNNER, "committed_record", side_effect=lambda _run, kind: self.records.get(kind)),
-                      mock.patch.object(RUNNER, "_source_index", return_value={"commit_foundation": {}})):
-            patch.start()
-            self.addCleanup(patch.stop)
-
-    def test_missing_attractor_is_added_without_rewriting_the_draft(self):
-        payload = valid_architecture_payload()
-        payload["obligation_graph"][0]["termination_targets"].append("attractor_missing")
-        original = copy.deepcopy(payload)
-        addition = {key: value for key, value in attractor(attractor_id="attractor_missing").items() if key != "ending_slot_ids"}
-
-        def repair(_run, _step, _prompt, schema, _transport, validator=None):
-            self.assertTrue((self.run / ".staging/architecture_core.artistic.json").exists())
-            if "resolutions" in schema["properties"]:
-                result = {"resolutions": {key: "UNRESOLVED" for key in schema["properties"]["resolutions"]["properties"]}}
-            else:
-                result = {"replacement": "attractor_missing", "new_attractor": addition, "new_obligation": None}
-            RUNNER.validate_json_schema(result, schema)
-            if validator:
-                validator(result)
-            return result, {"usage": {"prompt_tokens": 11, "completion_tokens": 7}}
-
-        with mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=repair) as requests:
-            result = RUNNER.repair_architecture_core_payload(self.run, "architecture_core", payload, json.dumps(payload), {}, None)
-            resumed = RUNNER.repair_architecture_core_payload(self.run, "architecture_core", payload, json.dumps(payload), {}, None)
-        self.assertEqual(requests.call_count, 2)
-        self.assertEqual(result, resumed)
-        self.assertEqual(payload, original)
-        self.assertEqual(result["attractors"][:-1], original["attractors"])
-        self.assertEqual(result["arcs"], original["arcs"])
-        self.assertEqual(result["topology"], original["topology"])
-        self.assertEqual(RUNNER.read_json(self.run / ".staging/architecture_core.artistic.json"), original)
-
-    def test_wrong_typed_optional_reference_can_be_removed(self):
-        for identifier in ("motif_event_wrong", "attractor_one"):
-            with self.subTest(identifier=identifier):
-                payload = valid_architecture_payload()
-                payload["topology"]["edges"][0]["hard_obligation_ids"] = [identifier]
-                issue = RUNNER.architecture_reference_issues(payload, self.run)[0]
-                result = RUNNER.apply_architecture_local_repair(payload, issue,
-                    {"replacement": None, "new_obligation": None, "new_attractor": None}, self.run)
-                self.assertEqual(result["topology"]["edges"][0]["hard_obligation_ids"], [])
-
-    def test_new_obligation_and_relevance_reference_inventory(self):
-        payload = valid_architecture_payload()
-        payload["arcs"][0]["hard_obligation_ids"] = ["obligation_missing"]
-        issue = RUNNER.architecture_reference_issues(payload, self.run)[0]
-        addition = copy.deepcopy(payload["obligation_graph"][0]) | {"obligation_id": "obligation_missing"}
-        result = RUNNER.apply_architecture_local_repair(payload, issue,
-            {"replacement": "obligation_missing", "new_obligation": addition, "new_attractor": None}, self.run)
-        self.assertEqual(result["obligation_graph"][-1]["obligation_id"], "obligation_missing")
-        payload["attractors"][0]["relevance"] = {"claimant_ids": ["claimant_missing"], "arc_ids": ["arc_missing"]}
-        fields = {RUNNER.reference_path(item["path"]) for item in RUNNER.architecture_reference_issues(payload, self.run)}
-        self.assertIn("$.attractors[0].relevance.claimant_ids[0]", fields)
-        self.assertIn("$.attractors[0].relevance.arc_ids[0]", fields)
-
-    def test_local_repair_rejects_unrelated_changes_and_schema_overflow(self):
-        payload = valid_architecture_payload()
-        payload["obligation_graph"][0]["termination_targets"].append("attractor_missing")
-        issue = RUNNER.architecture_reference_issues(payload, self.run)[0]
-        addition = copy.deepcopy(payload["attractors"][0]) | {"attractor_id": "attractor_missing"}
-        for replacement, record in (("attractor_missing", addition | {"attractor_id": "unrelated"}),
-                                    ("invented", None)):
-            with self.subTest(replacement=replacement), self.assertRaises(RUNNER.SchemaError):
-                RUNNER.apply_architecture_local_repair(payload, issue,
-                    {"replacement": replacement, "new_obligation": None, "new_attractor": record}, self.run)
-        payload["attractors"] = [copy.deepcopy(payload["attractors"][0]) | {"attractor_id": f"attractor_{i}"} for i in range(16)]
-        with self.assertRaises(RUNNER.SchemaError):
-            RUNNER.apply_architecture_local_repair(payload, issue,
-                {"replacement": "attractor_missing", "new_obligation": None, "new_attractor": addition}, self.run)
 
 
 if __name__ == "__main__":
