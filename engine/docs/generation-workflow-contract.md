@@ -2,11 +2,13 @@
 
 ## Backward Scaffold Policy
 
-New runs freeze scaffold_planning_version=1. After macro intentions, seed terminal
+New runs freeze scaffold_planning_version=2. After macro intentions, seed terminal
 outcomes and expand earlier scenes in checkpointed groups of at most four. Validate
 causal support locally. Linear chapters have one successor; branches have two to
 five. Final and premature endings are terminal, with route-specific entry cases.
-Only a single Genesis-grounded opening closes the frontier. Compile technical
+The engine assigns declaration IDs before requesting connections from closed
+successor interfaces. Each connection, draft amendment and audit task is
+checkpointed. Only a single Genesis-grounded opening closes the frontier. Compile technical
 slots, authored-exit requirements, actual scope, and writing dependencies afterward.
 Scene count is a ceiling, not a requirement to fill. Write prose forward; audit hard
 guarantees against immutable source quotations for every admitted entry case.

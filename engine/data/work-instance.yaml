@@ -444,13 +444,13 @@ format_selection:
   renpy_bootstrap_active: false
 
 generation_budget:
-  calculation_version: 13
+  calculation_version: 14
   primary_scale_input: possible_scene_count
   words_per_token_assumption: 0.75
   max_prepared_context_tokens: 49152 # Legacy cap; normal input target for completion-contract v1.
   normal_prepared_context_tokens: 49152
   completion_contract_version: 1
-  scaffold_planning_version: 1
+  scaffold_planning_version: 2
   scaffold_expansion_node_maximum: 4
   scaffold_branch_destination_maximum: 5
   scaffold_reader_states_per_node_maximum: 128
@@ -523,7 +523,7 @@ generation_budget:
       batch field count + 2 * (maximum ending seed/prerequisite placements +
       maximum preserved plan hints)); object arrays use schema maxItems and
       primitive arrays count as one field value
-    scaffold_recovery_allowance: "15 * (possible_scene_count + ending_hard_max) + 6"
+    scaffold_recovery_allowance: "30 * (possible_scene_count + ending_hard_max) + 6 for scaffold v2; 15 * (possible_scene_count + ending_hard_max) + 6 for v1"
     semantic_recovery_allowance: >
       3 * (5 * (possible_scene_count + ending_hard_max) + max_constraint_events)
     constraint_events: "max(1000, possible_scene_count * 45)"
@@ -531,6 +531,8 @@ generation_budget:
     - "The 4,800-word logical packet target is guidance, not a shared hard ceiling or equal per-chunk allocation."
     - "Keep existing output-token allowances as conservative headroom for structured output and reasoning."
     - "Planning recovery is unused capacity, not an expected call or token count; valid drafts do not spend it on field completion."
+    - "Scaffold v2 declares contracts without IDs, then binds closed successor interfaces; accepted declarations and unaffected connections survive focused repair."
+    - "Scaffold v2 source audits bind guarantee/case/incoming-route ownership in engine-assigned tasks, with up to eight tasks per page."
     - "Planning first requests a whole draft with context-safe output headroom, then batches pending records and finally isolates failed values."
     - "Planning compacts complete authored context and includes only referenced schema definitions; exact completed-setup duplicates reference guidance in the same prompt without changing saved instructions."
     - "New runs freeze a model-derived planning input ceiling; every request still fits its output and safety reserve to the smaller frozen/loaded window. Other phases retain their prepared-context ceiling."

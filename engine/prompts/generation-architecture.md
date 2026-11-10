@@ -20,7 +20,7 @@ Initial obligation termination targets must use obligation or attractor IDs auth
 in this record, never packet IDs.
 Every topology reference, including edge endpoints, must use a
 `node_id` declared in `topology.nodes`; arc IDs are separate and cannot substitute.
-For scaffold_planning_version=1 the engine supplies the compatibility topology;
+For scaffold_planning_version=1 or 2 the engine supplies the compatibility topology;
 actual scenes, endings, and routes are developed in bounded backward expansions.
 The scene count is a cap. Do not impose an introduction length or first-hub width.
 Linear chapters have one continuation and meaningful branches have two to five.
