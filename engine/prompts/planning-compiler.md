@@ -15,8 +15,10 @@ The filename is retained for path stability. This is not a creative planning sta
 Produce deterministic data only:
 
 - per-step and cumulative budget verdicts
-- abstract node/edge slots sized from the frozen possible-scene scope
-- three to five pre-hub scene slots and one exact three-option opening group
+- scene and ending capacity bounded by the frozen possible-scene scope
+- stable IDs for bounded backward expansions from authored terminal outcomes
+- scene slots, dependencies, and navigation derived from the finished scaffold
+- one continuation for linear scenes, or two to five authored branch destinations
 - downstream split, reconvergence, redirect, unequal-depth, and hidden-route capacity
 - major-decision slots with hesitation edges
 - state keys and permitted operations

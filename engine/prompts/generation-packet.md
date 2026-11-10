@@ -47,7 +47,13 @@ resolves technical slots without changing this packet.
 
 When the assignment includes `required_navigation`, author a playable choice to every
 listed target for your scene. Write the choice labels and narrative transitions
-yourself. Do not replace the contract with an empty choices array, reserved-only
+yourself. Under scaffold planning, preserve exactly the supplied destinations. A
+linear chapter has one authored continuation; it is not a decision and needs no
+invented alternatives. At branches, write two to five meaningful choices. Read the
+LOCAL CAUSAL SCAFFOLD CONTRACT, honor each alternative entry case, and establish
+hard exit guarantees in prose or applicable prior evidence. Intended dramatic
+change is advisory; do not fabricate a fact to fill a linear scene.
+Do not replace the contract with an empty choices array, reserved-only
 links, or generic reading controls. Keep the planned completion route traversable
 under its actual state conditions and effects. A missing required exit fails before
 the artistic payload is preserved.

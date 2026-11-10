@@ -66,16 +66,16 @@ Fail when:
 - any architecture node lacks exactly one committed reader-facing output
 - prospective packet choice violates frozen dependencies or mutates canon
 - literary/ending packet sizes or whole-work derived scope bounds fail
-- the opening hub lacks exactly three playable situated actions after three to five
-  reader-perspective scenes, or acts as a claimant menu
+- a scaffold opening is not Genesis-grounded, or its first branch acts as a claimant menu
+- a linear chapter lacks its single authored continuation, or acquires an unplanned branch
 - another meaningful decision has fewer than two or more than five playable actions
-- opening branches do not split again
+- scaffold progression has cycles, orphan scenes/outcomes, or unsupported entry cases
 - reconvergence erases consequential inbound state
 - branch depth is uniformly shallow without dramatic cause
 - a major irreversible decision lacks consequential hesitation
 - a technical destination is absent from architecture, unresolved, or owned more than once
 - a generated content destination names unwritten future content instead of a frozen technical slot
-- redirective endings point anywhere except exactly resolved prebuilt content
+- a scaffold ending has a story redirect or an outgoing choice
 - a stateful variant is cosmetic
 - formal-composition anchors or required source evidence are absent
 - generated Markdown contains authored HTML/executable MDX, raw HTML is enabled in the renderer, or deterministic projection changes literary bytes

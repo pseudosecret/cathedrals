@@ -1644,6 +1644,12 @@ def create_run(
     derived = derive_scope(frozen.possible_scene_count)
     derived["budgets"]["model_context_window_tokens"] = model_context_window_tokens
     budgets = derived["budgets"]
+    if (execution_policy or {}).get("scaffold_planning_version") == 1:
+        # Distinct outcome packets can require additional architecture batches.
+        budgets["max_creative_step_count"] += math.ceil(derived["scope"]["ending_hard_max"] / PLAN_BATCH_SIZE)
+        budgets["max_analysis_step_count"] += 15 * (frozen.possible_scene_count + derived["scope"]["ending_hard_max"]) + 6
+        budgets["max_cumulative_output_tokens"] = (budgets["max_creative_step_count"] * (BASE_OUTPUT_TOKENS + EXPANDED_OUTPUT_TOKENS)
+            + budgets["max_analysis_step_count"] * ANALYSIS_OUTPUT_TOKENS)
     if (execution_policy or {}).get("completion_contract_version") == 1:
         budgets["normal_prepared_context_tokens"] = 49152
         budgets["max_prepared_context_tokens"] = model_context_window_tokens - budgets["context_safety_reserve_tokens"]
@@ -2194,6 +2200,7 @@ def commit_record(
         (".semantic.json", "semantic-normalization.json"),
         (".semantic.api.json", "semantic-api-response.json"),
         (".semantic-recovery.json", "semantic-recovery.json"),
+        (".scaffold-evidence.json", "scaffold-evidence.json"),
         (".epistemic-repair.json", "epistemic-repair.json"),
         (".repair.json", "reference-repair.json"),
         (".references.json", "named-reference-repair.json"),
@@ -3475,6 +3482,24 @@ def validate_architecture(architecture: dict, manifest: dict, committed_origin_i
         raise SchemaError("Architecture exceeded or replaced the user's possible scene count")
     if scope["planned_scene_count"] < 8:
         raise SchemaError("Architecture cannot satisfy the Cathedrals opening with fewer than eight scenes")
+    if architecture.get("causal_scaffold"):
+        scaffold = architecture["causal_scaffold"]
+        validate_scaffold(scaffold, manifest["scope"], committed_origin_ids or set(), complete=True)
+        order, _roots = scaffold_order(scaffold["nodes"])
+        expected_slots, counters = {}, {"scene": 0, "ending": 0}
+        scaffold_nodes = {node["node_id"]: node for node in scaffold["nodes"]}
+        for identifier in order:
+            node = scaffold_nodes[identifier]
+            counters[node["kind"]] += 1
+            expected_slots[identifier] = f"{node['kind']}_slot_{counters[node['kind']]:04d}"
+        if scaffold["slot_ids"] != expected_slots or counters["scene"] != scope["planned_scene_count"] or counters["ending"] != scope["planned_ending_count"]:
+            raise SchemaError("Scaffold technical slots and actual scope must match deterministic compilation")
+        if len(architecture["attractors"]) > 16 + manifest["scope"]["ending_hard_max"]:
+            raise SchemaError("Compiled outcome attractors exceed the macro and ending budgets")
+        arcs = {arc["arc_id"] for arc in architecture["arcs"]}
+        ending_attractors = {item["attractor_id"] for item in architecture["attractors"] if item["kind"] == "ending"}
+        if any(node["arc_id"] not in arcs or node["kind"] == "ending" and node["attractor_id"] not in ending_attractors for node in scaffold["nodes"]):
+            raise SchemaError("Scaffold contains an unknown arc or outcome attractor")
     plans = architecture["packet_plans"]
     plan_ids = {item["packet_slot_id"] for item in plans}
     if len(plan_ids) != len(plans):
@@ -3545,7 +3570,7 @@ def validate_architecture(architecture: dict, manifest: dict, committed_origin_i
         for edge in architecture["topology"]["edges"]
         if edge["from_node_id"] == architecture["topology"]["opening_branch_node_id"] and edge["relation"] == "branch"
     ]
-    if len(opening_edges) != 3:
+    if not architecture.get("causal_scaffold") and manifest.get("execution_policy", {}).get("scaffold_planning_version") != 1 and len(opening_edges) != 3:
         raise SchemaError("Macroarchitecture opening hub must establish exactly three branch relations")
     for arc in architecture["arcs"]:
         if not set(arc["hard_obligation_ids"]).issubset(obligations):
@@ -3693,6 +3718,13 @@ def navigation_contract_route(architecture):
             graph[slot] = destinations
     if not scenes or not endings:
         raise SchemaError("Navigation contract needs an opening scene and an ending")
+    if architecture.get("causal_scaffold"):
+        scaffold = architecture["causal_scaffold"]
+        scaffold_order(scaffold["nodes"])
+        expected = {scaffold["slot_ids"][node["node_id"]]: [scaffold["slot_ids"][edge["to_node_id"]] for edge in node["successors"]]
+            for node in scaffold["nodes"] if node["kind"] == "scene"}
+        if graph != expected:
+            raise SchemaError("Navigation targets differ from the causal scaffold")
     opening = min(scenes)
     queue, parents = [opening], {opening: None}
     for slot in queue:
@@ -3793,14 +3825,19 @@ def validate_navigation_payload(run_dir, architecture, plan, payload):
     for scene in payload["scenes"]:
         required = set(plan.get("required_navigation", {}).get(scene["technical_slot_id"], []))
         actual = {destination(choice) for choice in scene["choices"] if choice["availability"] == "playable"}
+        if architecture.get("causal_scaffold") and actual != required:
+            raise SchemaError(f"Scene {scene['technical_slot_id']} must preserve exactly its scaffold successors")
         if not required or not required.issubset(actual):
             raise SchemaError(f"Scene {scene['technical_slot_id']} must author playable exits to: {', '.join(sorted(required - actual)) or 'its frozen navigation targets'}")
+    if architecture.get("causal_scaffold"):
+        validate_scaffold_reader_states(architecture, content, destination)
+        return
     route, values = navigation_contract_route(architecture), {}
     for index, slot in enumerate(route):
         if slot not in content:
             return
         item = content[slot]
-        if not reader_conditions_hold(item.get("entry_conditions", []), values):
+        if not reader_conditions_hold(item.get("state_inputs", item.get("entry_conditions", [])), values):
             raise SchemaError(f"Completion route cannot enter {slot} under its authored state conditions")
         apply_reader_effects(item["state_effects"], values)
         if index + 1 == len(route):
@@ -4308,6 +4345,7 @@ def relevant_packet_context(run_dir: Path, architecture: dict, plan: dict, *, re
         ("FROZEN GENERATION BRIEF", manifest["generation_brief"]),
         ("IMMUTABLE GENERATED ROOT CANON", root_sources),
         ("CURRENT PACKET STRUCTURAL POSITION", plan),
+        ("LOCAL CAUSAL SCAFFOLD CONTRACT", scaffold_packet_context(run_dir, architecture, plan)),
         ("IMMUTABLE PAST CONSTRAINTS", protected_past),
         ("ACTIVE HARD FUTURE OBLIGATIONS", hard),
         ("OBLIGATIONS THIS PACKET SHOULD ADVANCE", [obligations[key] for key in plan.get("advance_obligation_ids", [])]),
@@ -4677,6 +4715,9 @@ def select_next_packet(run_dir: Path, architecture: dict) -> dict | None:
         item for item in eligible_assignments
         if all(obligations[required]["data"]["status"] == "satisfied" for required in obligations[item]["data"]["requires"])
     ]
+    if architecture.get("causal_scaffold"):
+        # A scheduling score cannot turn an ending's transformation into an earlier mandatory resolution.
+        assignments = []
     return plans[packet_slot_id] | {
         "advance_obligation_ids": assignments,
         "may_satisfy_obligation_ids": may_satisfy,
@@ -4698,7 +4739,8 @@ def distribute_counts(total: int, groups: int) -> list[int]:
 def planned_packet_specs(architecture_core: dict) -> list[dict]:
     scope = architecture_core["scope_commitment"]
     scene_groups = grouped_counts(scope["planned_scene_count"], 6, 3, 8)
-    ending_groups = grouped_counts(scope["planned_ending_count"], 2, 2, 6)
+    ending_groups = ([1] * scope["planned_ending_count"] if architecture_core.get("causal_scaffold")
+        else grouped_counts(scope["planned_ending_count"], 2, 2, 6))
     artifact_counts = distribute_counts(scope["planned_artifact_count"], len(scene_groups))
     composition_counts = distribute_counts(scope["planned_formal_composition_count"], len(scene_groups))
     if any(value > 6 for value in artifact_counts) or any(value > 4 for value in composition_counts):
@@ -5094,7 +5136,7 @@ def validate_architecture_core_payload(payload: dict, run_dir: Path) -> None:
         item["from_node_id"] == topology["opening_branch_node_id"] and item["relation"] == "branch"
         for item in topology["edges"]
     )
-    if opening_edges != 3:
+    if not scaffold_enabled(run_dir) and opening_edges != 3:
         problems.append(f"opening branch node has {opening_edges} outgoing branch edges; expected 3")
     if problems:
         raise SchemaError("Architecture core has unresolved semantics: " + "; ".join(problems))
@@ -6720,6 +6762,8 @@ def audit_ending_resolutions(run_dir, step_id, artistic, normalized, transport):
 
 
 def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload: dict, context: str, transport=http_json, *, plan=None) -> dict:
+    if scaffold_enabled(run_dir):
+        audit_scaffold_guarantees(run_dir, step_id, artistic_payload, plan, transport)
     target = run_dir / ".staging" / f"{step_id}.semantic.json"
     pending_path = run_dir / ".staging" / f"{step_id}.semantic-pending.json"
     semantic_api_path = run_dir / ".staging" / f"{step_id}.semantic.api.json"
@@ -7242,8 +7286,12 @@ def validate_completed_architecture(run_dir: Path) -> None:
     if not architecture:
         raise SchemaError("Architecture plan batches are incomplete")
     validate_architecture(architecture, read_json(run_dir / "run-manifest.json"), set(_source_index(run_dir)))
+    if scaffold_enabled(run_dir) and not architecture.get("causal_scaffold"):
+        raise IntegrityError("Scaffold policy requires a committed causal scaffold")
     if execution_policy(run_dir).get("completion_contract_version") == 1:
         navigation_contract_route(architecture)
+    if architecture.get("causal_scaffold") and architecture["packet_plans"] != scaffold_packet_plans(architecture):
+        raise IntegrityError("Frozen packets differ from causal scaffold compilation")
 
 
 def validate_ending_prerequisites(
@@ -7289,6 +7337,15 @@ def validate_packet_for_run(record: dict, run_dir: Path, plan: dict) -> None:
     if record["packet_sequence"] != committed_packet_count + 1:
         raise SchemaError("Packet sequence does not match immutable forward commit order")
     content = record["scenes"] if record["packet_kind"] == "literary" else record["endings"]
+    if scaffold_enabled(run_dir):
+        scaffold_nodes = {architecture["causal_scaffold"]["slot_ids"][node["node_id"]]: node for node in architecture["causal_scaffold"]["nodes"]}
+        for item in content:
+            receipt_path = run_dir / ".staging" / f"scaffold-evidence-{item['technical_slot_id']}.json"
+            if not receipt_path.exists():
+                raise IntegrityError("A scaffold packet cannot commit without its source audit")
+            receipt = read_json(receipt_path)
+            if receipt["own_text_hash"] != sha256_bytes(canonical_json(scaffold_literary_texts(item, record))) or receipt["contract_hash"] != sha256_bytes(canonical_json(scaffold_nodes[item["technical_slot_id"]])):
+                raise IntegrityError("Scaffold source audit does not match the committing prose or contract")
     occupied_slots = {
         item["technical_slot_id"]
         for chunk in packet_chunks(run_dir, record["packet_slot_id"])
@@ -7896,6 +7953,23 @@ def packet_payload_schema(run_dir: Path, plan: dict) -> dict:
             if not targets:
                 raise IntegrityError(f"Frozen navigation targets are absent for {slots[0]}")
             properties["choices"]["minItems"] = len(targets)
+            if scaffold_enabled(run_dir):
+                local_node = scaffold_local_contract(architecture, plan)["nodes"][0]
+                properties["arc_id"] = {"const": local_node["arc_id"]}
+                properties["choices"]["maxItems"] = len(targets)
+                choice_properties = schema["$defs"]["choicePayload"]["properties"]
+                choice_properties["availability"] = {"const": "playable"}
+                choice_properties["kind"] = {"enum": ["progression", "decision", "ending"]}
+                if len(targets) == 1:
+                    properties["major_decision"] = {"const": False}
+                    choice_properties["major_decision"] = {"const": False}
+                    choice_properties["kind"] = {"enum": ["progression", "ending"]}
+                schema["$defs"]["choicePayload"]["properties"]["destination"] = {"type": "object", "additionalProperties": False,
+                    "required": ["kind", "id"], "properties": {"kind": {"const": "technical_slot"}, "id": {"enum": targets}}}
+    if scaffold_enabled(run_dir) and definition == "endingPayload":
+        properties["choices"] = {"type": "array", "maxItems": 0}
+        properties["redirect_destination"] = {"type": "null"}
+        properties["ending_type"] = {"enum": ["commitment", "foreclosure", "contamination", "release", "other"]}
     properties["artifacts"] |= {
         "minItems": plan["artifact_count"], "maxItems": plan["artifact_count"]
     }
@@ -9064,15 +9138,16 @@ def allocate_core_draft(run_dir, schema, transport):
     scope = read_json(run_dir / "run-manifest.json")["scope"]
     topology = planning_schema_node(schema["properties"]["topology"], schema)
     groups = {key: schema["properties"][key] for key in ("arcs", "attractors", "obligation_graph")}
-    groups.update({key: topology["properties"][key] for key in ("nodes", "edges")})
+    if not scaffold_enabled(run_dir):
+        groups.update({key: topology["properties"][key] for key in ("nodes", "edges")})
     properties = {key: {"type": "integer", "minimum": max(node["minItems"], 4 if key == "nodes" else 3 if key == "edges" else 1),
         "maximum": min(node["maxItems"], scope["possible_scene_count"] if key in {"arcs", "nodes"} else node["maxItems"])}
         for key, node in groups.items()}
     layout_schema = {"type": "object", "additionalProperties": False, "required": list(properties), "properties": properties}
     genesis = committed_record(run_dir, "genesis")
     prompt = ("Choose the smallest useful architecture record counts for this scope. Do not write the records yet. "
-        "The engine allocates stable IDs, then asks you to author coherent batches. Include at least four topology nodes "
-        "for three opening paths, and enough edges to connect all nodes. Counts are capacity, not quality targets.\n"
+        "The engine allocates stable IDs, then asks you to author coherent batches. "
+        "Routing for scaffold runs is derived later from backward expansion. Counts are capacity, not quality targets.\n"
         + canonical_json({"scope": scope, "global_canon": genesis["work_canon"], "schema": layout_schema}).decode())
     result, response = request_architecture_analysis(run_dir, "architecture_layout", prompt, layout_schema, transport,
         response_name="architectureLayout", planning_mode=True, max_tokens=8192)
@@ -9081,8 +9156,12 @@ def allocate_core_draft(run_dir, schema, transport):
     for group, identity, prefix in (("arcs", "arc_id", "arc"), ("attractors", "attractor_id", "attractor"),
             ("obligation_graph", "obligation_id", "obligation"), ("nodes", "node_id", "architecture_node"),
             ("edges", "edge_id", "architecture_edge")):
+        if group not in result:
+            continue
         parent = payload.setdefault("topology", {}) if group in {"nodes", "edges"} else payload
         parent[group] = [{identity: f"{prefix}_{index:03d}"} for index in range(1, result[group] + 1)]
+    if scaffold_enabled(run_dir):
+        payload["topology"] = scaffold_macro_topology()
     state = {"payload": payload, "values": {}, "hints": [], "unassigned": [], "incomplete": [],
         "checkpoint_version": 3, "ready": False}
     save_planning_draft(run_dir, "architecture_core", state)
@@ -9116,12 +9195,613 @@ def constrain_planning_ids(schema, payload, run_dir):
                 if old.get("type") == "array" else {"type": "string", "enum": groups[kind]})
 
 
+def scaffold_enabled(run_dir):
+    return execution_policy(run_dir).get("scaffold_planning_version") == 1
+
+
+def scaffold_order(nodes):
+    """Iterative topological order also works for several thousand linear scenes."""
+    by_id = {node["node_id"]: node for node in nodes}
+    if len(by_id) != len(nodes):
+        raise SchemaError("Scaffold node IDs must be unique")
+    incoming = {identifier: 0 for identifier in by_id}
+    for node in nodes:
+        targets = [edge["to_node_id"] for edge in node["successors"]]
+        if len(targets) != len(set(targets)) or not set(targets).issubset(by_id):
+            raise SchemaError(f"Scaffold has duplicate or unknown successors at {node['node_id']}")
+        for target in targets:
+            incoming[target] += 1
+    queue = sorted(identifier for identifier, count in incoming.items() if not count)
+    roots = list(queue)
+    for identifier in queue:
+        for edge in by_id[identifier]["successors"]:
+            target = edge["to_node_id"]
+            incoming[target] -= 1
+            if not incoming[target]:
+                queue.append(target)
+    if len(queue) != len(nodes):
+        raise SchemaError("Scaffold progression contains a cycle")
+    return queue, roots
+
+
+def scaffold_frontier(nodes):
+    admitted = {edge["target_case_id"] for node in nodes for edge in node["successors"]}
+    return sorted(node["node_id"] for node in nodes if any(case["case_id"] not in admitted for case in node["entry_cases"]))
+
+
+def scaffold_entry_routes(architecture, node):
+    scaffold = architecture["causal_scaffold"]
+    routes = [(edge["target_case_id"], scaffold["slot_ids"][parent["node_id"]]) for parent in scaffold["nodes"]
+        for edge in parent["successors"] if edge["to_node_id"] == node["node_id"]]
+    return routes or [(node["entry_cases"][0]["case_id"], "genesis")]
+
+
+def validate_scaffold(scaffold, scope, genesis_ids, *, complete=False):
+    nodes = scaffold["nodes"]
+    by_id = {node["node_id"]: node for node in nodes}
+    order, roots = scaffold_order(nodes)
+    scenes = [node for node in nodes if node["kind"] == "scene"]
+    endings = [node for node in nodes if node["kind"] == "ending"]
+    if len(scenes) > scope["possible_scene_count"] or not 2 <= len(endings) <= scope["ending_hard_max"]:
+        raise SchemaError("Scaffold exceeds scene/ending capacity or has fewer than two outcomes")
+    if not any(node["terminal_role"] == "final" for node in endings):
+        raise SchemaError("Scaffold needs at least one final outcome")
+    identities = [value[key] for node in nodes for key, values in (("case_id", node["entry_cases"]),
+        ("requirement_id", node["guarantees"])) for value in values]
+    identities += [req["requirement_id"] for node in nodes for case in node["entry_cases"] for req in case["requirements"]]
+    if len(identities) != len(set(identities)) or set(identities).intersection(set(by_id) | set(genesis_ids)):
+        raise SchemaError("Scaffold case/requirement IDs must be globally unique and distinct from node IDs")
+    admitted = set()
+
+    def support_case(supports, case, guarantees):
+        required = {req["requirement_id"] for req in case["requirements"]}
+        supplied = [item["requirement_id"] for item in supports]
+        if set(supplied) != required or len(supplied) != len(required):
+            raise SchemaError(f"Scaffold transition must support every requirement of {case['case_id']} exactly once")
+        for item in supports:
+            if (not item["guarantee_ids"] and not item["genesis_source_ids"] or
+                    not set(item["guarantee_ids"]).issubset(guarantees) or
+                    not set(item["genesis_source_ids"]).issubset(genesis_ids)):
+                raise SchemaError(f"Scaffold has unsupported causal requirements at {case['case_id']}")
+
+    for node in nodes:
+        if node["kind"] == "ending":
+            if node["successors"] or node["terminal_role"] not in {"final", "premature"} or not node["attractor_id"]:
+                raise SchemaError("Scaffold outcomes must be terminal and name an ending attractor")
+        elif not 1 <= len(node["successors"]) <= 5 or node["terminal_role"] != "none" or node["attractor_id"] is not None or node["prerequisite_obligation_ids"]:
+            raise SchemaError("A scaffold scene needs one continuation or two to five branches")
+        guarantees = {item["requirement_id"] for item in node["guarantees"]}
+        for edge in node["successors"]:
+            target = by_id[edge["to_node_id"]]
+            case = next((case for case in target["entry_cases"] if case["case_id"] == edge["target_case_id"]), None)
+            if case is None:
+                raise SchemaError(f"Scaffold transition names an unknown entry case at {target['node_id']}")
+            support_case(edge["supports"], case, guarantees)
+            admitted.add(case["case_id"])
+    if complete:
+        opening = scaffold["opening_node_id"]
+        if roots != [opening] or opening not in by_id or by_id[opening]["kind"] != "scene" or len(scenes) < 8:
+            raise SchemaError("Scaffold needs one grounded opening, at least eight scenes, and no disconnected frontier")
+        if len(by_id[opening]["entry_cases"]) != 1:
+            raise SchemaError("Opening must have one Genesis-grounded entry case")
+        case = by_id[opening]["entry_cases"][0]
+        if not case["requirements"]:
+            raise SchemaError("Opening needs an explicit Genesis-grounded entry requirement")
+        support_case(scaffold["opening_support"], case, set())
+        admitted.add(case["case_id"])
+        if any(case["case_id"] not in admitted for node in nodes for case in node["entry_cases"]):
+            raise SchemaError("Scaffold contains an entry case without a supporting incoming route")
+    else:
+        remaining = scope["possible_scene_count"] - len(scenes)
+        missing_per_node = [sum(case["case_id"] not in admitted for case in node["entry_cases"]) for node in nodes]
+        reserve = max(1, math.ceil((sum(missing_per_node) - 1) / 4), max(missing_per_node, default=0))
+        if remaining < reserve:
+            raise SchemaError(f"Scaffold needs at least {reserve} scene slots to close {sum(missing_per_node)} pending entry cases across "
+                f"{len(scaffold_frontier(nodes))} frontier nodes; only {remaining} remain")
+    return order, roots
+
+
+def scaffold_macro_topology(scaffold=None):
+    # Macro nodes are a compatibility projection; only the per-scene scaffold owns routes.
+    groups = {"architecture_node_001": ("introduction", []), "architecture_node_002": ("branch_family", []),
+              "architecture_node_003": ("ending_family", [])}
+    mapping = {}
+    if scaffold:
+        for node in scaffold["nodes"]:
+            group = "architecture_node_003" if node["kind"] == "ending" else (
+                "architecture_node_001" if node["node_id"] == scaffold["opening_node_id"] else "architecture_node_002")
+            mapping[node["node_id"]] = group
+            groups[group][1].append(node["purpose"])
+        pairs = sorted({(mapping[node["node_id"]], mapping[edge["to_node_id"]]) for node in scaffold["nodes"]
+            for edge in node["successors"] if mapping[node["node_id"]] != mapping[edge["to_node_id"]]})
+    else:
+        pairs = [("architecture_node_001", "architecture_node_002"), ("architecture_node_002", "architecture_node_003")]
+    return {"entry_segment_id": "architecture_node_001", "opening_branch_node_id": "architecture_node_001",
+        "nodes": [{"node_id": key, "node_type": kind, "purpose": "; ".join(purposes[:3]) or "Compatibility projection of the causal scaffold.",
+                   "hard_obligation_ids": []} for key, (kind, purposes) in groups.items()],
+        "edges": [{"edge_id": f"architecture_edge_{index:03d}", "from_node_id": source, "to_node_id": target,
+                   "relation": "progression", "hard_obligation_ids": []} for index, (source, target) in enumerate(pairs, 1)],
+        "reconvergence_node_ids": []}
+
+
+def scaffold_request_schema(run_dir, *, seed=False, allocated=(), targets=(), minimum=1):
+    schema = copy.deepcopy(definition_schema("scaffoldNode", load_protocol(run_dir)))
+    node = {key: value for key, value in schema.items() if key != "$defs"}
+    properties = node["properties"]
+    schema["$defs"]["scaffoldSupport"]["properties"]["genesis_source_ids"] = packet_dependency_schema(sorted(genesis_reference_catalog(run_dir)))
+    core = planning_core(run_dir)
+    properties["arc_id"] = {"enum": [item["arc_id"] for item in core["arcs"]]}
+    properties["kind"] = {"const": "ending" if seed else "scene"}
+    properties["terminal_role"] = {"enum": ["final", "premature"]} if seed else {"const": "none"}
+    hard = [item["obligation_id"] for item in core["obligation_graph"] if item["hardness"] == "hard"]
+    properties["prerequisite_obligation_ids"] = packet_dependency_schema(hard) if seed else {"type": "array", "maxItems": 0}
+    properties["attractor_id"] = {"enum": [item["attractor_id"] for item in core["attractors"] if item["kind"] == "ending"]} if seed else {"type": "null"}
+    if seed:
+        properties["node_id"] = {"enum": list(allocated)}
+        properties["successors"] = {"type": "array", "maxItems": 0}
+        properties["guarantees"]["minItems"] = 1
+    else:
+        properties["node_id"] = {"enum": list(allocated)}
+        properties["successors"]["minItems"] = 1
+        schema["$defs"]["scaffoldTransition"]["properties"]["to_node_id"] = {"enum": list(targets) + list(allocated)}
+    fields = {"nodes": {"type": "array", "minItems": minimum if seed else 1,
+        "maxItems": len(allocated), "items": node}, "complete": {"type": "boolean"}}
+    if not seed:
+        fields |= {"complete": {"type": "boolean"}, "opening_node_id": {"anyOf": [{"enum": list(allocated)}, {"type": "null"}]},
+                   "opening_support": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/scaffoldSupport"}}}
+    return {"type": "object", "additionalProperties": False, "required": list(fields), "properties": fields, "$defs": schema["$defs"]}
+
+
+def audit_scaffold_patch(run_dir, patch, frontier, transport):
+    source_ids = {identifier for node in patch["nodes"] for edge in node["successors"]
+        for support in edge["supports"] for identifier in support["genesis_source_ids"]}
+    source_ids.update(identifier for support in patch["opening_support"] for identifier in support["genesis_source_ids"])
+    sources = retrieve_original_sources(run_dir, [{"sources": [{"artifact_id": identifier} for identifier in sorted(source_ids)]}],
+        limit=None, strict=True, follow_sources=False) if source_ids else []
+    schema = {"type": "object", "additionalProperties": False, "required": ["supported", "reason"],
+        "properties": {"supported": {"type": "boolean"}, "reason": {"type": "string", "minLength": 1}}}
+    prompt = ("Check causal support in this uncommitted backward expansion. Node links and IDs were already validated. "
+        "Do the predecessor's declared guarantees actually support each chosen successor entry requirement? "
+        "Are Genesis citations accurate? Can this scene preserve its stated guarantees and conditions under EVERY "
+        "alternative entry case, without relying on another exclusive branch? Are these purposeful predecessors "
+        "rather than arbitrary bridges to meet a count? Distinguish intentions from established facts. "
+        "If complete, is its opening grounded in Genesis? A linear chapter is valid, and thematic development "
+        "does not require a new fact. Assess compatibility and support, not artistic taste. "
+        "Report a concrete unsupported requirement; do not invent replacement events.\n" +
+        canonical_json({"patch": patch, "existing_successors": frontier, "committed_genesis_sources": sources}).decode())
+    query = "scaffold_support_" + sha256_bytes(prompt.encode())[:16]
+    result, response = request_architecture_analysis(run_dir, query, prompt, schema, transport, planning_mode=True,
+        max_tokens=2048, pause_stage="Scaffold causal support", system_prompt="Verify causal support in an uncommitted plan. Return JSON only.")
+    preserve_planning_result(run_dir, "architecture_core", query, result, response, kind="scaffold_support")
+    if not result["supported"]:
+        raise SchemaError("Scaffold expansion has unsupported causal commitments: " + result["reason"])
+
+
+def prepare_causal_scaffold(run_dir, core, transport):
+    if core.get("causal_scaffold"):
+        validate_json_schema(core["causal_scaffold"], definition_schema("causalScaffold", load_protocol(run_dir)))
+        validate_scaffold(core["causal_scaffold"], read_json(run_dir / "run-manifest.json")["scope"],
+            set(genesis_reference_catalog(run_dir)), complete=True)
+        return core
+    path = run_dir / ".staging/causal-scaffold.json"
+    scope = read_json(run_dir / "run-manifest.json")["scope"]
+    genesis_ids = set(genesis_reference_catalog(run_dir))
+    state = read_json(path) if path.exists() else {"version": 1, "nodes": [], "round": 0, "complete": False,
+        "opening_node_id": None, "opening_support": [], "outcomes_complete": False}
+    state.setdefault("outcomes_complete", state["complete"] or any(node["kind"] == "scene" for node in state["nodes"]))
+    if state["nodes"]:
+        for node in state["nodes"]:
+            validate_json_schema(node, definition_schema("scaffoldNode", load_protocol(run_dir)))
+    while not state["outcomes_complete"]:
+        offset = len(state["nodes"])
+        capacity = min(4, scope["ending_hard_max"] - offset)
+        if capacity < 1:
+            raise PausedError("Scaffold outcomes", "Outcome capacity exhausted before outcome planning closed; draft retained")
+        allocated = [f"scaffold_outcome_{index:04d}" for index in range(offset + 1, offset + capacity + 1)]
+        schema = scaffold_request_schema(run_dir, seed=True, allocated=allocated, minimum=2 if not offset else 1)
+        prompt = ("Seed distinct terminal outcomes for backward causal planning in pages of up to four. Author concise contracts, no prose. "
+            "The first page includes a final resolution; premature stops are optional. Two outcomes are the minimum; targets are guidance. "
+            "Use a prefix of the allocated node IDs in order; prefix requirement/case IDs with their node ID. "
+            "Requirements are planned intentions, never committed facts. Each entry case describes an alternative sufficient prior "
+            "situation, not events the ending itself performs. Do not make every early ending depend on the main final revelation. "
+            "Set complete=true when enough distinct outcomes exist, including when reaching the hard ending limit. "
+            "No other outcomes will be added after this stage.\n" + canonical_json({
+                "scope": scope, "outcomes_accepted": offset, "allocated_node_ids": allocated,
+                "recent_outcome_contracts": state["nodes"][-4:], "genesis": committed_record(run_dir, "genesis"),
+                "arcs": core["arcs"], "attractors": core["attractors"]}).decode())
+        def validate_seed(result):
+            if [node["node_id"] for node in result["nodes"]] != allocated[:len(result["nodes"])]:
+                raise SchemaError("Use the allocated outcome IDs in order, preserving accepted outcomes")
+            candidate = state | {"nodes": state["nodes"] + result["nodes"]}
+            validate_scaffold(candidate, scope, genesis_ids)
+            if len({node["purpose"] for node in candidate["nodes"]}) != len(candidate["nodes"]):
+                raise SchemaError("Terminal outcomes must have distinct authored purposes")
+            if len(candidate["nodes"]) == scope["ending_hard_max"] and not result["complete"]:
+                raise SchemaError("Outcome planning must finish at its hard ending limit")
+        step = f"scaffold_outcomes_{offset + 1:05d}"
+        result, response = request_architecture_analysis(run_dir, step, prompt, schema, transport,
+            validator=validate_seed, planning_mode=True, temperature=0.5, max_tokens=8192,
+            pause_stage="Scaffold outcomes", system_prompt="Author only the requested uncommitted story contracts. Return JSON only.")
+        preserve_planning_result(run_dir, "architecture_core", step, result, response, kind="scaffold_outcomes")
+        state["nodes"].extend(result["nodes"])
+        state["outcomes_complete"] = result["complete"]
+        write_json(path, state)
+    while not state["complete"]:
+        validate_scaffold(state, scope, genesis_ids)
+        frontier = scaffold_frontier(state["nodes"])
+        count = sum(node["kind"] == "scene" for node in state["nodes"])
+        available = min(4, scope["possible_scene_count"] - count)
+        if available < 1:
+            raise PausedError("Scaffold expansion", "No scene capacity remains for a grounded opening; accepted contracts retained")
+        allocated = [f"scaffold_scene_{count + index:05d}" for index in range(1, available + 1)]
+        targets = frontier[:5]
+        by_id = {node["node_id"]: node for node in state["nodes"]}
+        schema = scaffold_request_schema(run_dir, allocated=allocated, targets=targets)
+        admitted_cases = {edge["target_case_id"] for node in state["nodes"] for edge in node["successors"]}
+        pending_cases = {identifier: [case["case_id"] for case in by_id[identifier]["entry_cases"] if case["case_id"] not in admitted_cases] for identifier in frontier}
+        prompt = render_prompt(run_dir, "generation-scaffold.md", {"SCAFFOLD_CONTEXT": canonical_json({
+            "scope": scope, "scenes_accepted": count, "remaining_scene_capacity": scope["possible_scene_count"] - count,
+            "unresolved_frontier_count": len(frontier), "unresolved_entry_case_count": sum(map(len, pending_cases.values())), "allocated_node_ids": allocated,
+            "frontier_contracts": [by_id[identifier] | {"pending_entry_case_ids": pending_cases[identifier]} for identifier in targets],
+            "arcs": core["arcs"], "genesis": committed_record(run_dir, "genesis")}).decode()})
+        def validate_patch(result):
+            new_ids = [node["node_id"] for node in result["nodes"]]
+            if new_ids != allocated[:len(new_ids)] or set(new_ids).intersection(by_id):
+                raise SchemaError("Use the allocated node IDs in order, without replacing accepted nodes")
+            candidate = state | {"nodes": state["nodes"] + result["nodes"], "opening_node_id": result["opening_node_id"],
+                "opening_support": result["opening_support"]}
+            order, _roots = validate_scaffold(candidate, scope, genesis_ids, complete=result["complete"])
+            reaches_frontier = set(targets)
+            candidate_nodes = {node["node_id"]: node for node in candidate["nodes"]}
+            for identifier in reversed(order):
+                if any(edge["to_node_id"] in reaches_frontier for edge in candidate_nodes[identifier]["successors"]):
+                    reaches_frontier.add(identifier)
+            if not set(new_ids).issubset(reaches_frontier):
+                raise SchemaError("Every added scene must lead through its patch to an existing frontier successor")
+            if not result["complete"] and (result["opening_node_id"] is not None or result["opening_support"]):
+                raise SchemaError("Declare the opening only when the scaffold is complete")
+            audit_scaffold_patch(run_dir, result, [by_id[identifier] for identifier in targets], transport)
+        step = f"scaffold_expand_{state['round'] + 1:05d}"
+        print(f"Backward scaffold: {count} scenes, {len(frontier)} unresolved entrances; adding up to {available}", file=sys.stderr)
+        result, response = request_architecture_analysis(run_dir, step, prompt, schema, transport, validator=validate_patch,
+            planning_mode=True, temperature=0.5, max_tokens=8192, pause_stage="Scaffold expansion",
+            system_prompt="Author only a bounded backward expansion of the uncommitted story. Return JSON only.")
+        preserve_planning_result(run_dir, "architecture_core", step, result, response, kind="scaffold_expansion")
+        state |= {"nodes": state["nodes"] + result["nodes"], "round": state["round"] + 1,
+            "complete": result["complete"], "opening_node_id": result["opening_node_id"], "opening_support": result["opening_support"]}
+        write_json(path, state)
+    validate_scaffold(state, scope, genesis_ids, complete=True)
+    order, _roots = scaffold_order(state["nodes"])
+    node_by_id = {node["node_id"]: node for node in state["nodes"]}
+    counters, slots = {"scene": 0, "ending": 0}, {}
+    for identifier in order:
+        kind = node_by_id[identifier]["kind"]
+        counters[kind] += 1
+        slots[identifier] = f"{kind}_slot_{counters[kind]:04d}"
+    scaffold = copy.deepcopy({key: state[key] for key in ("version", "nodes", "opening_node_id", "opening_support")}) | {"slot_ids": slots}
+    actual = derive_scope(counters["scene"])["scope"]
+    attractors = [item | {"kind": "branch"} if item["kind"] == "ending" else item for item in core["attractors"]]
+    original_attractors = {item["attractor_id"]: item for item in core["attractors"]}
+    for index, node in enumerate((node for node in scaffold["nodes"] if node["kind"] == "ending"), 1):
+        original = original_attractors[node["attractor_id"]]
+        identifier = f"attractor_outcome_{index:04d}"
+        attractors.append(original | {"attractor_id": identifier, "terminal_transformation": node["intended_change"],
+            "prerequisite_obligation_ids": node["prerequisite_obligation_ids"], "foreclosable": False,
+            "soft_seed_conditions": [requirement["description"] for case in node["entry_cases"] for requirement in case["requirements"]],
+            "unresolved_realization": [node["intended_change"]]})
+        node["attractor_id"] = identifier
+    compiled = core | {"causal_scaffold": scaffold, "topology": scaffold_macro_topology(scaffold), "attractors": attractors,
+        "scope_commitment": core["scope_commitment"] | {"planned_scene_count": counters["scene"],
+            "planned_ending_count": counters["ending"], "planned_artifact_count": actual["artifact_target"],
+            "planned_formal_composition_count": actual["formal_composition_target"]}}
+    draft = read_json(run_dir / ".staging/architecture_core.planning.json")
+    draft["record"] = compiled
+    save_planning_draft(run_dir, "architecture_core", draft)
+    return compiled
+
+
+def scaffold_packet_plans(core):
+    specs = planned_packet_specs(core)
+    scaffold = core["causal_scaffold"]
+    slots, nodes = scaffold["slot_ids"], {node["node_id"]: node for node in scaffold["nodes"]}
+    owners = {slot: spec["packet_slot_id"] for spec in specs for slot in spec["scene_slot_ids"] + spec["ending_slot_ids"]}
+    parents = {identifier: [] for identifier in nodes}
+    for node in nodes.values():
+        for edge in node["successors"]:
+            parents[edge["to_node_id"]].append(node["node_id"])
+    plans = []
+    for index, spec in enumerate(specs, 1):
+        own = set(spec["scene_slot_ids"] + spec["ending_slot_ids"])
+        local = [node for node in nodes.values() if slots[node["node_id"]] in own]
+        dependencies = sorted({owners[slots[parent]] for node in local for parent in parents[node["node_id"]]
+            if owners[slots[parent]] != spec["packet_slot_id"]})
+        plans.append(spec | {"initial_priority": index, "depends_on_packet_slot_ids": dependencies,
+            "branch_path_relation": "; ".join(node["purpose"] for node in local),
+            "attractor_ids": sorted({node["attractor_id"] for node in local if node["attractor_id"]}),
+            "relevance": {"arc_ids": sorted({node["arc_id"] for node in local}), "technical_slot_ids": sorted(own),
+                "claimant_ids": sorted({identifier for arc in core["arcs"] if arc["arc_id"] in {node["arc_id"] for node in local}
+                    for identifier in arc["claimant_pressures"]})},
+            "soft_guidance": [node["intended_change"] for node in local],
+            "required_navigation": {slots[node["node_id"]]: [slots[edge["to_node_id"]] for edge in node["successors"]]
+                for node in local if node["kind"] == "scene"}})
+    return plans
+
+
+def compile_scaffold_batches(run_dir, core):
+    plans = scaffold_packet_plans(core)
+    groups = [plans[index:index + PLAN_BATCH_SIZE] for index in range(0, len(plans), PLAN_BATCH_SIZE)]
+    records = []
+    for index, plans in enumerate(groups, 1):
+        step = f"architecture_plan_batch_{index:04d}"
+        committed = next((record for record in committed_records(run_dir, "architecture_plan_batch") if record["batch_sequence"] == index), None)
+        if committed:
+            if committed["packet_plans"] != plans:
+                raise IntegrityError("Committed scaffold compilation differs from its frozen core")
+            records.append(committed)
+            continue
+        record = record_envelope(run_dir, "architecture_plan_batch", step) | {
+            "architecture_core_commit_id": core["commit_id"], "story_format": "web", "batch_sequence": index,
+            "batch_count": len(groups), "packet_plans": plans}
+        state = {"payload": {"packet_plans": plans}, "record": record, "ready": True, "values": {},
+            "checkpoint_version": 3, "bulk_failed": False, "hints": [], "unassigned": []}
+        save_planning_draft(run_dir, step, state)
+        records.append(record)
+    return records
+
+
+def validate_scaffold_reader_states(architecture, content, destination):
+    scaffold = architecture["causal_scaffold"]
+    order, _roots = scaffold_order(scaffold["nodes"])
+    slots = scaffold["slot_ids"]
+    by_id = {node["node_id"]: node for node in scaffold["nodes"]}
+    arrivals = {slots[scaffold["opening_node_id"]]: {"{}": {}}}
+    for identifier in order:
+        slot = slots[identifier]
+        if slot not in content:
+            continue
+        item, node = content[slot], by_id[identifier]
+        states = arrivals.get(slot, {})
+        if not states:
+            raise SchemaError(f"Scaffold reader cannot reach {slot} under the authored state effects")
+        required = {slots[edge["to_node_id"]] for edge in node["successors"]}
+        choices = [choice for choice in item["choices"] if choice["availability"] == "playable"]
+        if {destination(choice) for choice in choices} != required or len(choices) != len(required):
+            raise SchemaError(f"Authored exits at {slot} differ from the frozen scaffold")
+        reached = set()
+        for state in states.values():
+            values = copy.deepcopy(state)
+            if not reader_conditions_hold(item.get("state_inputs", item.get("entry_conditions", [])), values):
+                raise SchemaError(f"Scaffold entry {slot} rejects a reachable incoming state")
+            apply_reader_effects(item["state_effects"], values)
+            live = [choice for choice in choices if reader_conditions_hold(choice["state_conditions"], values)]
+            if node["kind"] == "scene" and not live:
+                raise SchemaError(f"Scaffold scene {slot} has no playable continuation for a reachable state")
+            for choice in live:
+                target, after = destination(choice), copy.deepcopy(values)
+                reached.add(target)
+                apply_reader_effects(choice["state_effects"], after)
+                arrivals.setdefault(target, {})[canonical_json(after).decode()] = after
+                if len(arrivals[target]) > 128:
+                    raise PausedError("Scaffold state verification", f"{target} has more than 128 distinct incoming states; "
+                        "verification retained the authored work and stopped without dropping paths")
+        if reached != required:
+            raise SchemaError(f"Scaffold exits from {slot} are never playable: {', '.join(sorted(required - reached))}")
+
+
+def scaffold_local_contract(architecture, plan):
+    scaffold = architecture.get("causal_scaffold")
+    if not scaffold:
+        return {}
+    slots = scaffold["slot_ids"]
+    own = set(plan["scene_slot_ids"] + plan["ending_slot_ids"])
+    local = [node for node in scaffold["nodes"] if slots[node["node_id"]] in own]
+    identifiers = {node["node_id"] for node in local}
+    incoming = [{"from_node_id": node["node_id"], "from_slot_id": slots[node["node_id"]], **edge}
+        for node in scaffold["nodes"] for edge in node["successors"] if edge["to_node_id"] in identifiers]
+    successor_ids = {edge["to_node_id"] for node in local for edge in node["successors"]}
+    return {"nodes": local, "technical_slots": {node["node_id"]: slots[node["node_id"]] for node in local},
+        "incoming": incoming, "successor_requirements": [
+            {"node_id": node["node_id"], "technical_slot_id": slots[node["node_id"]], "entry_cases": node["entry_cases"]}
+            for node in scaffold["nodes"] if node["node_id"] in successor_ids],
+        "opening_support": scaffold["opening_support"] if scaffold["opening_node_id"] in identifiers else []}
+
+
+def scaffold_source_strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for child in value.values():
+            yield from scaffold_source_strings(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from scaffold_source_strings(child)
+
+
+def scaffold_literary_texts(item, record=None):
+    artifacts = item.get("artifacts", []) if record is None else [artifact for artifact in record["artifacts"]
+        if artifact["artifact_id"] in item.get("artifact_ids", [])]
+    # Affordances may explain an exit, but cannot prove an already performed event.
+    return [item["prose_mdx"]] + [artifact["body_mdx"] for artifact in artifacts]
+
+
+def scaffold_source_units(run_dir, architecture, identifiers):
+    identifiers = set(identifiers)
+    slots = set(architecture["causal_scaffold"]["slot_ids"].values())
+    source_slots = identifiers & slots
+    owners = {slot: plan["packet_slot_id"] for plan in architecture["packet_plans"]
+        for slot in plan["scene_slot_ids"] + plan["ending_slot_ids"] if slot in source_slots}
+    units = {}
+    for record in packet_records(run_dir, set(owners.values()), verify=True):
+        for item in record["scenes"] + record["endings"]:
+            slot = item["technical_slot_id"]
+            if slot in source_slots:
+                units[slot] = scaffold_literary_texts(item, record)
+    genesis_ids = identifiers - source_slots
+    if genesis_ids:
+        sources = retrieve_original_sources(run_dir, [{"sources": [{"artifact_id": identifier} for identifier in sorted(genesis_ids)]}],
+            limit=None, strict=True, follow_sources=False)
+        for source in sources:
+            units[source["source_id"]] = list(scaffold_source_strings(source["immutable_source"]))
+    if identifiers - units.keys():
+        raise IntegrityError("Scaffold evidence does not resolve: " + ", ".join(sorted(identifiers - units.keys())))
+    return units
+
+
+def scaffold_predecessor_receipt(run_dir, architecture, slot):
+    owner = next(plan["packet_slot_id"] for plan in architecture["packet_plans"]
+        if slot in plan["scene_slot_ids"] + plan["ending_slot_ids"])
+    record = next((record for record in packet_records(run_dir, [owner], verify=True)
+        if any(item["technical_slot_id"] == slot for item in record["scenes"] + record["endings"])), None)
+    if record is None:
+        raise IntegrityError(f"Scaffold predecessor is not committed: {slot}")
+    with index_connection(run_dir) as db:
+        row = db.execute("SELECT path FROM records WHERE commit_id=?", (record["commit_id"],)).fetchone()
+    directory = run_dir / row[0]
+    meta = read_json(directory / "commit-meta.json")
+    digest = meta.get("supplemental_hashes", {}).get("scaffold-evidence.json")
+    if digest is None:
+        raise IntegrityError(f"Scaffold predecessor evidence is missing: {slot}")
+    path = directory / "scaffold-evidence.json"
+    verify_immutable_file(path, digest)
+    return read_json(path)
+
+
+def scaffold_inherited_evidence(run_dir, architecture, local):
+    by_id = {node["node_id"]: node for node in architecture["causal_scaffold"]["nodes"]}
+    units, proofs, identifiers = {}, [], set()
+    for transition in local["incoming"]:
+        parent = by_id[transition["from_node_id"]]
+        needed = {identifier for support in transition["supports"] for identifier in support["guarantee_ids"]}
+        identifiers.update(identifier for support in transition["supports"] for identifier in support["genesis_source_ids"])
+        if not needed:
+            continue
+        receipt = scaffold_predecessor_receipt(run_dir, architecture, transition["from_slot_id"])
+        if receipt["contract_hash"] != sha256_bytes(canonical_json(parent)):
+            raise IntegrityError("Scaffold predecessor contract differs from its evidence audit")
+        parent_units = scaffold_source_units(run_dir, architecture, [transition["from_slot_id"]])
+        if receipt["own_text_hash"] != sha256_bytes(canonical_json(parent_units[transition["from_slot_id"]])):
+            raise IntegrityError("Scaffold predecessor prose differs from its evidence audit")
+        digest = sha256_bytes(canonical_json(receipt["audit"]))
+        if not any(entry["commit_status"] == "COMMITTED" and entry["output_hash"] == digest
+                   for entry in step_entries(run_dir, receipt["step_id"])):
+            raise IntegrityError("Scaffold predecessor audit does not match its ledger")
+        verified = copy.deepcopy(receipt["verified_checks"])
+        for proof in verified:
+            for quote in proof["evidence_quotes"]:
+                quote.pop("source_hash", None)
+        if verified != receipt["audit"]["checks"]:
+            raise IntegrityError("Scaffold evidence differs from its ledgered audit")
+        selected = [proof for proof in receipt["verified_checks"] if proof["check_id"] in needed]
+        expected = {(requirement, case, entry) for requirement in needed for case, entry in scaffold_entry_routes(architecture, parent)}
+        if {(proof["check_id"], proof["case_id"], proof["entry_from_slot"]) for proof in selected} != expected:
+            raise IntegrityError("Scaffold predecessor audit lacks a required guarantee or entry case")
+        proofs.extend({"from_slot_id": transition["from_slot_id"], **proof} for proof in selected)
+        identifiers.update(quote["source_id"] for proof in selected for quote in proof["evidence_quotes"])
+    identifiers.update(identifier for support in local["opening_support"] for identifier in support["genesis_source_ids"])
+    if identifiers:
+        units = scaffold_source_units(run_dir, architecture, identifiers)
+    for proof in proofs:
+        for quote in proof["evidence_quotes"]:
+            if quote["source_hash"] != sha256_bytes(canonical_json(units[quote["source_id"]])) or not any(
+                    quote["quote"] in value for value in units[quote["source_id"]]):
+                raise IntegrityError("Scaffold supporting quotation differs from its immutable source")
+    return {"inherited_guarantee_evidence": proofs, "immutable_source_units": units}
+
+
+def scaffold_packet_context(run_dir, architecture, plan):
+    local = scaffold_local_contract(architecture, plan)
+    return local | scaffold_inherited_evidence(run_dir, architecture, local) if local else {}
+
+
+def audit_scaffold_guarantees(run_dir, step_id, artistic, plan, transport):
+    if not scaffold_enabled(run_dir):
+        return
+    architecture = committed_record(run_dir, "architecture")
+    local = scaffold_packet_context(run_dir, architecture, plan)
+    content = artistic["scenes"] + artistic["endings"]
+    if len(content) != 1 or len(local["nodes"]) != 1:
+        raise IntegrityError("Scaffold evidence audit needs exactly one assigned content unit")
+    item, node = content[0], local["nodes"][0]
+    slot = item["technical_slot_id"]
+    own = scaffold_literary_texts(item)
+    units = local["immutable_source_units"] | {slot: own}
+    checks = [(guarantee["requirement_id"], guarantee["description"]) for guarantee in node["guarantees"]]
+    checks += [(f"{node['node_id']}_preserve_{index:03d}", text) for index, text in enumerate(node["preserves"], 1)]
+    entry_routes = scaffold_entry_routes(architecture, node)
+    expected = {(check, case, entry) for check, _description in checks for case, entry in entry_routes}
+    quote_schema = {"type": "object", "additionalProperties": False, "required": ["source_id", "quote"],
+        "properties": {"source_id": {"enum": sorted(units)}, "quote": {"type": "string", "minLength": 1}}}
+    schema = {"type": "object", "additionalProperties": False, "required": ["checks"], "properties": {
+        "checks": {"type": "array", "minItems": len(expected), "maxItems": len(expected), "items": {"type": "object", "additionalProperties": False,
+            "required": ["check_id", "case_id", "entry_from_slot", "supported", "reason", "evidence_quotes"], "properties": {
+                "check_id": {"enum": sorted({check for check, _case, _entry in expected})},
+                "entry_from_slot": {"enum": sorted({entry for _case, entry in entry_routes})},
+                "case_id": {"enum": [case["case_id"] for case in node["entry_cases"]]}, "supported": {"type": "boolean"},
+                "reason": {"type": "string", "minLength": 1}, "evidence_quotes": {"type": "array", "items": quote_schema}}}}}}
+    allowed_sources = {(case, entry): {slot} for case, entry in entry_routes}
+    for transition in local["incoming"]:
+        permitted = allowed_sources[(transition["target_case_id"], transition["from_slot_id"])]
+        needed = {identifier for support in transition["supports"] for identifier in support["guarantee_ids"]}
+        permitted.update(identifier for support in transition["supports"] for identifier in support["genesis_source_ids"])
+        permitted.update(quote["source_id"] for proof in local["inherited_guarantee_evidence"]
+            if proof["from_slot_id"] == transition["from_slot_id"] and proof["check_id"] in needed for quote in proof["evidence_quotes"])
+    for support in local["opening_support"]:
+        allowed_sources[(node["entry_cases"][0]["case_id"], "genesis")].update(support["genesis_source_ids"])
+    prompt = ("Audit immutable prose against every hard exit guarantee and preserved condition, separately for every incoming route and its entry case. "
+        "Two routes using the same case ID still require separate checks; entry_from_slot identifies the incoming route. "
+        "Prior branch-specific evidence is applicable ONLY under the corresponding incoming transition and entry case. "
+        "A shared scene must work for each alternative, never assume the reader saw mutually exclusive paths. "
+        "Use exact source quotations, distinguish character knowledge from author knowledge, and do not turn plans, "
+        "choices or future intentions into completed events. A guarantee can be inherited only from the supplied supported "
+        "incoming guarantees or cited Genesis evidence. Intended dramatic/thematic change is advisory, not a required new fact. "
+        "Report unsupported promises honestly; do not rewrite prose or repair metadata to pretend the promise occurred.\n" +
+        canonical_json({"local_contract": {key: value for key, value in local.items() if key != "immutable_source_units"}, "checks": checks, "allowed_sources_per_entry": [{"case_id": case, "entry_from_slot": entry, "source_ids": sorted(value)} for (case, entry), value in allowed_sources.items()], "immutable_source_units": units}).decode())
+    query = f"{step_id}_scaffold_audit_" + sha256_bytes(prompt.encode())[:12]
+    path = run_dir / ".staging" / f"scaffold-evidence-{slot}.json"
+    def validate(result):
+        if {(check["check_id"], check["case_id"], check["entry_from_slot"]) for check in result["checks"]} != expected:
+            raise SchemaError("Scaffold audit must cover every check and alternative entry case exactly once")
+        for check in result["checks"]:
+            if check["supported"] and not check["evidence_quotes"]:
+                raise SchemaError("Supported scaffold promises require exact source quotations")
+            for quote in check["evidence_quotes"]:
+                if quote["source_id"] not in allowed_sources[(check["case_id"], check["entry_from_slot"])]:
+                    raise SchemaError("Scaffold audit cites evidence from an inapplicable alternative entry case")
+                if not any(quote["quote"] in text for text in units[quote["source_id"]]):
+                    raise SchemaError("Scaffold audit quotation is absent from its immutable source")
+    if not expected:
+        result = {"checks": []}
+    else:
+        result, response = request_architecture_analysis(run_dir, query, prompt, schema, transport, validator=validate,
+            phase="validation", planning_mode=True, context_purpose="semantic", max_tokens=8192,
+            pause_stage="Scaffold evidence", system_prompt="Verify hard narrative contracts against original prose. Return JSON only.")
+        preserve_planning_result(run_dir, step_id, query, result, response, kind="scaffold_evidence", phase="validation")
+    unsupported = [check for check in result["checks"] if not check["supported"]]
+    if unsupported:
+        write_json(path.with_suffix(".unsupported.json"), result)
+        raise PausedError("Scaffold evidence", f"Immutable {slot} does not establish its frozen promises: " +
+            "; ".join(f"{check['check_id']} for {check['case_id']} from {check['entry_from_slot']}: {check['reason']}" for check in unsupported) +
+            ". Prose was retained; no facts were invented and no literary bytes were rewritten.")
+    # Persist hashes beside quotations while leaving the ledgered response untouched.
+    audited = copy.deepcopy(result)
+    for check in audited["checks"]:
+        for quote in check["evidence_quotes"]:
+            quote["source_hash"] = sha256_bytes(canonical_json(units[quote["source_id"]]))
+    receipt = {"step_id": query, "contract_hash": sha256_bytes(canonical_json(node)),
+        "own_text_hash": sha256_bytes(canonical_json(own)), "audit": result, "verified_checks": audited["checks"]}
+    write_json(path, receipt)
+    write_json(run_dir / ".staging" / f"{step_id}.scaffold-evidence.json", receipt)
+
+
 def prepare_core_draft(run_dir: Path, transport) -> dict:
     if committed_record(run_dir, "architecture_core"):
         return committed_record(run_dir, "architecture_core")
     prompt, context = architecture_core_prompt(run_dir)
     schema = copy.deepcopy(definition_schema("architectureCorePayload", load_protocol(run_dir)))
     schema["$defs"]["obligation"].pop("allOf", None)
+    if scaffold_enabled(run_dir):
+        schema["properties"]["topology"] = copy.deepcopy(schema["$defs"]["architectureCore"]["properties"]["topology"])
+        schema["properties"]["topology"]["const"] = scaffold_macro_topology()
     path = run_dir / ".staging/architecture_core.planning.json"
     if execution_policy(run_dir).get("bounded_planning"):
         state = read_json(path) if path.exists() else allocate_core_draft(run_dir, schema, transport)
@@ -9156,48 +9836,49 @@ def prepare_core_draft(run_dir: Path, transport) -> dict:
             f"Remove the dependency cycle {cycle}; preserve meaningful prerequisites without a cycle.", transport) if allowed else []
         save_planning_draft(run_dir, "architecture_core", state)
         cycle = architecture_obligation_cycle(payload)
-    topology = payload["topology"]
-    opening = topology["opening_branch_node_id"]
-    branches = [item for item in topology["edges"] if item["from_node_id"] == opening and item["relation"] == "branch"]
-    if len(branches) != 3:
-        allowed = [item["node_id"] for item in topology["nodes"] if item["node_id"] != opening]
-        if len(allowed) < 3:
-            while len(allowed) < 3:
-                identifier = deterministic_id("draft_node", opening, str(len(topology["nodes"])))
-                topology["nodes"].append({"node_id": identifier})
-                allowed.append(identifier)
-            fill_planning_shape(run_dir, "architecture_core", state, schema, transport)
-            repair_planning_references(run_dir, "architecture_core", state, schema, transport)
-            return prepare_core_draft(run_dir, transport)
-        maximum_edges = planning_schema_node(schema["properties"]["topology"], schema)["properties"]["edges"]["maxItems"]
-        if len(topology["edges"]) - len(branches) + 3 > maximum_edges:
-            raise PausedError("Planning topology", "No edge capacity for the three opening paths; draft retained")
-        targets = planning_value(run_dir, "architecture_core", state, ["topology", "$opening_targets"],
-            {"type": "array", "items": {"enum": allowed}, "minItems": 3, "maxItems": 3, "uniqueItems": True},
-            "Select the three materially different opening paths; the engine constructs their branch edges.", transport)
-        topology["edges"] = [item for item in topology["edges"] if item not in branches]
-        for target in targets:
-            topology["edges"].append({"edge_id": deterministic_id("draft_edge", opening, target),
-                "from_node_id": opening, "to_node_id": target, "relation": "branch", "hard_obligation_ids": []})
-    reached = {topology["entry_segment_id"]}
-    while True:
-        expanded = reached | {item["to_node_id"] for item in topology["edges"] if item["from_node_id"] in reached}
-        if expanded != reached:
-            reached = expanded
-            continue
-        missing = [item["node_id"] for item in topology["nodes"] if item["node_id"] not in reached]
-        if not missing:
-            break
-        target = missing[0]
-        maximum_edges = planning_schema_node(schema["properties"]["topology"], schema)["properties"]["edges"]["maxItems"]
-        if len(topology["edges"]) >= maximum_edges:
-            raise PausedError("Planning topology", f"No edge capacity to connect {target}; draft retained")
-        parent = planning_value(run_dir, "architecture_core", state, ["topology", "$connect", target],
-            {"type": "string", "enum": sorted(reached)},
-            f"Choose a reachable predecessor for the disconnected node {target}, preserving the intended narrative route. The engine will add a progression edge.", transport)
-        topology["edges"].append({"edge_id": deterministic_id("draft_edge", parent, target), "from_node_id": parent,
-            "to_node_id": target, "relation": "progression", "hard_obligation_ids": []})
-        save_planning_draft(run_dir, "architecture_core", state)
+    if not scaffold_enabled(run_dir):
+        topology = payload["topology"]
+        opening = topology["opening_branch_node_id"]
+        branches = [item for item in topology["edges"] if item["from_node_id"] == opening and item["relation"] == "branch"]
+        if len(branches) != 3:
+            allowed = [item["node_id"] for item in topology["nodes"] if item["node_id"] != opening]
+            if len(allowed) < 3:
+                while len(allowed) < 3:
+                    identifier = deterministic_id("draft_node", opening, str(len(topology["nodes"])))
+                    topology["nodes"].append({"node_id": identifier})
+                    allowed.append(identifier)
+                fill_planning_shape(run_dir, "architecture_core", state, schema, transport)
+                repair_planning_references(run_dir, "architecture_core", state, schema, transport)
+                return prepare_core_draft(run_dir, transport)
+            maximum_edges = planning_schema_node(schema["properties"]["topology"], schema)["properties"]["edges"]["maxItems"]
+            if len(topology["edges"]) - len(branches) + 3 > maximum_edges:
+                raise PausedError("Planning topology", "No edge capacity for the three opening paths; draft retained")
+            targets = planning_value(run_dir, "architecture_core", state, ["topology", "$opening_targets"],
+                {"type": "array", "items": {"enum": allowed}, "minItems": 3, "maxItems": 3, "uniqueItems": True},
+                "Select the three materially different opening paths; the engine constructs their branch edges.", transport)
+            topology["edges"] = [item for item in topology["edges"] if item not in branches]
+            for target in targets:
+                topology["edges"].append({"edge_id": deterministic_id("draft_edge", opening, target),
+                    "from_node_id": opening, "to_node_id": target, "relation": "branch", "hard_obligation_ids": []})
+        reached = {topology["entry_segment_id"]}
+        while True:
+            expanded = reached | {item["to_node_id"] for item in topology["edges"] if item["from_node_id"] in reached}
+            if expanded != reached:
+                reached = expanded
+                continue
+            missing = [item["node_id"] for item in topology["nodes"] if item["node_id"] not in reached]
+            if not missing:
+                break
+            target = missing[0]
+            maximum_edges = planning_schema_node(schema["properties"]["topology"], schema)["properties"]["edges"]["maxItems"]
+            if len(topology["edges"]) >= maximum_edges:
+                raise PausedError("Planning topology", f"No edge capacity to connect {target}; draft retained")
+            parent = planning_value(run_dir, "architecture_core", state, ["topology", "$connect", target],
+                {"type": "string", "enum": sorted(reached)},
+                f"Choose a reachable predecessor for the disconnected node {target}, preserving the intended narrative route. The engine will add a progression edge.", transport)
+            topology["edges"].append({"edge_id": deterministic_id("draft_edge", parent, target), "from_node_id": parent,
+                "to_node_id": target, "relation": "progression", "hard_obligation_ids": []})
+            save_planning_draft(run_dir, "architecture_core", state)
     validate_json_schema(payload, schema)
     state["record"] = build_architecture_core(run_dir, payload)
     validate_architecture_core_for_run(state["record"], run_dir)
@@ -9392,20 +10073,27 @@ def prepare_navigation_contract(run_dir, core, records, transport):
 
 def execute_planning_phases(run_dir: Path, transport=http_json) -> list[dict]:
     core = prepare_core_draft(run_dir, transport)
-    batches = plan_batches(core)
-    records = [prepare_plan_draft(run_dir, specs, index, len(batches), transport) for index, specs in enumerate(batches, 1)]
-    place_planning_setups(run_dir, core, records, transport)
-    records = [read_json(run_dir / ".staging" / f"architecture_plan_batch_{index:04d}.planning.json")["record"]
-               if not next((item for item in committed_records(run_dir, "architecture_plan_batch") if item["batch_sequence"] == index), None)
-               else next(item for item in committed_records(run_dir, "architecture_plan_batch") if item["batch_sequence"] == index)
-               for index in range(1, len(batches) + 1)]
-    prepare_navigation_contract(run_dir, core, records, transport)
+    if scaffold_enabled(run_dir):
+        core = prepare_causal_scaffold(run_dir, core, transport)
+        records = compile_scaffold_batches(run_dir, core)
+        batches = plan_batches(core)
+    else:
+        batches = plan_batches(core)
+        records = [prepare_plan_draft(run_dir, specs, index, len(batches), transport) for index, specs in enumerate(batches, 1)]
+        place_planning_setups(run_dir, core, records, transport)
+        records = [read_json(run_dir / ".staging" / f"architecture_plan_batch_{index:04d}.planning.json")["record"]
+                   if not next((item for item in committed_records(run_dir, "architecture_plan_batch") if item["batch_sequence"] == index), None)
+                   else next(item for item in committed_records(run_dir, "architecture_plan_batch") if item["batch_sequence"] == index)
+                   for index in range(1, len(batches) + 1)]
+        prepare_navigation_contract(run_dir, core, records, transport)
     protocol = load_protocol(run_dir)
     for record in [core] + records:
         validate_json_schema(record, protocol["$defs"][RECORD_DEFS[record["record_type"]]], protocol)
         validate_declared_id_uniqueness(record)
     for index, (record, specs) in enumerate(zip(records, batches), 1):
         validate_architecture_plan_batch(record, run_dir, specs, index, len(batches))
+    if scaffold_enabled(run_dir):
+        navigation_contract_route(architecture_from_parts(core, records))
     validate_architecture(architecture_from_parts(core, records), read_json(run_dir / "run-manifest.json"), set(_source_index(run_dir)))
     for step, record in [("architecture_core", core)] + [(f"architecture_plan_batch_{index:04d}", record) for index, record in enumerate(records, 1)]:
         if committed_record(run_dir, record["record_type"]) and (step == "architecture_core" or any(
@@ -9414,7 +10102,7 @@ def execute_planning_phases(run_dir: Path, transport=http_json) -> list[dict]:
         state = read_json(run_dir / ".staging" / f"{step}.planning.json")
         assembled = state.get("checkpoint_version") == 3
         response = state.get("bulk_response")
-        if assembled or state["bulk_failed"]:
+        if assembled or state.get("bulk_failed", False):
             response = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(state["payload"], ensure_ascii=False)}}],
                         "usage": {}, "_cathedrals_assembled_from_fields": True}
         attempt = max((item["attempt"] for item in step_entries(run_dir, step)), default=0) + 1
@@ -9424,7 +10112,7 @@ def execute_planning_phases(run_dir: Path, transport=http_json) -> list[dict]:
             context=state.get("context", canonical_json(state["payload"]).decode()),
             parameters=(state.get("bulk_response") or {}).get("_cathedrals_request", {}).get("parameters", {
                 "seed": step_seed(read_json(run_dir / 'generation-brief.json')['generation_seed'], step), "assembly": "checkpointed_batches"}),
-            branch_relation="macroarchitecture", usage_already_ledgered=assembled or state.get("bulk_usage_ledgered", state["bulk_failed"]))
+            branch_relation="macroarchitecture", usage_already_ledgered=assembled or state.get("bulk_usage_ledgered", state.get("bulk_failed", False)))
     return batches
 
 
@@ -9797,9 +10485,9 @@ def validate_complete_work(run_dir: Path) -> dict:
     ordered_scenes = sorted(scenes, key=lambda scene: scene["technical_slot_id"])
     playable_choice_count = lambda scene: sum(edge_by_id[edge_id]["availability"] == "playable" for edge_id in scene["choice_edge_ids"] if edge_id in edge_by_id)
     first_hub = next((index for index, scene in enumerate(ordered_scenes) if playable_choice_count(scene) >= 2), None)
-    if first_hub is None or not 3 <= first_hub <= 5:
+    if not architecture.get("causal_scaffold") and (first_hub is None or not 3 <= first_hub <= 5):
         warn("opening_hub_shape", "The first live hub does not follow three to five scene surfaces.")
-    elif playable_choice_count(ordered_scenes[first_hub]) != 3:
+    elif not architecture.get("causal_scaffold") and playable_choice_count(ordered_scenes[first_hub]) != 3:
         warn("opening_hub_shape", "The first live hub does not expose exactly three choices.")
     if ordered_scenes:
         reachable = {ordered_scenes[0]["scene_id"]}
@@ -10792,7 +11480,7 @@ def probe_execution_policy(base_url, model, transport, output_fn=print):
     validate_json_schema(parse_structured_content(content), schema)
     output_fn(f"Retrieval mode: {mode} (synthetic structured metadata check passed).")
     return {"bounded_planning": True, "scoped_sources": True, "retrieval_mode": mode,
-        "max_tool_rounds": 2, "max_tool_calls": 8, "completion_contract_version": 1}, artifacts
+        "max_tool_rounds": 2, "max_tool_calls": 8, "completion_contract_version": 1, "scaffold_planning_version": 1}, artifacts
 
 
 def archive_preflight_probes(run_dir, artifacts):

@@ -9,8 +9,9 @@ Using completed immutable Genesis, author macro arcs, high-level
 topology, initial obligation graph, and attractors. This is macro structure, not one
 node or obligation per scene. Keep within the schema's fixed bounds; forward packets
 may create later obligations. Do not emit packet plans, scenes, prose, alternatives,
-or candidates. The engine freezes scope and record metadata. Attractors describe transformations;
-later plan batches assign ending slots. The active format is web. The engine stages this
+or candidates. The engine freezes record metadata and derives actual scope from the completed
+scaffold. Attractors describe transformations; terminal outcome contracts determine
+ending slots and their own prerequisites. The active format is web. The engine stages this
 draft with all plan batches, verifies earlier setups for ending requirements, then commits
 the complete plan before prose generation. Work backward from each terminal transformation:
 state the earlier evidence, encounters, or decisions needed to earn it in
@@ -19,7 +20,11 @@ Initial obligation termination targets must use obligation or attractor IDs auth
 in this record, never packet IDs.
 Every topology reference, including edge endpoints, must use a
 `node_id` declared in `topology.nodes`; arc IDs are separate and cannot substitute.
-The opening branch node must have exactly three outgoing `branch` edges. Use only exact
+For scaffold_planning_version=1 the engine supplies the compatibility topology;
+actual scenes, endings, and routes are developed in bounded backward expansions.
+The scene count is a cap. Do not impose an introduction length or first-hub width.
+Linear chapters have one continuation and meaningful branches have two to five.
+Legacy policies retain their frozen topology rules. Use only exact
 `claimant_id` values from ALLOWED GENESIS CLAIMANTS in claimant pressures, listing
 them individually for collective pressure; never use technical slots or group aliases.
 Obligation origins and sources must use IDs authored in this record or exact IDs from

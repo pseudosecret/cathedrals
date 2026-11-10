@@ -252,7 +252,7 @@
             "playable_status": { "const": "READY_TO_PLAY" }
           }
         },
-        "execution_policy": {"type": "object", "additionalProperties": false, "required": ["bounded_planning", "scoped_sources", "retrieval_mode", "max_tool_rounds", "max_tool_calls"], "properties": {"bounded_planning": {"type": "boolean"}, "scoped_sources": {"type": "boolean"}, "retrieval_mode": {"enum": ["tools", "automatic"]}, "max_tool_rounds": {"const": 2}, "max_tool_calls": {"const": 8}, "completion_contract_version": {"const": 1}}}
+        "execution_policy": {"type": "object", "additionalProperties": false, "required": ["bounded_planning", "scoped_sources", "retrieval_mode", "max_tool_rounds", "max_tool_calls"], "properties": {"bounded_planning": {"type": "boolean"}, "scoped_sources": {"type": "boolean"}, "retrieval_mode": {"enum": ["tools", "automatic"]}, "max_tool_rounds": {"const": 2}, "max_tool_calls": {"const": 8}, "completion_contract_version": {"const": 1}, "scaffold_planning_version": {"const": 1}}}
       }
     },
     "workCanon": {
@@ -899,7 +899,7 @@
           "then": {
             "properties": {
               "scene_slot_ids": { "maxItems": 0 },
-              "ending_slot_ids": { "minItems": 2, "maxItems": 6 }
+              "ending_slot_ids": { "minItems": 1, "maxItems": 6 }
             }
           }
         }
@@ -920,7 +920,7 @@
         "thematic_function": { "$ref": "#/$defs/nonEmptyString" },
         "emotional_register": { "$ref": "#/$defs/nonEmptyString" },
         "foreclosable": { "type": "boolean" },
-        "prerequisite_obligation_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+        "prerequisite_obligation_ids": { "type": "array", "minItems": 0, "items": { "$ref": "#/$defs/id" } },
         "soft_seed_conditions": { "$ref": "#/$defs/stringList" },
         "unresolved_realization": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmptyString" } },
         "relevance": { "$ref": "#/$defs/relevanceTags" }
@@ -980,7 +980,6 @@
         "attractors": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 16,
           "items": { "$ref": "#/$defs/attractor" }
         },
         "arcs": { "type": "array", "minItems": 4, "maxItems": 24, "items": { "$ref": "#/$defs/arc" } },
@@ -996,7 +995,8 @@
             "reconvergence_node_ids": { "$ref": "#/$defs/idList" }
           }
         },
-        "constraint_delta": { "$ref": "#/$defs/constraintDelta" }
+        "constraint_delta": { "$ref": "#/$defs/constraintDelta" },
+        "causal_scaffold": { "$ref": "#/$defs/causalScaffold" }
       }
     },
     "architecturePlanBatch": {
@@ -1927,6 +1927,231 @@
           }
         }
       ]
+    },
+    "scaffoldRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requirement_id",
+        "description"
+      ],
+      "properties": {
+        "requirement_id": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 800
+        }
+      }
+    },
+    "scaffoldEntryCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "requirements"
+      ],
+      "properties": {
+        "case_id": {
+          "$ref": "#/$defs/id"
+        },
+        "requirements": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/scaffoldRequirement"
+          }
+        }
+      }
+    },
+    "scaffoldSupport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requirement_id",
+        "guarantee_ids",
+        "genesis_source_ids",
+        "reason"
+      ],
+      "properties": {
+        "requirement_id": {
+          "$ref": "#/$defs/id"
+        },
+        "guarantee_ids": {
+          "$ref": "#/$defs/idList"
+        },
+        "genesis_source_ids": {
+          "$ref": "#/$defs/idList"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1200
+        }
+      }
+    },
+    "scaffoldTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "to_node_id",
+        "target_case_id",
+        "supports"
+      ],
+      "properties": {
+        "to_node_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_case_id": {
+          "$ref": "#/$defs/id"
+        },
+        "supports": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/scaffoldSupport"
+          }
+        }
+      }
+    },
+    "scaffoldNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "kind",
+        "terminal_role",
+        "arc_id",
+        "attractor_id",
+        "purpose",
+        "intended_change",
+        "entry_cases",
+        "guarantees",
+        "preserves",
+        "successors",
+        "prerequisite_obligation_ids"
+      ],
+      "properties": {
+        "node_id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "scene",
+            "ending"
+          ]
+        },
+        "terminal_role": {
+          "enum": [
+            "none",
+            "final",
+            "premature"
+          ]
+        },
+        "arc_id": {
+          "$ref": "#/$defs/id"
+        },
+        "attractor_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1200
+        },
+        "intended_change": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1200
+        },
+        "entry_cases": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": {
+            "$ref": "#/$defs/scaffoldEntryCase"
+          }
+        },
+        "guarantees": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/scaffoldRequirement"
+          }
+        },
+        "preserves": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 800
+          }
+        },
+        "successors": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 5,
+          "items": {
+            "$ref": "#/$defs/scaffoldTransition"
+          }
+        },
+        "prerequisite_obligation_ids": {
+          "$ref": "#/$defs/idList"
+        }
+      }
+    },
+    "causalScaffold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "opening_node_id",
+        "opening_support",
+        "nodes",
+        "slot_ids"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "opening_node_id": {
+          "$ref": "#/$defs/id"
+        },
+        "opening_support": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/scaffoldSupport"
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 10,
+          "items": {
+            "$ref": "#/$defs/scaffoldNode"
+          }
+        },
+        "slot_ids": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/id"
+          }
+        }
+      }
     }
   }
 }

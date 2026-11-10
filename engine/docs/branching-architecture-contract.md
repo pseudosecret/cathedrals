@@ -13,10 +13,10 @@ Its role is to prevent the system from collapsing into three shallow claimant sp
 The work should read like:
 
 1. a reader-perspective introduction
-2. an exact three-option opening hub
-3. a branching tree that splinters further
+2. linear chapters and a first meaningful branch when the story earns it
+3. branches with two to five distinct successors
 4. selective reconvergence where prior state still matters
-5. endings that may terminate, condemn, vindicate, or redirect into a new beginning
+5. terminal final or premature endings earned by their own incoming paths
 
 The engine must treat this as authored structure, not optional flavor.
 
@@ -25,7 +25,7 @@ The engine must treat this as authored structure, not optional flavor.
 Requirements:
 
 - begin from the reader's perspective rather than a detached overview
-- deliver 3 to 5 scene-pages before the first live choice hub
+- let story pressure determine the number of scenes before the first branch
 - keep the introduction eventful and pressure-bearing
 - allow up to roughly 1.5 pages total of reflection interspersed across the opening sequence
 - do not require the full claimant roster to be introduced before the first choice
@@ -40,14 +40,13 @@ Disallowed failures:
 
 Requirements:
 
-- the first live hub must present exactly three options
+- the first live branch presents two to five meaningful options; preceding linear scenes have one continuation
 - each option label should summarize the scene-level decision the reader is making
 - each option must lead to a materially different onward scene or branch emphasis
 - the opening hub may lean toward different claimants without reducing to a bare claimant picker
 
 Disallowed failures:
 
-- only one live opening action
 - a fake three-way hub where all choices immediately collapse into the same scene with no meaningful difference
 - labels that describe destinations instead of decisions
 
@@ -68,11 +67,11 @@ Interpretation rule:
 
 Rules:
 
-- opening branches must splinter again at least once before the architecture feels complete
+- backward expansion derives earlier scenes from existing successor requirements; branches and linear chapters may alternate
 - different branches may end at different depths
 - reconvergence is lawful when the shared scene still reflects prior path history through state, pressure, or closed alternatives
 - a literally shared scene is lawful if inbound state remains meaningful
-- the graph may include redirective endings that become new beginnings on another branch
+- progression is acyclic; browser history and start_over are separate from story edges
 
 Disallowed failures:
 
@@ -102,13 +101,13 @@ Allowed ending behaviors:
 - favorable or costly resolution
 - bad ending or foreclosure
 - contamination implication
-- redirective ending that opens a new beginning elsewhere in the graph
+- a premature ending earned before the main resolution
 
 Rules:
 
 - not every ending must be terminal in the same way
 - endings should feel like selection and consequence, not merely stopping points
-- redirective endings must be graph-explicit and not improvised at runtime
+- final and premature endings are terminal under scaffold planning; neither redirects nor runtime continuation is permitted
 
 ## Navigation Semantics
 
@@ -123,15 +122,15 @@ Rules:
 The committed architecture and packet records must collectively encode:
 
 - which scenes belong to the introduction sequence
-- which scene or hub is the first exact three-option decision
+- where linear scenes continue and meaningful branches provide two to five options
 - branch depth and branch role for each scene
 - where reconvergence is allowed
 - which decisions are major and require hesitation surfaces
-- which endings are terminal and which are redirective
+- each terminal outcome and its alternative sufficient entry cases
 
 Deterministic preparation may fix abstract slots, edge cardinalities, branch depths,
-reconvergence capacity, and state laws. Generated architecture freezes actual branch
-families, hard dependencies, promises, and ending attractors; later literary packets
+reconvergence capacity, and state laws. Generated architecture develops a backward causal scaffold, then compiles actual
+slots, navigation, dependencies, promises, and ending attractors; later literary packets
 instantiate content without revising canon. Noncanonical packet priority and
 future-feasibility assignments may be recomputed after each commit.
 
@@ -143,7 +142,7 @@ The compiled graph must explicitly encode:
 - the opening hub sibling group
 - multi-option decision groups with live-option counts
 - reconvergent nodes with multiple inbound edges
-- redirective ending edges when an ending becomes a new beginning
+- terminal outcomes with no outgoing story edges
 
 Technical scene and ending slots are the stable cross-packet linking layer. An edge
 to unwritten content commits a `destination` with `kind: technical_slot`; generated
@@ -157,7 +156,7 @@ are terminal mechanical failures.
 The reader-facing build must:
 
 - make the introduction feel like story, not setup metadata
-- render choices as real decisions, not lone continuation buttons
+- render branches as real decisions and linear chapters with their authored continuation
 - distinguish `start_over` from in-story hesitation
 - support path-trace display for opened and closed alternatives even after reconvergence
 - avoid implying browser-history semantics when only reset is available

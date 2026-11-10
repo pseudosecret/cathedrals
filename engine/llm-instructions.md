@@ -62,8 +62,8 @@ the still-uncommitted Genesis constraints step, resolve an invalid reference to 
 existing claimant or supporting character when plausible. Expand only for a genuinely
 distinct world-logic, preferring promotion of an existing character, and never exceed
 twelve claimants. No claimant is otherwise locked, prewritten, selected from an
-archetype menu, or assigned a fictional role in advance. The opening hub is exactly
-three situated actions, not a claimant selector.
+archetype menu, or assigned a fictional role in advance. The first branch is story-led, with two to five situated actions rather than a
+claimant selector. Linear chapters have one authored continuation.
 
 ## Fictional Envelope
 
@@ -82,9 +82,9 @@ ontological consequence.
 ## Branching, Geomancy, Prose, and Artifacts
 
 Obey the branching contract and fractal grammar. Preserve the reader-perspective
-opening, three to five pre-hub scenes, exact three-option hub, downstream splitting,
+opening, linear chapters, branches with two to five successors, downstream splitting,
 stateful reconvergence, unequal depths, two-to-five-option decisions, consequential
-hesitation, redirective endings, contamination, and `start_over` distinction.
+hesitation, earned terminal endings, contamination, and `start_over` distinction.
 
 Use precomputed threshold geomancy for the relevant slots as symbolic weather. Never
 reinterpret earlier prose to improve geomantic fit. All reader-facing prose remains

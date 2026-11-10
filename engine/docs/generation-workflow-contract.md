@@ -1,5 +1,18 @@
 # Generation Workflow Contract
 
+## Backward Scaffold Policy
+
+New runs freeze scaffold_planning_version=1. After macro intentions, seed terminal
+outcomes and expand earlier scenes in checkpointed groups of at most four. Validate
+causal support locally. Linear chapters have one successor; branches have two to
+five. Final and premature endings are terminal, with route-specific entry cases.
+Only a single Genesis-grounded opening closes the frontier. Compile technical
+slots, authored-exit requirements, actual scope, and writing dependencies afterward.
+Scene count is a ceiling, not a requirement to fill. Write prose forward; audit hard
+guarantees against immutable source quotations for every admitted entry case.
+The older allocation and navigation repair sections below describe legacy policies;
+scaffold runs bypass those stages. See engine/docs/backward-scaffold.md.
+
 ## Invariant
 
 One pass means one autonomous generation run: frozen inputs progress causally forward

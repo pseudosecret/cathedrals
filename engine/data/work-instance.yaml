@@ -290,11 +290,12 @@ aesthetic_attractor:
 branching_experience_model:
   introduction_sequence:
     reader_perspective_required: true
-    scene_surfaces_before_first_live_hub_min: 3
-    scene_surfaces_before_first_live_hub_max: 5
+    first_branch_timing: story_led
+    linear_chapters_allowed: true
     eventful_and_pressure_bearing: true
   opening_choice_hub:
-    live_option_count_exact: 3
+    live_option_count_min: 2
+    live_option_count_max: 5
     option_content_generated: true
     claimant_selector_forbidden: true
     requirements:
@@ -305,14 +306,18 @@ branching_experience_model:
     live_option_min: 2
     live_option_soft_max: 4
     live_option_hard_max: 5
-    single_option_choice_forbidden: true
+    linear_continuation_option_count: 1
+    single_option_is_navigation_not_decision: true
   topology:
-    abstract_skeleton_prepared_deterministically: true
-    opening_branches_split_again: true
+    scaffold_direction: backward_from_terminal_outcomes
+    technical_slots_compiled_after_scaffold: true
+    scene_count_is_cap: true
+    progression_graph: directed_acyclic
+    opening_branches_split_again: story_led
     meaningful_reconvergence_allowed: true
     inbound_state_survives_reconvergence: true
     variable_branch_depth_required: true
-    redirective_endings_allowed: true
+    redirective_endings_allowed: false
   major_decisions:
     hesitation_surface_required: true
     hesitation_has_state_consequence: true
@@ -418,7 +423,7 @@ scope:
   packet_shape:
     literary_scenes_min: 3
     literary_scenes_max: 8
-    endings_min: 2
+    endings_min: 1
     endings_max: 6
     associated_artifacts_max: 6
   notes:
@@ -439,12 +444,16 @@ format_selection:
   renpy_bootstrap_active: false
 
 generation_budget:
-  calculation_version: 12
+  calculation_version: 13
   primary_scale_input: possible_scene_count
   words_per_token_assumption: 0.75
   max_prepared_context_tokens: 49152 # Legacy cap; normal input target for completion-contract v1.
   normal_prepared_context_tokens: 49152
   completion_contract_version: 1
+  scaffold_planning_version: 1
+  scaffold_expansion_node_maximum: 4
+  scaffold_branch_destination_maximum: 5
+  scaffold_reader_states_per_node_maximum: 128
   completion_contract_hard_input_allowance: verified_loaded_window_minus_output_and_safety
   max_planning_context_tokens: derived_per_run
   minimum_planning_output_tokens: 256
@@ -501,17 +510,20 @@ generation_budget:
       max(max_prepared_context_tokens, max_planning_context_tokens)
     creative_steps: >
       three Genesis records + one Architecture core + ceil(packet_plan_count / 8)
-      plan batches + worst-case one committed chunk per scene or ending
+      plan batches + ceil(ending_hard_max / 8) additional scaffold plan batches
+      + worst-case one committed chunk per scene or ending
     analysis_steps: >
       max(4, ceil(possible_scene_count / 3) + ceil(ending_hard_max / 2) + 2)
       + reference_repair_allowance_per_chunk * (possible_scene_count + ending_hard_max)
       + planning_recovery_allowance
       + semantic_recovery_allowance
+      + scaffold_recovery_allowance
     planning_recovery_allowance: >
       3 * (schema-bounded core field count + plan_batch_count * schema-bounded
       batch field count + 2 * (maximum ending seed/prerequisite placements +
       maximum preserved plan hints)); object arrays use schema maxItems and
       primitive arrays count as one field value
+    scaffold_recovery_allowance: "15 * (possible_scene_count + ending_hard_max) + 6"
     semantic_recovery_allowance: >
       3 * (5 * (possible_scene_count + ending_hard_max) + max_constraint_events)
     constraint_events: "max(1000, possible_scene_count * 45)"
@@ -553,7 +565,7 @@ generation_run:
   prospective_plan_mutable_after_each_commit: true
   phases:
     - genesis_foundation_cast_and_constraints
-    - macroarchitecture_core_and_plan_batches
+    - macro_intentions_backward_scaffold_and_compiled_plan_batches
     - forward_literary_packets
     - endings_and_residue
     - validation_and_static_build
@@ -576,6 +588,7 @@ run_processing:
   creative_steps_may:
     - author_genesis
     - author_frozen_macroarchitecture
+    - author_backward_scene_and_outcome_contracts
     - author_forward_literary_packets
     - author_prerequisite_satisfied_ending_packets
   analysis_steps_may:
@@ -587,6 +600,7 @@ run_processing:
     - retrieve_relevant_immutable_passages
   deterministic_steps_may:
     - validate_protocol_records_ids_references_graph_and_state
+    - compile_slots_navigation_and_packet_dependencies_from_causal_scaffold
     - append_ledger_and_constraint_events
     - recompute_audited_prospective_plan
     - project_committed_records_into_repo_files
