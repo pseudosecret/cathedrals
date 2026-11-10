@@ -428,6 +428,7 @@ scope:
     endings_max: 6
     associated_artifacts_max: 6
   notes:
+    - "Requests of 8–12 scenes use a small acceptance scope: one artifact, two endings, no required formal compositions, one branch pressure and no reconvergence pressure; macro planning uses one or two arcs, at most four attractors and six obligations. These override the larger pilot heuristics below this scale."
     - "Unequal branch depth is required; counts do not imply claimant-route symmetry."
     - "Reused locations and stateful variants count only when the state difference matters."
     - "The large target is 42,300 literary words: 72x450 scene, 20x250 artifact, and 14x350 ending words."

@@ -99,6 +99,13 @@ Original macro attractor
 IDs remain declared as pressures. Normal context limits and publication checks stay
 in effect.
 
+Outcome drafting receives the existing obligation definitions. Selecting a hard
+prerequisite compiles its complete dependency closure into every alternative entry
+case before backward expansion. These are required future achievements, not facts.
+Compilation refuses to drop required conditions to meet an interface bound.
+Requests of 8–12 scenes use reduced scope and macro-planning bounds; see
+[First complete work](first-complete-work.md) for the eight-scene acceptance target.
+
 Forward writing receives its local contracts, predecessor support, successor entry
 requirements, and directly fetched immutable evidence. It never receives the full
 scaffold merely to write one scene. Linear chapter assignments require exactly one
@@ -119,9 +126,11 @@ preserved condition for every incoming route and its admitted entry case using
 exact original quotations. Routes sharing the same case ID still receive separate
 checks.
 Evidence from an unrelated alternative case is rejected. Thematic intentions are
-advisory, and a linear chapter need not add a fact. Unsupported hard promises pause
-with the original prose intact. They cannot be repaired by inventing normalization
-facts or rewriting literary bytes. This is model-assisted semantic verification;
+advisory, and a linear chapter need not add a fact. Unsupported hard promises receive
+one source-only reconsideration, checkpointed separately with the original judgment
+retained. A sustained rejection fails with the original prose intact and a diagnostic
+naming the promise and permitted sources. It cannot be repaired by inventing
+normalization facts or rewriting literary bytes. This is model-assisted semantic verification;
 it does not prove literary quality or eliminate model mistakes.
 
 `.staging/causal-scaffold.json` checkpoints accepted
@@ -160,3 +169,10 @@ exactly-once replay after target, declaration and amendment checkpoint interrupt
 The full suite also includes the current 30-scene publication/resume rehearsal and
 existing 150-scene static publication and 5,000-scene structural checks. No live
 model call or change to an existing attempt was part of this verification.
+
+First-completion verification: all 349 offline tests passed with network access
+blocked. This includes eight scenes, two endings and static publication through the
+same pipeline, with interruption after a committed packet and after publication.
+Recovery preserved output and accounting without another provider call. Source
+audit regressions cover one reconsideration, interrupted replay, sustained failure,
+unchanged prose and invalid quotations. No live-model or browser acceptance was run.

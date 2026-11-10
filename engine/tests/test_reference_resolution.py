@@ -249,7 +249,8 @@ class ReferenceResolutionTests(unittest.TestCase):
             foundation = RUNNER.committed_record(self.run, "genesis_foundation")
             value["obligation_graph"][0].update(created_by_ids=[foundation["commit_id"]], sources=[{
                 "artifact_type": "genesis", "artifact_id": foundation["commit_id"], "source_locator": "Synthetic foundation."}])
-            value["arcs"] = [copy.deepcopy(value["arcs"][0]) | {"arc_id": f"arc_draft_{index}"} for index in range(1, 5)]
+            value["arcs"] = [copy.deepcopy(value["arcs"][0]) | {"arc_id": f"arc_draft_{index}"}
+                for index in range(1, 3 if getattr(self, "scene_count", 20) <= 12 else 5)]
             record = RUNNER.build_architecture_core(self.run, value)
             return {key: record[key] for key in ("arcs", "attractors", "obligation_graph", "topology")} | {
                 "saturation_rationale": value["saturation_rationale"]}
@@ -322,8 +323,9 @@ class ReferenceResolutionTests(unittest.TestCase):
                     seed = "complete" in fields
                     context = json.loads(prompt.split("\n", 1)[1] if seed else prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
                     offset = context.get("outcomes_accepted", context.get("scenes_accepted", 0))
+                    ending_count = getattr(self, "ending_count", 5)
                     count = min(context.get("maximum_this_page", context.get("allocated_capacity", 0)),
-                        (5 if seed else getattr(self, "scene_count", 20)) - offset)
+                        (ending_count if seed else getattr(self, "scene_count", 20)) - offset)
                     declarations = [{"arc_id": "arc_001", "purpose": f"Synthetic purpose {offset + index}.",
                         "intended_change": "Synthetic development.", "entry_cases": [{"requirements": [] if seed else ["Synthetic committed premise."]}],
                         "guarantees": ["Synthetic terminal change."] if seed else [], "preserves": []}
@@ -332,7 +334,7 @@ class ReferenceResolutionTests(unittest.TestCase):
                         for item in declarations:
                             item.update(terminal_role="final", attractor_id=fields["nodes"]["items"]["properties"]["attractor_id"]["enum"][0],
                                 prerequisite_obligation_ids=[])
-                    value = {"nodes": declarations} | ({"complete": offset + count == 5} if seed else {})
+                    value = {"nodes": declarations} | ({"complete": offset + count == ending_count} if seed else {})
                 elif "connections" in fields:
                     context = json.loads(prompt.split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
                     targets = context["successor_interfaces"]
@@ -435,6 +437,7 @@ class ReferenceResolutionTests(unittest.TestCase):
         import shutil
         shutil.copytree(RUNNER.engine_root(self.run), self.root / "engine")
         recompute = RUNNER.recompute_prospective_plan
+        publish = RUNNER.publish_success
         interrupted = False
         def checkpoint(*args, **kwargs):
             nonlocal interrupted
@@ -443,21 +446,43 @@ class ReferenceResolutionTests(unittest.TestCase):
                 interrupted = True
                 raise KeyboardInterrupt("Synthetic interruption after a durable packet")
             return result
-        with mock.patch.object(RUNNER, "ROOT", self.root), mock.patch.object(RUNNER, "recompute_prospective_plan", side_effect=checkpoint):
+        def publish_checkpoint(*args):
+            destination = publish(*args)
+            if getattr(self, "interrupt_after_publish", False):
+                raise KeyboardInterrupt("Synthetic interruption after publication")
+            return destination
+        with mock.patch.object(RUNNER, "ROOT", self.root), mock.patch.object(RUNNER, "recompute_prospective_plan", side_effect=checkpoint), mock.patch.object(
+                RUNNER, "publish_success", side_effect=publish_checkpoint) as publisher:
             if getattr(self, "interrupt_after_first_packet", False):
                 with self.assertRaises(KeyboardInterrupt):
                     RUNNER.execute_run(self.run, output_fn=lambda _: None, transport=transport)
                 archives = {path: path.read_bytes() for path in (self.run / "committed").rglob("*") if path.is_file()}
                 prefix = (self.run / "ledger.jsonl").read_bytes()
-            build_path, counts, _brief = RUNNER.execute_run(self.run, output_fn=lambda _: None, transport=transport)
+            if getattr(self, "interrupt_after_publish", False):
+                with self.assertRaisesRegex(KeyboardInterrupt, "after publication"):
+                    RUNNER.execute_run(self.run, output_fn=lambda _: None, transport=transport)
+                self.assertFalse((self.run / "finalization.json").exists())
+                published = self.root / "generated-work" / self.run.name
+                published_bytes = {path: path.read_bytes() for path in published.rglob("*") if path.is_file()}
+                prefix = (self.run / "ledger.jsonl").read_bytes()
+            provider = mock.Mock(side_effect=AssertionError("Recovery contacted provider")) if getattr(self, "interrupt_after_publish", False) else transport
+            build_path, counts, _brief = RUNNER.execute_run(self.run, output_fn=lambda _: None, transport=provider)
+            if getattr(self, "interrupt_after_publish", False):
+                self.assertEqual(publisher.call_count, 1)
+                self.assertEqual((self.run / "ledger.jsonl").read_bytes(), prefix)
+                for path, original in published_bytes.items(): self.assertEqual(path.read_bytes(), original)
             if getattr(self, "interrupt_after_first_packet", False):
                 self.assertTrue((self.run / "ledger.jsonl").read_bytes().startswith(prefix))
                 for path, original in archives.items(): self.assertEqual(path.read_bytes(), original)
         self.assertEqual(counts["scenes"], getattr(self, "scene_count", 20))
+        self.assertEqual(counts["endings"], getattr(self, "ending_count", 5))
         with RUNNER.index_connection(self.run) as db:
             kinds = {row[0] for row in db.execute("SELECT DISTINCT kind FROM search_documents")}
             profiles = db.execute("SELECT commit_id,pointer FROM search_documents WHERE source_id='claimant_01' AND kind='root'").fetchall()
-        self.assertTrue({"root", "plan", "literary", "composition", "constraint"}.issubset(kinds))
+        required_kinds = {"root", "plan", "literary", "constraint"}
+        if RUNNER.derive_scope(getattr(self, "scene_count", 20))["scope"]["formal_composition_target"]:
+            required_kinds.add("composition")
+        self.assertTrue(required_kinds.issubset(kinds))
         self.assertGreaterEqual(len(profiles), 2)
         self.assertEqual(len(profiles), len(set(profiles)))
         plan_hits = RUNNER.search_history(self.run, RUNNER.search_query({"relevance": {"keywords": ["documented"]}}))
@@ -470,9 +495,8 @@ class ReferenceResolutionTests(unittest.TestCase):
                 self.assertEqual(meta["supplemental_hashes"]["retrieval-receipt.json"], RUNNER.sha256_file(directory / "retrieval-receipt.json"))
                 self.assertEqual(receipt["context_hash"], meta["ledger_entry"]["context_hash"])
                 self.assertEqual(receipt["attempt"], meta["ledger_entry"]["attempt"])
-        self.assertEqual(counts["endings"], 5)
         self.assertEqual(len(authored_slots), len(set(authored_slots)))
-        self.assertEqual(calls.count("reference"), 2 * getattr(self, "scene_count", 20) + 12)
+        self.assertEqual(calls.count("reference"), 2 * (getattr(self, "scene_count", 20) + getattr(self, "ending_count", 5)) + 2)
         self.assertEqual(calls.count("architectureCorePayload"), 0 if bounded else 1)
         self.assertGreater(calls.count("planningValue"), 0)
         self.assertGreater(calls.count("planningBatchValues"), 0)

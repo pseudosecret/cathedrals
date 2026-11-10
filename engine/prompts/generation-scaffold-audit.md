@@ -14,6 +14,12 @@ Intended dramatic/thematic change remains advisory. A linear chapter need not ad
 a fact. Mark unsupported promises honestly; do not rewrite prose or invent facts.
 Only cite sources permitted by that task. Supported answers require a quotation.
 
+If previous_unsupported_judgments is supplied, this is the single reconsideration
+of those failed checks, not a request to pass them. Re-read the same immutable
+sources. A reversal must quote the supporting text and explain in reason why the
+original objection was mistaken. Keep supported=false when the promised event or
+condition is absent. Do not weaken the promise or infer an unperformed choice.
+
 LOCAL AUDIT CONTEXT
 
 {{SCAFFOLD_CONTEXT}}

@@ -141,6 +141,11 @@ class BackwardScaffoldTests(unittest.TestCase):
         scaffold = mixed_scaffold(); final = scaffold["nodes"][-1]
         final["prerequisite_obligation_ids"] = ["obligation_one"]
         core = core_fixture()
+        final["entry_cases"][0]["requirements"] = [{"requirement_id": "ending_requirement", "description":
+            RUNNER.scaffold_prerequisite_requirements(core["obligation_graph"], ["obligation_one"])[0]}]
+        predecessor = next(node for node in scaffold["nodes"] if any(edge["to_node_id"] == final["node_id"] for edge in node["successors"]))
+        predecessor["successors"][0]["supports"] = [{"requirement_id": "ending_requirement", "guarantee_ids": [],
+            "genesis_source_ids": ["commit_genesis"], "reason": "Synthetic prerequisite evidence."}]
         RUNNER.write_json(self.run / ".staging/architecture_core.planning.json", {"payload": {}, "record": core})
         state = {key: value for key, value in scaffold.items() if key != "slot_ids"} | {"round": 2, "complete": True}
         RUNNER.write_json(self.run / ".staging/causal-scaffold.json", state)
@@ -193,7 +198,7 @@ class BackwardScaffoldTests(unittest.TestCase):
             ending_schema = RUNNER.packet_payload_schema(self.run, RUNNER.single_content_packet_plans(plans[-1])[0])
         self.assertEqual(ending_schema["$defs"]["endingPayload"]["properties"]["redirect_destination"], {"type": "null"})
 
-    def test_unsupported_guarantee_pauses_without_changing_literary_bytes(self):
+    def test_unsupported_guarantee_fails_without_changing_literary_bytes(self):
         core = core_fixture(mixed_scaffold()); plans = RUNNER.scaffold_packet_plans(core)
         node_value = core["causal_scaffold"]["nodes"][0]
         node_value["guarantees"] = [{"requirement_id": "must_be_earned", "description": "A synthetic event occurred."}]
@@ -209,7 +214,7 @@ class BackwardScaffoldTests(unittest.TestCase):
         with mock.patch.object(RUNNER, "execution_policy", return_value=POLICY), mock.patch.object(RUNNER, "committed_record", return_value=core), mock.patch.object(
                 RUNNER, "request_architecture_analysis", side_effect=request), mock.patch.object(RUNNER, "preserve_planning_result"), mock.patch.object(
                 RUNNER, "scaffold_inherited_evidence", return_value={"inherited_guarantee_evidence": [], "immutable_source_units": {"commit_genesis": ["Synthetic committed premise."]}}):
-            with self.assertRaisesRegex(RUNNER.PausedError, "does not establish its frozen promises"):
+            with self.assertRaisesRegex(RUNNER.CathedralsError, "remains unsupported after one evidence reconsideration"):
                 RUNNER.audit_scaffold_guarantees(self.run, "synthetic_packet", artistic, plan, None)
         self.assertEqual(RUNNER.canonical_json(artistic), before)
 
