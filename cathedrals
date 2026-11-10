@@ -5131,7 +5131,7 @@ def request_architecture_analysis(
     *, phase="architecture", system_prompt="Repair only the identified uncommitted Architecture fields. Return JSON only.",
     response_name="architectureRepair", pause_stage="Architecture repair",
     value_mode=False, value_path=None, initial_draft=False, temperature=0.0, max_tokens=None,
-    planning_mode=False, context_purpose="planning", retrieval_task=None,
+    planning_mode=False, context_purpose="planning", retrieval_task=None, result_normalizer=None,
 ):
     brief = read_json(run_dir / "generation-brief.json")
     seed = step_seed(brief["generation_seed"], step_id)
@@ -5210,6 +5210,8 @@ def request_architecture_analysis(
                 authored = planning_string_value(content, schema, value_path)
             else:
                 authored = parse_structured_content(content)
+            if result_normalizer:
+                authored = result_normalizer(authored)
             validate_json_schema(authored, schema)
             if validator:
                 validator(authored)
@@ -8613,6 +8615,21 @@ def scaffold_opening_candidate(state, nodes):
     return opening
 
 
+def normalize_scaffold_repair_selectors(result):
+    if not isinstance(result, dict):
+        return result
+    result = copy.deepcopy(result)
+    def unique(items):
+        return list(dict.fromkeys(items)) if isinstance(items, list) and all(isinstance(item, str) for item in items) else items
+    for field in ("contract_repairs", "connection_repairs"):
+        if isinstance(result.get(field), dict):
+            result[field] = {identifier: unique(items) for identifier, items in result[field].items()}
+    issue = result.get("contract_issue")
+    if isinstance(issue, dict) and "fields" in issue:
+        issue["fields"] = unique(issue["fields"])
+    return result
+
+
 def review_scaffold_connections(run_dir, step, patch, frontier, contract_fields, mechanical_problem, transport):
     identifiers = [node["node_id"] for node in patch["nodes"]]
     source_ids = {identifier for node in patch["nodes"] for edge in node["successors"] for support in edge["supports"]
@@ -8632,16 +8649,18 @@ def review_scaffold_connections(run_dir, step, patch, frontier, contract_fields,
     def validate(result):
         repairs = bool(result["contract_repairs"] or result["connection_repairs"])
         if result["supported"] and (repairs or mechanical_problem):
-            raise SchemaError("A supported expansion must have no structural problem or requested repairs")
+            raise SchemaError("supported=true conflicts with requested repairs or a mechanical problem; return supported=false and identify the necessary repairs")
         if not result["supported"] and not repairs:
             raise SchemaError("Identify the specific uncommitted contract fields or predecessor connections needing correction")
     prompt = render_prompt(run_dir, "generation-scaffold-review.md", {"SCAFFOLD_CONTEXT": canonical_json({
-        "patch": patch, "existing_successors": frontier, "committed_genesis_sources": sources,
+        "patch": patch, "existing_successors": [{key: value for key, value in node.items() if key != "successors"} for node in frontier],
+        "committed_genesis_sources": sources,
         "mechanical_problem": mechanical_problem}).decode()})
     query = step + "_review_" + sha256_bytes(prompt.encode())[:16]
     result, response = request_architecture_analysis(run_dir, query, prompt, schema, transport, validator=validate,
         planning_mode=True, max_tokens=3072, pause_stage="Scaffold causal support",
-        system_prompt="Verify only causal support and compatibility in uncommitted planning. Return JSON only.")
+        system_prompt="Verify only causal support and compatibility in uncommitted planning. Return JSON only.",
+        result_normalizer=normalize_scaffold_repair_selectors)
     preserve_planning_result(run_dir, "architecture_core", query, result, response, kind="scaffold_connection_review")
     return result
 
@@ -8743,7 +8762,8 @@ def prepare_scaffold_expansion_v2(run_dir, state, core, targets, allocated, tran
                 query = step + "_connect_" + sha256_bytes(prompt.encode())[:16]
                 selected, response = request_architecture_analysis(run_dir, query, prompt, schema, transport,
                     planning_mode=True, max_tokens=6144, pause_stage="Scaffold connections",
-                    system_prompt="Select only supplied successor interfaces and evidence. Return JSON only.")
+                    system_prompt="Select only supplied successor interfaces and evidence. Return JSON only.",
+                    result_normalizer=normalize_scaffold_repair_selectors)
                 preserve_planning_result(run_dir, "architecture_core", query, selected, response, kind="scaffold_connections")
                 if "contract_issue" in selected:
                     binding_issue = {"supported": False, "reason": selected["contract_issue"]["reason"],

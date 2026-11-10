@@ -118,7 +118,7 @@ class ScaffoldCompilerTests(unittest.TestCase):
                 if identifier == interrupt and not interrupted[0]:
                     interrupted[0] = True; raise RUNNER.PausedError("Scaffold connections", "Synthetic interruption")
                 if identifier == contract_issue and source["guarantees"][0]["description"] != "Synthetic amended guarantee.":
-                    result = {"contract_issue": {"fields": ["guarantees"], "reason": "Synthetic missing guarantee."}}
+                    result = {"contract_issue": {"fields": ["guarantees", "guarantees"], "reason": "Synthetic missing guarantee."}}
                 else:
                     earlier = [target for target in context["successor_interfaces"] if target["kind"] == "scene"]
                     chosen = earlier[-1:] if earlier else context["successor_interfaces"]
@@ -130,6 +130,8 @@ class ScaffoldCompilerTests(unittest.TestCase):
                 result = {identifier: {"guarantees": ["Synthetic amended guarantee."]} for identifier in schema["properties"]}
             else:
                 raise AssertionError("Unexpected provider request: " + step)
+            if kwargs.get("result_normalizer"):
+                result = kwargs["result_normalizer"](result)
             RUNNER.validate_json_schema(result, schema)
             if kwargs.get("validator"): kwargs["validator"](result)
             return result, {}

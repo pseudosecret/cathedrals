@@ -36,6 +36,14 @@ Four review rounds per invocation bound this recovery. The latest amendments and
 all accepted work survive a pause. No committed contract or literary bytes are
 changed by these draft repairs.
 
+Repair field/destination selectors are treated as sets: exact repeated strings are
+removed before schema validation, preserving their first-occurrence order. This
+also applies to `contract_issue.fields`. The original raw response stays unchanged;
+the planning audit and ledger retain the canonical selection. Unknown names,
+malformed values, duplicate JSON keys and contradictory support verdicts still fail.
+Causal review receives accepted successor interfaces without their outgoing edges,
+so its evidence bundle covers the new patch rather than unrelated older routes.
+
 Closure is a separate request, offered only after one opening reaches all nodes,
 all alternative entries are supported, eight scenes exist, and the opening has one
 explicit entry case. A free `complete=true` flag cannot close an expansion. Genesis
@@ -113,6 +121,10 @@ Implementation: root `cathedrals`; protocol definitions in
 `engine/tests/test_backward_scaffold.py` and `engine/tests/test_scaffold_compiler.py`, covering mixed linear/branch structures,
 orphan slots, merges, capacity, interrupted expansion, source preservation, and
 100/150-scene static publication fixtures, plus iterative 5,000-scene graph validation.
+`engine/tests/test_scaffold_review.py` covers repeated selectors, strict rejection
+of invalid reviews, scoped evidence, raw response preservation, and replay without
+duplicate usage. The selector/context repair passed all 323 offline tests with
+network access blocked; no live generation or existing run archive was changed.
 
 Offline imports and synthetic tests are authorized for engine cleanup, with network
 access blocked. The acceptance suite exercises a current version 2 generation,
