@@ -30,16 +30,19 @@ class ScaffoldReviewTests(unittest.TestCase):
         return RUNNER.review_scaffold_connections(self.run, "scaffold_expand_00004", self.patch, self.frontier, transport)
 
     def test_rejection_is_bound_to_one_of_several_predecessors_of_the_same_case(self):
-        response = {}
+        responses, reviewed = {}, {}
         def transport(_method, _url, request, **kwargs):
             context = json.loads(request["messages"][1]["content"].split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
             supports = {key: task for key, task in context["tasks"].items() if task["kind"] == "support"}
-            self.assertEqual(len(supports), 4)
-            self.assertEqual({task["requirement"]["requirement_id"] for task in supports.values()}, {"prior_requirement"})
-            rejected = next(key for key, task in supports.items() if task["owner"] == self.identifiers[2])
-            response.update({"issues": {rejected: "The selected proof does not establish this case."}})
+            self.assertLessEqual(len(context["tasks"]), 4)
+            reviewed.update(supports)
+            response = {"issues": {key: "The selected proof does not establish this case." for key, task in supports.items()
+                if task["owner"] == self.identifiers[2]}}
+            responses[json.dumps(response)] = response
             return api_response(response)
         result = self.review(transport)
+        self.assertEqual(len(reviewed), 4)
+        self.assertEqual({task["requirement"]["requirement_id"] for task in reviewed.values()}, {"prior_requirement"})
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["owner"], self.identifiers[2])
         self.assertEqual(result[0]["requirement"]["requirement_id"], "prior_requirement")
@@ -51,9 +54,9 @@ class ScaffoldReviewTests(unittest.TestCase):
         forbidden.assert_not_called()
         self.assertEqual((self.run / "ledger.jsonl").read_bytes(), prefix)
         self.assertEqual(raw.read_bytes(), original)
-        self.assertEqual(json.loads(RUNNER.read_json(raw)["choices"][0]["message"]["content"]), response)
+        self.assertIn(RUNNER.read_json(raw)["choices"][0]["message"]["content"], responses)
         state = RUNNER.load_state(self.run)
-        self.assertEqual((state["input_tokens"], state["output_tokens"], state["analysis_step_count"]), (11, 7, 1))
+        self.assertEqual((state["input_tokens"], state["output_tokens"], state["analysis_step_count"]), (22, 14, 2))
 
     def test_review_cannot_select_arbitrary_contract_fields_or_invent_tasks(self):
         for response in ({"issues": {"preserves": "Invented task."}}, {"contract_repairs": {self.identifiers[0]: ["preserves"]}}):
@@ -83,9 +86,9 @@ class ScaffoldReviewTests(unittest.TestCase):
             self.assertEqual(self.review(transport), [])
         retrieve.assert_called_once_with(self.run, [{"sources": [{"artifact_id": "genesis_patch"}]}],
             limit=None, strict=True, follow_sources=False)
-        context = json.loads(transport.call_args.args[2]["messages"][1]["content"].split("LOCAL PLANNING CONTEXT\n\n", 1)[1])
-        self.assertEqual(context["committed_genesis_sources"], [source])
-        self.assertNotIn("older_genesis_citation", json.dumps(context))
+        contexts = [json.loads(call.args[2]["messages"][1]["content"].split("LOCAL PLANNING CONTEXT\n\n", 1)[1]) for call in transport.call_args_list]
+        self.assertEqual([item for context in contexts for item in context["committed_genesis_sources"]], [source])
+        self.assertNotIn("older_genesis_citation", json.dumps(contexts))
         self.assertEqual(RUNNER.canonical_json([self.patch, self.frontier, source]), before)
 
 

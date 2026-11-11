@@ -92,10 +92,20 @@ Writing prompts include the reachable states for the assigned content.
 Source audits continue to use engine-owned task IDs. Each task fixes one guarantee
 or preserved condition, entry case, incoming route, and permitted source list.
 The model returns only its support judgment and exact quotations. Pages contain at
-most eight tasks; completed responses are ledgered and reused on resume. Results
+most four tasks; completed responses are ledgered and reused on resume. Results
 compile into the existing canonical receipt format, with an assembly ledger entry
 binding the complete result. The model cannot combine fields from different audit
 tasks or cite sources outside a task's permitted list.
+
+Causal planning reviews use the same maximum of four tasks per page. Every page
+fetches only the complete sources referenced by its tasks. A truncated multi-task
+page splits in half immediately, with split decisions saved in
+`.staging/<review-query>.pages.json`. Replay also recognizes a saved truncation if
+interruption occurred before that decision was written. Accepted pages and their
+usage are reused, including after a later page fails. Single-task exhaustion pauses
+with the task ID, final/reasoning/total counts and raw response path. It does not
+turn an incomplete JSON fragment into an accepted proof. The same mechanism applies
+to writing-stage source audits and their single evidence reconsideration.
 
 After artistic preservation, source analysis checks each hard exit guarantee and
 preserved condition for every incoming route and its admitted entry case using

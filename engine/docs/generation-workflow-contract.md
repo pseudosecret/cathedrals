@@ -62,15 +62,33 @@ fail the run; never pause between steps for a human to edit a prompt.
 Preflight every planned creative step, not the whole work as one response:
 
 ```text
-prepared_context_tokens + max_packet_output_tokens + safety_reserve_tokens
+prepared_context_tokens + planned_final_output_tokens + safety_reserve_tokens
 <= selected_model_context_window_tokens
 
-max_packet_output_tokens <= selected_model_max_output_tokens
+provider_max_tokens = loaded_context - complete_request_tokens - safety_reserve - envelope_margin
 ```
 
 Also prove that planned steps fit the derived total creative-step, literary-word,
 input-token, output-token, constraint-event, retrieval, and configured cost ceilings. Failure
 stops before creative generation.
+
+The wire `max_tokens` limit includes reasoning and final content in LM Studio. Every
+request path, including capability probes, therefore reserves generation space from
+the complete envelope and the smaller frozen/loaded context window. Stage output
+allowances remain final-output planning reserves; JSON schemas and literary word
+limits bound the returned work. Reasoning has no separate engine cap. A response
+that reaches the physical generation limit retains diagnostics and pauses or splits
+its review page rather than repeating the same allowance three times.
+
+Ledger `output_tokens` remains the provider's total completion usage. New entries
+also record `final_output_tokens`, `reasoning_tokens` when reported, and
+`final_output_tokens_estimated`. When reasoning usage is missing, the engine estimates
+final tokens from content and tool calls, labels the estimate, and retains the provider
+total. Cumulative output quotas use final output; input, analysis and literary quotas
+still apply. Assembly receipts add no provider usage. Phase reports and finalization
+retain total output for resource accounting alongside the separate final/reasoning
+figures. Existing ledger entries without the final field conservatively use total
+output. Existing frozen runs do not acquire these changes.
 
 ## 2. Append-Only Run
 
@@ -203,7 +221,9 @@ literary units. Checkpoints and field-response evidence accompany immutable comm
 Semantic normalization builds and fully validates the candidate packet before staging
 metadata. Metadata errors consume metadata attempts, never another accepted artistic
 request. A pending normalization response survives an interrupted focused lookup.
-The initial whole-delta allowance is 8,192 output tokens, covering reasoning and JSON.
+The initial whole-delta allowance reserves 8,192 final-output tokens. Provider
+generation space also accommodates reasoning, using the remaining loaded context
+after the complete request and safety reserve.
 Extract concise new supported changes, rather than restating canon or exhaustively
 indexing description. Normalize metadata without changing any accepted literary bytes.
 
@@ -224,8 +244,8 @@ knowledge, followed by new soft obligations, obligation updates, and motifs. Pag
 limits bound responses, not important information; continuation must preserve every
 needed change. Accepted fact positions and aliases stay stable. Resolve references
 to locally generated facts/motifs after assembling all categories. A truncated page
-retains its complete prefix and reduces page size; one oversized record may use the
-existing context-safe 15,000-token analysis ceiling. No-progress pages receive three
+retains its complete prefix and reduces page size. A single record that exhausts the
+available physical generation context pauses immediately; an identical request is not retried. No-progress pages receive three
 corrections per invocation. Interrupted streams preserve progress and pause at once.
 
 Compact JSON, required schema definitions, and complete source context must fit frozen
@@ -236,8 +256,8 @@ Schema, reference, and canonical errors in complete responses also enter categor
 recovery, retaining the current candidate and successful cached reference repairs.
 Structured error paths select affected categories directly, including canonical
 `new_obligations` paths mapped to `new_soft_obligations`. Errors without usable paths
-use a dedicated classifier with a strict category object and a 4,096-token output
-ceiling. Classification never receives extraction instructions. Request, retained-record, and page
+use a dedicated classifier with a strict category object and a 4,096-token final-output
+reserve. Classification never receives extraction instructions. Request, retained-record, and page
 validation share the same specialized schema, including source and empty-category
 restrictions. Rejections and per-category feedback persist across pause/resume.
 Canonical correction revisits rejected categories while preserving others;
@@ -272,8 +292,10 @@ corresponding cumulative token ceilings freeze with the run; this capacity never
 causes calls when references are already valid.
 The planning reserve covers three attempts per macro planning field. Scaffold
 declaration, connection, amendment and audit recovery have their own bounded
-allowance. Object arrays use schema cardinality limits; primitive arrays count as one value. These are conservative recovery limits, not expected usage. Per-request
-output and whole-work literary limits remain unchanged.
+allowance. Object arrays use schema cardinality limits; primitive arrays count as
+one value. These are conservative recovery limits, not expected usage. Stage
+final-output reserves and whole-work literary limits remain in force; reasoning
+has no independent engine token ceiling beyond the loaded physical context.
 It also reserves semantic recovery capacity for three attempts per event and five
 category completions per possible scene/ending. Page responses are charged once and
 the assembled parent metadata contributes no duplicate usage.

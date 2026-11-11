@@ -127,15 +127,15 @@ class CompletionContractTests(unittest.TestCase):
         provider.assert_not_called()
         self.assertFalse((self.run / "state/inflight.json").exists())
 
-    def test_expanded_retry_reserves_space_for_schema_and_correction_content(self):
+    def test_generation_reserves_space_for_schema_and_correction_content(self):
         schema = {"type": "object", "description": "s" * 80000}
-        prompt = "p" * 150000
-        maximum = RUNNER.expanded_output_limit(self.run, prompt, "unwritten_step", schema)
-        self.assertLess(maximum, RUNNER.EXPANDED_OUTPUT_TOKENS)
-        self.assertGreater(maximum, RUNNER.BASE_OUTPUT_TOKENS)
         base = {"messages": [{"role": "user", "content": "Original request"}], "response_format": {"schema": schema}}
         corrected = base | {"messages": [{"role": "user", "content": "Original request\nCORRECTION\n" + "x" * 30000}]}
-        self.assertGreater(RUNNER.provider_input_tokens(corrected), RUNNER.provider_input_tokens(base) + 9900)
+        first = RUNNER.set_provider_output_limit(self.run, base, {}, "Test")
+        second = RUNNER.set_provider_output_limit(self.run, corrected, {}, "Test")
+        self.assertGreater(first - second, 9900)
+        self.assertEqual(second + RUNNER.provider_input_tokens(corrected) + 4096 + 16,
+            RUNNER.read_json(self.run / "run-manifest.json")["budgets"]["model_context_window_tokens"])
 
     def test_navigation_contract_detects_disconnection_and_closed_loops(self):
         planned = architecture(150)

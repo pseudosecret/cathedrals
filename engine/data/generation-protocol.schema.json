@@ -1344,7 +1344,9 @@
         "output_tokens": { "type": ["integer", "null"], "minimum": 0 },
         "cost": { "type": ["number", "null"], "minimum": 0 },
         "currency": { "type": ["string", "null"], "pattern": "^[A-Z]{3}$" },
-        "reasoning_tokens": { "type": ["integer", "null"], "minimum": 0 }
+        "reasoning_tokens": { "type": ["integer", "null"], "minimum": 0 },
+        "final_output_tokens": { "type": ["integer", "null"], "minimum": 0 },
+        "final_output_tokens_estimated": { "type": "boolean" }
       }
     },
     "ledgerEntry": {

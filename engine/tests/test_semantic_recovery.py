@@ -121,7 +121,7 @@ class SemanticRecoveryTests(unittest.TestCase):
         transport = mock.Mock(return_value=self.response(self.empty()))
         self.assertEqual(self.normalize(transport), self.empty())
         request = transport.call_args.args[2]
-        self.assertEqual(request["max_tokens"], 8192)
+        self.assertGreater(request["max_tokens"], 8192)
         self.assertIn("do not restate canon", request["messages"][1]["content"])
         self.assertEqual(RUNNER.packet_literary_word_count(self.artistic), 420)
         self.assert_prose_unchanged()
@@ -317,29 +317,18 @@ class SemanticRecoveryTests(unittest.TestCase):
         self.assertEqual(sizes, [8, 4, 4])
         self.assert_prose_unchanged()
 
-    def test_single_record_truncation_uses_existing_expanded_analysis_headroom(self):
-        self.seed_facts()
-        path = self.run / f".staging/{self.step}.semantic-recovery.json"
-        state = RUNNER.read_json(path)
-        state["page_size"]["canonical_facts"] = 1
-        RUNNER.write_json(path, state)
-        transport = mock.Mock(side_effect=[self.response('{"items":[', truncated=True, text=True), self.response({"items": [self.fact()], "complete": True})])
-        result = self.normalize(transport)
-        self.assertEqual(result["canonical_facts"], [self.fact()])
-        self.assertEqual([call.args[2]["max_tokens"] for call in transport.call_args_list], [8192, 15000])
-
-    def test_single_record_exhaustion_reports_expansion_and_actual_provider_attempts(self):
+    def test_single_record_context_exhaustion_pauses_once_and_retains_prose(self):
         self.seed_facts()
         path = self.run / f".staging/{self.step}.semantic-recovery.json"
         state = RUNNER.read_json(path)
         state["page_size"]["canonical_facts"] = 1
         RUNNER.write_json(path, state)
         transport = mock.Mock(return_value=self.response('{"items":[', truncated=True, text=True))
-        with self.assertRaises(RUNNER.PausedError) as raised:
-            self.normalize(transport)
-        self.assertEqual(transport.call_count, 4)
-        self.assertIn("3 page correction attempts", raised.exception.reason)
-        self.assertIn("4 provider attempts", raised.exception.reason)
+        for _ in range(2):
+            with self.assertRaisesRegex(RUNNER.PausedError, "single-record page exhausted"):
+                self.normalize(transport)
+        self.assertEqual(transport.call_count, 1)
+        self.assertGreater(transport.call_args.args[2]["max_tokens"], 15000)
         self.assert_prose_unchanged()
 
     def test_no_progress_pauses_after_actual_attempts_and_resume_only_finishes_pending(self):
@@ -509,7 +498,7 @@ class SemanticRecoveryTests(unittest.TestCase):
         def transport(method, url, request, **kwargs):
             if request["response_format"]["json_schema"]["name"] == "semanticCorrectionCategory":
                 self.assertNotIn("Extract only NEW", request["messages"][1]["content"])
-                self.assertEqual(request["max_tokens"], 4096)
+                self.assertGreater(request["max_tokens"], 4096)
                 self.assertTrue(request["response_format"]["json_schema"]["strict"])
                 return self.response(next(selections))
             self.assertIn("Continue ONLY knowledge_changes", request["messages"][1]["content"])

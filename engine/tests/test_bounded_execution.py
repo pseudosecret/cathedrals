@@ -85,7 +85,7 @@ class BoundedExecutionTests(unittest.TestCase):
         for first, mode in ((api_response("I cannot call tools", text=True), "automatic"),
                 (tool_response([call("get_records", {"ids": ["synthetic_token"]})]), "tools")):
             transport = mock.Mock(side_effect=[first, api_response(metadata)])
-            policy, artifacts = RUNNER.probe_execution_policy("http://offline.invalid", "offline", transport, lambda _: None)
+            policy, artifacts = RUNNER.probe_execution_policy("http://offline.invalid", "offline", transport, lambda _: None, context_window_tokens=65536)
             self.assertEqual(policy["retrieval_mode"], mode)
             self.assertEqual(policy["completion_contract_version"], 1)
             self.assertEqual(policy["scaffold_planning_version"], 4)

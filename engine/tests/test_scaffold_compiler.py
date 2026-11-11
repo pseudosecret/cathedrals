@@ -234,7 +234,7 @@ class ScaffoldCompilerTests(unittest.TestCase):
         with mock.patch.object(RUNNER, "request_architecture_analysis", side_effect=request):
             result, response = RUNNER.request_scaffold_audit_tasks(self.run, "synthetic_step", "synthetic_audit", contract, local,
                 checks, entries, permitted, units, None)
-        self.assertEqual(sizes, [8, 8, 2]); self.assertEqual(len(result["checks"]), 18)
+        self.assertEqual(sizes, [4, 4, 4, 4, 2]); self.assertEqual(len(result["checks"]), 18)
         self.assertEqual({(item["check_id"], item["case_id"], item["entry_from_slot"]) for item in result["checks"]},
             {(check, case, entry) for check, _description in checks for case, entry in entries})
         self.assertEqual(response["_cathedrals_request"]["parameters"]["assembly"], "scaffold_audit_tasks")

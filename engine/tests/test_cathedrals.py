@@ -614,7 +614,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid",
             })
             RUNNER.write_json(run / "run-manifest.json", {
-                "budgets": {"max_prepared_context_tokens": 49152},
+                "budgets": {"max_prepared_context_tokens": 49152, "model_context_window_tokens": 65536},
             })
             def reject_grammar(*_args, **_kwargs):
                 raise RUNNER.CathedralsError(
@@ -645,7 +645,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid",
             })
             RUNNER.write_json(run / "run-manifest.json", {
-                "budgets": {"max_prepared_context_tokens": 49152},
+                "budgets": {"max_prepared_context_tokens": 49152, "model_context_window_tokens": 65536},
             })
             response = {
                 "choices": [{"finish_reason": "stop", "message": {"content": "{}"}}],
@@ -676,7 +676,7 @@ class CathedralsRunnerTests(unittest.TestCase):
         self.assertIn("2-response schema fallback threshold", raised.exception.reason)
         self.assertEqual(transport.call_count, 2)
 
-    def test_architecture_analysis_uses_frozen_limit_and_ledgers_truncation_usage(self):
+    def test_architecture_analysis_uses_available_context_and_ledgers_truncation_once(self):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary) / "generation_test"
             for name in ("state", "raw"):
@@ -687,7 +687,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid",
             })
             RUNNER.write_json(run / "run-manifest.json", {
-                "budgets": {"max_analysis_output_tokens": RUNNER.ANALYSIS_OUTPUT_TOKENS},
+                "budgets": {"max_analysis_output_tokens": RUNNER.ANALYSIS_OUTPUT_TOKENS, "model_context_window_tokens": 65536},
             })
             response = {
                 "choices": [{"finish_reason": "length", "message": {"content": "partial"}}],
@@ -700,11 +700,11 @@ class CathedralsRunnerTests(unittest.TestCase):
                 )
             entries = RUNNER.ledger_entries(run)
 
-        self.assertEqual(transport.call_count, 3)
-        self.assertTrue(all(call.args[2]["max_tokens"] == 15000 for call in transport.call_args_list))
+        self.assertEqual(transport.call_count, 1)
+        self.assertGreater(transport.call_args.args[2]["max_tokens"], 15000)
         self.assertEqual(
             [entry["token_accounting"] for entry in entries],
-            [{"input_tokens": 123, "output_tokens": 456, "cost": None, "currency": None}] * 3,
+            [{"input_tokens": 123, "output_tokens": 456, "final_output_tokens": 3, "final_output_tokens_estimated": True, "cost": None, "currency": None}],
         )
 
         budgets = RUNNER.derive_scope(12)["budgets"]
@@ -1293,6 +1293,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                 (run / name).mkdir(parents=True)
             RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
             RUNNER.ensure_index(run)
+            RUNNER.write_json(run / "run-manifest.json", {"budgets": {"max_prepared_context_tokens": 49152, "model_context_window_tokens": 65536}})
             RUNNER.write_json(run / "generation-brief.json", {
                 "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid"
             })
@@ -1400,6 +1401,7 @@ class CathedralsRunnerTests(unittest.TestCase):
                     (run / name).mkdir(parents=True)
                 RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
                 RUNNER.ensure_index(run)
+                RUNNER.write_json(run / "run-manifest.json", {"budgets": {"max_prepared_context_tokens": 49152, "model_context_window_tokens": 65536}})
                 RUNNER.write_json(run / "generation-brief.json", {
                     "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid"
                 })
@@ -2879,8 +2881,8 @@ class CathedralsRunnerTests(unittest.TestCase):
         architecture = {"arcs": [{"arc_id": "arc_one"}], "packet_plans": [plan, packet_plan("next", scene_slot_ids=["scene_slot_0002"])]}
         architecture = packet_architecture_fixture(architecture, plan)
 
-        for expanded, correct in ((False, True), (True, True), (False, False)):
-            with self.subTest(expanded=expanded, correct=correct), tempfile.TemporaryDirectory() as temporary:
+        for correct in (True, False):
+            with self.subTest(correct=correct), tempfile.TemporaryDirectory() as temporary:
                 run = Path(temporary) / "generation_test"
                 for name in ("state", "raw", "committed", ".staging"):
                     (run / name).mkdir(parents=True)
@@ -2889,8 +2891,8 @@ class CathedralsRunnerTests(unittest.TestCase):
                 RUNNER.write_json(run / "generation-brief.json", {
                     "generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid",
                 })
-                RUNNER.write_json(run / "run-manifest.json", {"budgets": {"max_prepared_context_tokens": 49152}})
-                step_id = RUNNER.packet_step_id(plan, expanded=expanded)
+                RUNNER.write_json(run / "run-manifest.json", {"budgets": {"max_prepared_context_tokens": 49152, "model_context_window_tokens": 65536}})
+                step_id = RUNNER.packet_step_id(plan)
                 staged = run / ".staging" / f"{step_id}.artistic.json"
                 artistic_requests = []
                 semantic_requests = []
@@ -2913,8 +2915,6 @@ class CathedralsRunnerTests(unittest.TestCase):
                     RUNNER, "committed_record",
                     side_effect=lambda _run, kind: architecture if kind == "architecture" else {"claimants": []},
                 ), mock.patch.object(RUNNER, "committed_records", return_value=[]), mock.patch.object(
-                    RUNNER, "step_was_truncated", side_effect=lambda _run, step: expanded and not step.endswith("_expanded"),
-                ), mock.patch.object(RUNNER, "expanded_output_limit", return_value=RUNNER.EXPANDED_OUTPUT_TOKENS), mock.patch.object(
                     RUNNER, "build_creative_packet", side_effect=RUNNER.PausedError("Test interruption", "Metadata accepted"),
                 ):
                     reason = "Metadata accepted" if correct else "exhausted 3.*1,201.*1,200-word"
@@ -3092,7 +3092,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             RUNNER.write_json(
                 run / "run-manifest.json",
                 {
-                    "budgets": {"max_prepared_context_tokens": 49152},
+                    "budgets": {"max_prepared_context_tokens": 49152, "model_context_window_tokens": 65536},
                 },
             )
             response = {
@@ -3129,7 +3129,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
             RUNNER.ensure_index(run)
             RUNNER.write_json(run / "generation-brief.json", {"generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid"})
-            RUNNER.write_json(run / "run-manifest.json", {"budgets": {"max_prepared_context_tokens": 49152}})
+            RUNNER.write_json(run / "run-manifest.json", {"budgets": {"max_prepared_context_tokens": 49152, "model_context_window_tokens": 65536}})
             calls = []
 
             def invalid(*args, **_kwargs):
@@ -3157,7 +3157,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             RUNNER.save_state(run, RUNNER.initial_run_state(run.name, "a" * 64, "b" * 64, "offline"))
             RUNNER.ensure_index(run)
             RUNNER.write_json(run / "generation-brief.json", {"generation_seed": "seed", "lm_studio_base_url": "http://offline.invalid"})
-            RUNNER.write_json(run / "run-manifest.json", {"budgets": {"max_prepared_context_tokens": 49152}})
+            RUNNER.write_json(run / "run-manifest.json", {"budgets": {"max_prepared_context_tokens": 49152, "model_context_window_tokens": 65536}})
             response = {"choices": [{"finish_reason": "stop", "message": {"content": '{"name":"Anchor","incident_role":"Witness"}'}}]}
             transport = mock.Mock(return_value=response)
 
@@ -3201,7 +3201,7 @@ class CathedralsRunnerTests(unittest.TestCase):
             self.assertTrue((project / "dist/work.json").exists())
 
     @mock.patch.object(RUNNER, "execution_policy", new=lambda *_: RUNNER.CURRENT_EXECUTION_POLICY)
-    def test_single_scene_truncation_gets_one_expanded_retry(self):
+    def test_single_scene_context_exhaustion_pauses_without_retry(self):
         plan = {
             "packet_slot_id": "literary_packet_0001",
             "packet_kind": "literary",
@@ -3219,21 +3219,12 @@ class CathedralsRunnerTests(unittest.TestCase):
             RUNNER, "packet_prompt", return_value=("prompt", "context")
         ), mock.patch.object(
             RUNNER, "committed_record", return_value=architecture
-        ), mock.patch.object(
-            RUNNER,
-            "step_was_truncated",
-            side_effect=lambda _run, step: not step.endswith("_expanded"),
-        ), mock.patch.object(
-            RUNNER, "expanded_output_limit", return_value=RUNNER.EXPANDED_OUTPUT_TOKENS
-        ), mock.patch.object(
+        ), mock.patch.object(RUNNER, "step_was_truncated", return_value=True), mock.patch.object(
             RUNNER, "request_record"
         ) as request:
-            RUNNER.request_packet_slice(
-                Path("/offline"), {}, plan, transport=lambda *_args, **_kwargs: None
-            )
-        self.assertEqual(
-            request.call_args.kwargs["max_tokens"], RUNNER.EXPANDED_OUTPUT_TOKENS
-        )
+            with self.assertRaisesRegex(RUNNER.PausedError, "available generation context"):
+                RUNNER.request_packet_slice(Path("/offline"), {}, plan, transport=lambda *_args, **_kwargs: None)
+        request.assert_not_called()
 
     def test_packet_is_complete_only_after_all_chunks_fill_the_plan(self):
         plan = {

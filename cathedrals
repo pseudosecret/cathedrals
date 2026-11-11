@@ -1426,15 +1426,19 @@ def append_ledger_entry(run_dir: Path, entry: dict, *, commit=None, plan=None) -
         if entry["provider"] and (run_dir / "run-manifest.json").exists() and execution_policy(run_dir):
             phase = entry["step_phase"]
             with index_connection(run_dir) as db:
-                calls, input_tokens, output_tokens, reasoning, retries = db.execute("""SELECT COUNT(*),
+                calls, input_tokens, output_tokens, reasoning, final, estimated, retries = db.execute("""SELECT COUNT(*),
                     COALESCE(SUM(json_extract(payload,'$.token_accounting.input_tokens')),0),
                     COALESCE(SUM(json_extract(payload,'$.token_accounting.output_tokens')),0),
                     COALESCE(SUM(json_extract(payload,'$.token_accounting.reasoning_tokens')),0),
+                    COALESCE(SUM(COALESCE(json_extract(payload,'$.token_accounting.final_output_tokens'),
+                        json_extract(payload,'$.token_accounting.output_tokens'))),0),
+                    COALESCE(MAX(json_extract(payload,'$.token_accounting.final_output_tokens_estimated')),0),
                     COALESCE(SUM(status!='COMMITTED'),0) FROM ledger
                     WHERE json_extract(payload,'$.step_phase')=? AND json_extract(payload,'$.provider') IS NOT NULL
                     AND json_extract(payload,'$.parameters.assembly') IS NULL""", (phase,)).fetchone()
             print(f"{phase}: {calls} calls; input {input_tokens:,}; output {output_tokens:,} "
-                f"(reasoning {reasoning:,}); retries {retries}; retrieval {execution_policy(run_dir)['retrieval_mode']}", file=sys.stderr, flush=True)
+                f"(final {'~' if estimated else ''}{final:,}; reasoning {reasoning:,}{' reported' if estimated else ''}); retries {retries}; "
+                f"retrieval {execution_policy(run_dir)['retrieval_mode']}", file=sys.stderr, flush=True)
 
 
 def new_ledger_entry(
@@ -1511,6 +1515,9 @@ def new_ledger_entry(
     reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
     if reasoning is not None:
         entry["token_accounting"]["reasoning_tokens"] = reasoning
+    if "final_output_tokens" in usage:
+        entry["token_accounting"]["final_output_tokens"] = usage["final_output_tokens"]
+        entry["token_accounting"]["final_output_tokens_estimated"] = usage.get("final_output_tokens_estimated", False)
     entry["entry_hash"] = compute_entry_hash(entry)
     return entry
 
@@ -2079,10 +2086,11 @@ def commit_record(
     constraint_events = make_constraint_events(run_dir, record, commit_id, record_hash, planned_step_id)
     constraint_hash = sha256_bytes(b"".join(canonical_json(item) for item in constraint_events))
     state_after = sha256_bytes(f"{state['canonical_state_hash']}:{record_hash}:{constraint_hash}".encode())
-    usage = copy.deepcopy(api_response.get("usage", {}) or {}) if isinstance(api_response, dict) and not usage_already_ledgered else {}
+    usage = provider_usage(api_response) if isinstance(api_response, dict) and not usage_already_ledgered else {}
 
     def add_usage(extra):
-        for key in ("prompt_tokens", "completion_tokens"):
+        usage["final_output_tokens_estimated"] = usage.get("final_output_tokens_estimated", False) or extra.get("final_output_tokens_estimated", False)
+        for key in ("prompt_tokens", "completion_tokens", "final_output_tokens"):
             usage[key] = (usage.get(key) or 0) + (extra.get(key) or 0)
         reasoning = (extra.get("completion_tokens_details") or {}).get("reasoning_tokens")
         if reasoning is not None:
@@ -2092,12 +2100,12 @@ def commit_record(
 
     semantic_api_path = run_dir / ".staging" / f"{planned_step_id}.semantic.api.json"
     if semantic_api_path.exists():
-        semantic_usage = read_json(semantic_api_path).get("usage", {})
+        semantic_usage = provider_usage(read_json(semantic_api_path))
         add_usage(semantic_usage)
     repair_path = run_dir / ".staging" / f"{planned_step_id}.repair.json"
     if repair_path.exists():
         for repair in read_json(repair_path)["history"]:
-            repair_usage = {} if repair.get("usage_ledgered") else (repair["api_response"].get("usage") or {})
+            repair_usage = {} if repair.get("usage_ledgered") else provider_usage(repair["api_response"])
             add_usage(repair_usage)
     entry = new_ledger_entry(
         run_dir,
@@ -2706,6 +2714,61 @@ def provider_input_tokens(payload):
     return estimated_prompt_tokens("\n".join(parts)) + 32 * len(payload.get("messages", []))
 
 
+def provider_usage(response):
+    """Keep provider totals and derive final-output usage without charging reasoning twice."""
+    if not isinstance(response, dict):
+        return {}
+    usage = copy.deepcopy(response.get("usage") or {})
+    if response.get("_cathedrals_semantic_assembled") or response.get("_cathedrals_assembled_from_fields") or response.get("_cathedrals_request", {}).get("parameters", {}).get("assembly"):
+        return {}
+    if "final_output_tokens" in usage:
+        return usage
+    total = usage.get("completion_tokens")
+    reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+    if isinstance(total, int) and isinstance(reasoning, int):
+        final, estimated = max(0, total - reasoning), False
+    else:
+        messages = [choice["message"] for choice in response.get("choices", [])
+            if isinstance(choice, dict) and isinstance(choice.get("message"), dict)]
+        text = "\n".join(message["content"] for message in messages if isinstance(message.get("content"), str))
+        tools = [message["tool_calls"] for message in messages if message.get("tool_calls")]
+        if tools:
+            text += canonical_json(tools).decode()
+        final = estimated_prompt_tokens(text) if text else 0
+        if isinstance(total, int):
+            final = min(final, total)
+        estimated = True
+    usage["final_output_tokens"] = final
+    usage["final_output_tokens_estimated"] = estimated
+    return usage
+
+
+def final_output_token_total(run_dir):
+    with index_connection(run_dir) as db:
+        return db.execute("""SELECT COALESCE(SUM(COALESCE(
+            json_extract(payload,'$.token_accounting.final_output_tokens'),
+            json_extract(payload,'$.token_accounting.output_tokens'),0)),0) FROM ledger""").fetchone()[0]
+
+
+def set_provider_output_limit(run_dir, request, parameters, stage, *, context_window_tokens=None):
+    budgets = read_json(run_dir / "run-manifest.json")["budgets"] if run_dir else {}
+    if run_dir:
+        context_window_tokens = min(budgets.get("model_context_window_tokens", float("inf")),
+            load_state(run_dir).get("model_context_window_tokens", float("inf")))
+    if not isinstance(context_window_tokens, (int, float)) or not math.isfinite(context_window_tokens):
+        raise PausedError(stage, "Loaded model context is required to reserve generation space.", "budget_exhaustion")
+    reserve = budgets.get("context_safety_reserve_tokens", 4096)
+    request["max_tokens"] = int(context_window_tokens)
+    available = int(context_window_tokens - provider_input_tokens(request) - reserve - 16)
+    if available < MIN_PLANNING_OUTPUT_TOKENS:
+        raise PausedError(stage, f"Complete request leaves {available} generation tokens in the loaded "
+            f"{int(context_window_tokens)}-token context after the {reserve}-token safety reserve.", "budget_exhaustion")
+    # Stage allowances describe final output. The wire limit covers all available reasoning and output.
+    request["max_tokens"] = available
+    parameters["max_tokens"] = available
+    return available
+
+
 def render_prompt(run_dir: Path, name: str, replacements: dict[str, str]) -> str:
     value = (engine_root(run_dir) / "prompts" / name).read_text(encoding="utf-8")
     for key, replacement in replacements.items():
@@ -2929,6 +2992,7 @@ def request_record(
         if prompt_tokens > capacity:
             raise PausedError("Context assembly", f"Complete provider envelope for {step_id} needs approximately {prompt_tokens:,} input tokens; "
                 f"ceiling {capacity:,} after output and safety reserves. No request was sent.", "budget_exhaustion")
+        set_provider_output_limit(run_dir, payload, parameters, "Context assembly")
         request_hash = sha256_bytes(canonical_json(payload))
         attempts = [entry["attempt"] for entry in step_entries(run_dir, step_id)]
         attempt = max(attempts, default=0) + 1
@@ -3014,7 +3078,7 @@ def request_record(
             append_failed_attempt(run_dir, step_id=step_id, attempt=attempt, phase=phase, prompt=current_prompt,
                 context=context, parameters=parameters, started_at=inflight["started_at"], failure_class=error.failure_class,
                 output_hash=sha256_bytes(canonical_json(failed_response)) if failed_response else None,
-                usage=failed_response.get("usage", {}) if isinstance(failed_response, dict) else {})
+                usage=provider_usage(failed_response))
             inflight_path.unlink(missing_ok=True)
             raise
         except PausedError:
@@ -3039,7 +3103,7 @@ def request_record(
             append_failed_attempt(run_dir, step_id=step_id, attempt=attempt, phase=phase, prompt=current_prompt,
                 context=context, parameters=parameters, started_at=inflight["started_at"], failure_class=error.failure_class,
                 output_hash=sha256_file(response_path) if response_path.exists() else None,
-                usage=response.get("usage", {}) if isinstance(response, dict) else {})
+                usage=provider_usage(response))
             inflight_path.unlink(missing_ok=True)
             schema_failures = sum(
                 entry["planned_step_id"] == step_id and entry["failure_class"] == "malformed_response"
@@ -3265,7 +3329,7 @@ def record_reference_answer(run_dir: Path, answer: dict) -> None:
         parameters=answer["parameters"], seed=answer["parameters"]["seed"], started_at=answer["api_response"].get("_cathedrals_started_at", utc_now()),
         output_hash=sha256_bytes(answer["result"].encode()), generated_ids=[], past_constraint_ids=[], future_obligation_ids=[],
         motif_ids=[], branch_relation=None, commit_status="COMMITTED" if resolved else "FAILED_BEFORE_COMMIT", state_hash_after=state["canonical_state_hash"],
-        failure_class="none" if resolved else "mechanical_validation", usage=answer["api_response"].get("usage", {}))
+        failure_class="none" if resolved else "mechanical_validation", usage=provider_usage(answer["api_response"]))
     append_ledger_entry(run_dir, entry)
     refresh_run_counters(run_dir, state)
 
@@ -3324,16 +3388,17 @@ def resolve_named_reference(run_dir: Path, step_id: str, issue: dict, transport=
                 completed = index_checkpoint(run_dir)["analysis_count"]
                 if completed + successful_structural_repair_count(run_dir) >= budgets.get("max_analysis_step_count", float("inf")):
                     raise CathedralsError("Reference resolution", "Reference request exceeds max_analysis_step_count", "budget_exhaustion")
-                usage = [(read_json(path).get("usage") or {}) for path in (run_dir / "raw").glob("*.api.json")]
+                usage = [provider_usage(read_json(path)) for path in (run_dir / "raw").glob("*.api.json")]
                 for key, ceiling, reserve in (
                     ("prompt_tokens", "max_cumulative_input_tokens", math.ceil(len((prompt + feedback).encode()) / 3)),
-                    ("completion_tokens", "max_cumulative_output_tokens", maximum),
+                    ("final_output_tokens", "max_cumulative_output_tokens", maximum),
                 ):
                     if sum(item.get(key) or 0 for item in usage) + reserve > budgets.get(ceiling, float("inf")):
                         raise CathedralsError("Reference resolution", f"Reference request exceeds {ceiling}", "budget_exhaustion")
                 request = {"model": load_state(run_dir)["model"], "messages": [
                     {"role": "system", "content": "Resolve one reference in uncommitted structured data. Return only an identifier or UNRESOLVED."},
                     {"role": "user", "content": prompt + feedback}], **parameters}
+                set_provider_output_limit(run_dir, request, parameters, "Reference resolution")
                 response, answer = provider_response(transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
                     float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")), started_at=started,
                     preserve=lambda value: write_json(response_path, value, mode=0o444, exclusive=True),
@@ -3353,8 +3418,8 @@ def resolve_named_reference(run_dir: Path, step_id: str, issue: dict, transport=
             append_failed_attempt(run_dir, step_id=repair_step, attempt=attempt, phase="validation", prompt=prompt + feedback,
                 context=json.dumps(descriptor), parameters=parameters, started_at=started,
                 failure_class=error.failure_class, step_type="analysis", output_hash=sha256_file(response_path) if response_path.exists() else None,
-                usage=read_json(response_path).get("usage", {}) if response_path.exists() else {})
-            if isinstance(error, IncompleteResponseError):
+                usage=provider_usage(read_json(response_path)) if response_path.exists() else {})
+            if isinstance(error, (IncompleteResponseError, TruncationError)):
                 raise PausedError("Reference resolution", error.reason, error.failure_class) from error
             if not isinstance(error, (SchemaError, TruncationError)) and error.failure_class not in RETRYABLE_PROVIDER_FAILURES:
                 raise
@@ -5167,8 +5232,8 @@ def request_architecture_analysis(
     feedback = ""
     for correction in range(3):
         current_prompt = prompt + feedback
-        if planning_mode:
-            parameters["max_tokens"] = planning_output_limit(run_dir, current_prompt, schema, maximum, pause_stage, purpose=context_purpose)
+        parameters["max_tokens"] = (planning_output_limit(run_dir, current_prompt, schema, maximum, pause_stage,
+            purpose=context_purpose) if planning_mode else maximum)
         entries = step_entries(run_dir, step_id)
         attempts = [entry["attempt"] for entry in entries]
         attempt = max(attempts, default=0) + 1
@@ -5193,9 +5258,9 @@ def request_architecture_analysis(
                     raise CathedralsError(pause_stage, "Repair exceeds the frozen context budget", "budget_exhaustion")
                 if load_state(run_dir).get("analysis_step_count", 0) + successful_structural_repair_count(run_dir) >= budgets.get("max_analysis_step_count", float("inf")):
                     raise CathedralsError(pause_stage, "Repair exceeds max_analysis_step_count", "budget_exhaustion")
-                usage = [(read_json(path).get("usage") or {}) for path in (run_dir / "raw").glob("*.api.json")]
+                usage = [provider_usage(read_json(path)) for path in (run_dir / "raw").glob("*.api.json")]
                 for key, ceiling, reserve in (("prompt_tokens", "max_cumulative_input_tokens", prompt_tokens),
-                                               ("completion_tokens", "max_cumulative_output_tokens", parameters["max_tokens"])):
+                                               ("final_output_tokens", "max_cumulative_output_tokens", maximum)):
                     if sum(item.get(key) or 0 for item in usage) + reserve > budgets.get(ceiling, float("inf")):
                         raise CathedralsError(pause_stage, f"Repair exceeds {ceiling}", "budget_exhaustion")
                 request = {
@@ -5207,6 +5272,7 @@ def request_architecture_analysis(
                     **parameters,
                     "response_format": {"type": "json_schema", "json_schema": {"name": response_name, "strict": True, "schema": response_schema}},
                 }
+                set_provider_output_limit(run_dir, request, parameters, pause_stage)
                 response, content = provider_response(
                     transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
                     float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")), started_at=started,
@@ -5232,10 +5298,14 @@ def request_architecture_analysis(
                 run_dir, step_id=step_id, attempt=attempt, phase=phase, prompt=current_prompt,
                 context=prompt, parameters=parameters, started_at=started, failure_class=error.failure_class,
                 step_type="analysis", output_hash=sha256_file(response_path) if response_path.exists() else None,
-                usage=response.get("usage", {}) if isinstance(response, dict) else {},
+                usage=provider_usage(response),
             )
             if isinstance(error, IncompleteResponseError):
                 raise PausedError(pause_stage, error.reason, error.failure_class) from error
+            if isinstance(error, TruncationError):
+                raise PausedError(pause_stage, f"{step_id} exhausted the available generation context "
+                    f"({parameters['max_tokens']:,} tokens). The saved response retains final and reasoning usage.",
+                    error.failure_class) from error
             if initial_draft and isinstance(error, (SchemaError, TruncationError)):
                 raise PausedError("Planning draft", error.reason) from error
             if error.failure_class not in RETRYABLE_PROVIDER_FAILURES and not isinstance(error, (SchemaError, TruncationError)):
@@ -5956,9 +6026,9 @@ def semantic_output_limit(run_dir: Path, prompt: str, schema: dict, maximum=8192
     maximum = planning_output_limit(run_dir, prompt, schema, maximum, "Semantic normalization", purpose="semantic normalization")
     if load_state(run_dir).get("analysis_step_count", 0) + successful_structural_repair_count(run_dir) >= budgets.get("max_analysis_step_count", float("inf")):
         raise CathedralsError("Semantic normalization", "Normalization exceeds max_analysis_step_count", "budget_exhaustion")
-    usage = [read_json(path).get("usage") or {} for path in (run_dir / "raw").glob("*.api.json")]
+    usage = [provider_usage(read_json(path)) for path in (run_dir / "raw").glob("*.api.json")]
     for key, ceiling, reserve in (("prompt_tokens", "max_cumulative_input_tokens", math.ceil(len(prompt.encode()) / 3)),
-                                   ("completion_tokens", "max_cumulative_output_tokens", maximum)):
+                                   ("final_output_tokens", "max_cumulative_output_tokens", maximum)):
         if sum(item.get(key) or 0 for item in usage) + reserve > budgets.get(ceiling, float("inf")):
             raise CathedralsError("Semantic normalization", f"Normalization exceeds {ceiling}", "budget_exhaustion")
     return maximum
@@ -6065,6 +6135,9 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
             checking_completion = state["completion_checks"].get(key, False)
             if checking_completion:
                 query += "_completion"
+            if size == 1 and step_was_truncated(run_dir, query):
+                raise PausedError("Semantic normalization", f"{key}: a single-record page exhausted the loaded model's "
+                    "available generation context. Accepted metadata and prose were retained; no identical request was retried.", "provider_truncation")
             category_schema = schema["properties"][key]
             page_limit = min(size, max(0, category_schema.get("maxItems", size + offset) - offset))
             page_schema = compact_planning_schema({"type": "object", "additionalProperties": False,
@@ -6093,7 +6166,7 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
                     phase="validation", system_prompt=("Audit accepted metadata against immutable authored content. Return missing changes or explicit completion as JSON only."
                         if checking_completion else "Extract concise changes from immutable authored content. Return JSON only."),
                     response_name="semanticCompletionCheck" if checking_completion else "semanticCategoryPage", pause_stage="Semantic normalization", initial_draft=True,
-                    planning_mode=True, context_purpose="semantic normalization", max_tokens=15000 if size == 1 and state.get("expanded") == key else 8192)
+                    planning_mode=True, context_purpose="semantic normalization", max_tokens=8192)
                 incomplete = []
             except PausedError as paused:
                 error = paused.__cause__
@@ -6144,7 +6217,7 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
                 elif not any(entry["planned_step_id"] == query and entry["attempt"] == meta["attempt"] for entry in step_entries(run_dir, query)):
                     append_failed_attempt(run_dir, step_id=query, attempt=meta["attempt"], phase="validation", prompt=prompt,
                         context=context, parameters=meta["parameters"], started_at=response.get("_cathedrals_started_at", utc_now()),
-                        failure_class=error.failure_class, step_type="analysis", usage=response.get("usage") or {})
+                        failure_class=error.failure_class, step_type="analysis", usage=provider_usage(response))
             write_json(path, state)
             semantic_event_capacity(run_dir, state["payload"])
             if isinstance(error, IncompleteResponseError):
@@ -6153,11 +6226,9 @@ def recover_semantic_categories(run_dir: Path, step_id: str, artistic: dict, con
                 if size > 1:
                     state["page_size"][key] = max(1, size // 2)
                     failures = 0
-                elif state.get("expanded") != key:
-                    state["expanded"] = key
-                    failures = 0
                 else:
-                    failures += 1
+                    raise PausedError("Semantic normalization", f"{key}: a single-record page exhausted the loaded model's "
+                        "available generation context. Accepted metadata and prose were retained; no identical request was retried.", "provider_truncation") from error
             elif error is not None and not added:
                 failures += 1
             else:
@@ -6328,6 +6399,7 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
                                          {"role": "user", "content": prompt}],
                             **parameters, "response_format": {"type": "json_schema", "json_schema": {"name": "semanticDeltaPayload", "strict": True, "schema": schema}}}
                         sent += 1
+                        set_provider_output_limit(run_dir, request, parameters, "Semantic normalization")
                         response, content = provider_response(transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
                             float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")), started_at=started,
                             preserve=lambda value: write_json(response_path, value, mode=0o444, exclusive=True),
@@ -6337,7 +6409,7 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
                     response = read_json(response_path) if response_path.exists() else error.response or {}
                     append_failed_attempt(run_dir, step_id=f"{step_id}_semantic", attempt=attempt, phase="validation", prompt=prompt,
                         context=context, parameters=parameters, started_at=started, failure_class=error.failure_class, step_type="analysis",
-                        output_hash=sha256_file(response_path) if response_path.exists() else None, usage=response.get("usage") or {})
+                        output_hash=sha256_file(response_path) if response_path.exists() else None, usage=provider_usage(response))
                     seed_semantic_recovery(run_dir, step_id, artistic_payload, response, schema=schema)
                     response = None
                     if isinstance(error, IncompleteResponseError):
@@ -6374,7 +6446,7 @@ def request_semantic_normalization(run_dir: Path, step_id: str, artistic_payload
                 append_failed_attempt(run_dir, step_id=f"{step_id}_semantic", attempt=attempt, phase="validation", prompt=prompt,
                     context=context, parameters=parameters, started_at=started, failure_class=error.failure_class, step_type="analysis",
                     output_hash=sha256_file(response_path) if response_path.exists() else None,
-                    usage=read_json(response_path).get("usage") or {} if response_path.exists() else response.get("usage") or {} if isinstance(response, dict) else {})
+                    usage=provider_usage(read_json(response_path)) if response_path.exists() else provider_usage(response))
             if error.failure_class in {"budget_exhaustion", "continuity_impossibility"} or isinstance(error, IntegrityError):
                 raise
             if isinstance(error, SchemaError):
@@ -7248,7 +7320,7 @@ def step_was_truncated(run_dir: Path, step_id: str) -> bool:
     )
 
 
-def packet_step_id(plan: dict, expanded: bool = False) -> str:
+def packet_step_id(plan: dict) -> str:
     slots = plan["scene_slot_ids"] or plan["ending_slot_ids"]
     identity = canonical_json({
         "packet": plan["packet_slot_id"],
@@ -7259,32 +7331,7 @@ def packet_step_id(plan: dict, expanded: bool = False) -> str:
         "may_satisfy": plan["may_satisfy_obligation_ids"],
         "words": plan.get("literary_word_allowance", CHUNK_LITERARY_WORDS),
     })
-    return f"packet_{plan['packet_slot_id']}_{sha256_bytes(identity)[:12]}{'_expanded' if expanded else ''}"
-
-
-def expanded_output_limit(run_dir: Path, prompt: str, base_step_id: str, schema=None) -> int:
-    manifest = read_json(run_dir / "run-manifest.json")
-    state = load_state(run_dir)
-    observed = max(
-        (
-            entry["token_accounting"]["input_tokens"] or 0
-            for entry in step_entries(run_dir, base_step_id)
-        ),
-        default=0,
-    )
-    prompt_tokens = max(observed, math.ceil(len(prompt.encode("utf-8")) / 3))
-    prompt_tokens = max(prompt_tokens, provider_input_tokens({"messages": [
-        {"role": "system", "content": RECORD_SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
-        "response_format": {"type": "json_schema", "json_schema": {"schema": schema or {}}}}) + 128)
-    available = (
-        min(
-            manifest["budgets"]["model_context_window_tokens"],
-            state.get("model_context_window_tokens", manifest["budgets"]["model_context_window_tokens"]),
-        )
-        - prompt_tokens
-        - manifest["budgets"]["context_safety_reserve_tokens"]
-    )
-    return min(manifest["budgets"]["max_expanded_output_tokens"], available)
+    return f"packet_{plan['packet_slot_id']}_{sha256_bytes(identity)[:12]}"
 
 
 def request_bounded_record(run_dir: Path, **arguments) -> dict:
@@ -7294,13 +7341,8 @@ def request_bounded_record(run_dir: Path, **arguments) -> dict:
             return request_record(run_dir, **arguments)
         except TruncationError:
             pass
-    expanded_id = f"{step_id}_expanded"
-    if step_was_truncated(run_dir, expanded_id):
-        raise TruncationError(f"Bounded step {step_id} was truncated after its context-safe expanded retry")
-    maximum = expanded_output_limit(run_dir, arguments["prompt"], step_id, arguments.get("response_schema"))
-    if maximum <= BASE_OUTPUT_TOKENS:
-        raise TruncationError(f"Bounded step {step_id} was truncated and the model context has no safe expansion headroom")
-    return request_record(run_dir, **(arguments | {"step_id": expanded_id, "max_tokens": maximum}))
+    raise PausedError("Generation context", f"{step_id} exhausted the loaded model's available generation context. "
+        "The raw response and accepted work were retained. No identical generation was retried.", "provider_truncation")
 
 
 def single_content_packet_plans(plan: dict) -> list[dict]:
@@ -7378,62 +7420,28 @@ def request_packet_slice(run_dir: Path, architecture: dict, plan: dict, transpor
     retrieval_working_set(run_dir, step_id, {"packet_slot_id": plan["packet_slot_id"], "packet_kind": plan["packet_kind"],
         "slots": slots, "keywords": search_query(plan)["terms"],
         "entities": plan.get("relevance", {}).get("claimant_ids", []) + plan.get("relevance", {}).get("character_ids", [])}, transport)
-    if step_was_truncated(run_dir, step_id):
-        expanded_id = packet_step_id(plan, expanded=True)
-        if step_was_truncated(run_dir, expanded_id):
-            raise TruncationError("A single-content packet was truncated after its context-safe expanded retry")
-        prompt, context = packet_prompt(run_dir, architecture, plan, step_id=expanded_id)
-        maximum = expanded_output_limit(run_dir, prompt, step_id, packet_payload_schema(run_dir, plan))
-        if maximum <= BASE_OUTPUT_TOKENS:
-            raise TruncationError("A single-content packet was truncated and the model context has no safe expansion headroom")
-        request_record(
-            run_dir,
-            expected_record_type="creative_packet",
-            step_id=expanded_id,
-            phase="literary_packet" if plan["packet_kind"] == "literary" else "ending_packet",
-            prompt=prompt,
-            context=context,
-            branch_relation=plan["branch_path_relation"],
-            temperature=0.85 if plan["packet_kind"] == "literary" else 0.75,
-            max_tokens=maximum,
-            transport=transport,
-            response_definition="creativePacketPayload",
-            response_schema=packet_payload_schema(run_dir, plan),
-            reference_context={"plan": plan},
-            payload_validator=lambda payload: validate_packet_payload_for_run(payload, run_dir, plan),
-            payload_preserver=lambda payload, content, response: preserve_artistic_payload(run_dir, expanded_id, payload, content, response),
-            record_builder=lambda payload: build_creative_packet(
-                run_dir, expanded_id, plan, payload,
-                request_semantic_normalization(run_dir, expanded_id, payload, context, transport, plan=plan),
-            ),
-            precommit_validator=lambda record: validate_packet_for_run(record, run_dir, plan),
-        )
-        return
     prompt, context = packet_prompt(run_dir, architecture, plan)
-    try:
-        request_record(
-            run_dir,
-            expected_record_type="creative_packet",
-            step_id=step_id,
-            phase="literary_packet" if plan["packet_kind"] == "literary" else "ending_packet",
-            prompt=prompt,
-            context=context,
-            branch_relation=plan["branch_path_relation"],
-            temperature=0.85 if plan["packet_kind"] == "literary" else 0.75,
-            transport=transport,
-            response_definition="creativePacketPayload",
-            response_schema=packet_payload_schema(run_dir, plan),
-            reference_context={"plan": plan},
-            payload_validator=lambda payload: validate_packet_payload_for_run(payload, run_dir, plan),
-            payload_preserver=lambda payload, content, response: preserve_artistic_payload(run_dir, step_id, payload, content, response),
-            record_builder=lambda payload: build_creative_packet(
-                run_dir, step_id, plan, payload,
-                request_semantic_normalization(run_dir, step_id, payload, context, transport, plan=plan),
-            ),
-            precommit_validator=lambda record: validate_packet_for_run(record, run_dir, plan),
-        )
-    except TruncationError:
-        request_packet_slice(run_dir, architecture, plan, transport)
+    request_bounded_record(
+        run_dir,
+        expected_record_type="creative_packet",
+        step_id=step_id,
+        phase="literary_packet" if plan["packet_kind"] == "literary" else "ending_packet",
+        prompt=prompt,
+        context=context,
+        branch_relation=plan["branch_path_relation"],
+        temperature=0.85 if plan["packet_kind"] == "literary" else 0.75,
+        transport=transport,
+        response_definition="creativePacketPayload",
+        response_schema=packet_payload_schema(run_dir, plan),
+        reference_context={"plan": plan},
+        payload_validator=lambda payload: validate_packet_payload_for_run(payload, run_dir, plan),
+        payload_preserver=lambda payload, content, response: preserve_artistic_payload(run_dir, step_id, payload, content, response),
+        record_builder=lambda payload: build_creative_packet(
+            run_dir, step_id, plan, payload,
+            request_semantic_normalization(run_dir, step_id, payload, context, transport, plan=plan),
+        ),
+        precommit_validator=lambda record: validate_packet_for_run(record, run_dir, plan),
+    )
 
 
 def execute_packet_plan(run_dir: Path, architecture: dict, plan: dict, transport=http_json) -> dict:
@@ -7685,12 +7693,13 @@ def retrieval_working_set(run_dir, step_id, task, transport, *, scope_id=None, s
                 raise PausedError("Retrieval context", "Complete tool envelope exceeds the frozen input ceiling", "budget_exhaustion")
             if load_state(run_dir)["analysis_step_count"] >= budgets["max_analysis_step_count"]:
                 raise PausedError("Retrieval budget", "Read rounds exhausted the frozen analysis allowance", "budget_exhaustion")
-            usage = [(read_json(item).get("usage") or {}) for item in (run_dir / "raw").glob("*.api.json")]
+            usage = [provider_usage(read_json(item)) for item in (run_dir / "raw").glob("*.api.json")]
             for key, ceiling, reserve in (("prompt_tokens", "max_cumulative_input_tokens", tokens),
-                    ("completion_tokens", "max_cumulative_output_tokens", parameters["max_tokens"])):
+                    ("final_output_tokens", "max_cumulative_output_tokens", parameters["max_tokens"])):
                 if sum(item.get(key) or 0 for item in usage) + reserve > budgets[ceiling]:
                     raise PausedError("Retrieval budget", f"Read round exceeds {ceiling}", "budget_exhaustion")
             try:
+                set_provider_output_limit(run_dir, request, parameters, "Retrieval context")
                 response, _ = provider_response(transport, api_url(brief["lm_studio_base_url"], "/v1/chat/completions"), request,
                     float(os.environ.get("CATHEDRALS_HTTP_TIMEOUT", "5400")), allow_tools=True, started_at=utc_now(),
                     preserve=lambda value: write_json(path, value | {"_cathedrals_request": meta}, mode=0o444, exclusive=True),
@@ -7699,7 +7708,7 @@ def retrieval_working_set(run_dir, step_id, task, transport, *, scope_id=None, s
                 append_failed_attempt(run_dir, step_id=round_step, attempt=attempt, phase="architecture",
                     prompt=canonical_json(messages).decode(), context=state["revision"], parameters=parameters,
                     started_at=utc_now(), step_type="analysis",
-                    usage=((getattr(error, "response", None) or (read_json(path) if path.exists() else {})).get("usage") or {}),
+                    usage=provider_usage(getattr(error, "response", None) or (read_json(path) if path.exists() else {})),
                     failure_class=error.failure_class)
                 raise
         response["_cathedrals_request"] = meta
@@ -7886,7 +7895,7 @@ def preserve_planning_result(run_dir: Path, step_id: str, repair_step: str, resu
             parameters=meta["parameters"], seed=meta["parameters"]["seed"], started_at=response.get("_cathedrals_started_at", utc_now()),
             output_hash=sha256_bytes(canonical_json(result)), generated_ids=[], past_constraint_ids=[], future_obligation_ids=[],
             motif_ids=[], branch_relation=None, commit_status="COMMITTED", state_hash_after=state["canonical_state_hash"],
-            failure_class="none", usage=response.get("usage") or {})
+            failure_class="none", usage=provider_usage(response))
         append_ledger_entry(run_dir, entry)
         refresh_run_counters(run_dir)
     repair_path = run_dir / ".staging" / f"{step_id}.repair.json"
@@ -8769,17 +8778,58 @@ def scaffold_entry_budget(uncovered, selection, remaining):
     return max(0, min(5, remaining, 4 * remaining + 1 - sum(counts)))
 
 
+def request_analysis_task_pages(run_dir, step_id, query, tasks, prepare, transport, *, result_key, kind, **options):
+    path = run_dir / ".staging" / f"{query}.pages.json"
+    checkpoint = read_json(path) if path.exists() else {"splits": []}
+
+    def ask(identifiers):
+        page = {identifier: tasks[identifier] for identifier in identifiers}
+        prompt, schema, validator = prepare(page)
+        page_query = query + "_page_" + sha256_bytes(canonical_json([prompt, schema]))[:16]
+        entries = step_entries(run_dir, page_query)
+        truncated = any(entry["failure_class"] == "provider_truncation" for entry in entries)
+        accepted = any(entry["commit_status"] == "COMMITTED" for entry in entries)
+        if page_query not in checkpoint["splits"] and (accepted or not truncated):
+            try:
+                result, response = request_architecture_analysis(run_dir, page_query, prompt, schema, transport,
+                    validator=validator, planning_mode=True, **options)
+                preserve_planning_result(run_dir, step_id, page_query, result, response,
+                    kind=kind, phase=options.get("phase", "architecture"))
+                return result[result_key]
+            except CathedralsError as error:
+                if error.failure_class != "provider_truncation":
+                    raise
+        if len(identifiers) == 1:
+            failures = [entry for entry in step_entries(run_dir, page_query) if entry["failure_class"] == "provider_truncation"]
+            last = max(failures, key=lambda entry: entry["attempt"]) if failures else {}
+            usage = last.get("token_accounting", {})
+            diagnostic = run_dir / "raw" / f"{page_query}-attempt{last.get('attempt', 1)}.api.json"
+            raise PausedError(options["pause_stage"], f"Review task {identifiers[0]} exhausted the loaded model's "
+                f"available generation context ({last.get('parameters', {}).get('max_tokens', 'unknown')} tokens; "
+                f"final output {usage.get('final_output_tokens', 'unreported')}, reasoning {usage.get('reasoning_tokens', 'unreported')}, "
+                f"total output {usage.get('output_tokens', 'unreported')}). Diagnostic: {diagnostic}. "
+                "Accepted pages were retained. Start a fresh run with more available context or a smaller task.", "provider_truncation")
+        if page_query not in checkpoint["splits"]:
+            checkpoint["splits"].append(page_query)
+            write_json(path, checkpoint)
+        middle = len(identifiers) // 2
+        return ask(identifiers[:middle]) | ask(identifiers[middle:])
+
+    identifiers, result = sorted(tasks), {}
+    for offset in range(0, len(identifiers), 4):
+        result.update(ask(identifiers[offset:offset + 4]))
+    return result
+
+
 def review_scaffold_connections(run_dir, step, patch, frontier, transport):
     nodes = {node["node_id"]: node for node in frontier + patch["nodes"]}
     tasks = {}
-    source_ids = set()
 
     def support_task(owner, case, support, guarantees, kind):
         requirement = next(item for item in case["requirements"] if item["requirement_id"] == support["requirement_id"])
         identifier = deterministic_id("scaffold_review", owner, kind, requirement["requirement_id"])
         tasks[identifier] = {"kind": kind, "owner": owner, "case_id": case["case_id"], "requirement": requirement,
             "support": support, "guarantees": [guarantees[key] for key in support["guarantee_ids"]]}
-        source_ids.update(support["genesis_source_ids"])
 
     for node in patch["nodes"]:
         owner = node["node_id"]
@@ -8800,19 +8850,21 @@ def review_scaffold_connections(run_dir, step, patch, frontier, transport):
             support_task(opening["node_id"], opening["entry_cases"][0], support, {}, "opening")
     if not tasks:
         return []
-    sources = retrieve_original_sources(run_dir, [{"sources": [{"artifact_id": identifier} for identifier in sorted(source_ids)]}],
-        limit=None, strict=True, follow_sources=False) if source_ids else []
-    schema = {"type": "object", "additionalProperties": False, "required": ["issues"], "properties": {
-        "issues": {"type": "object", "additionalProperties": False, "properties": {
-            identifier: {"type": "string", "minLength": 1} for identifier in tasks}}}}
-    prompt = render_prompt(run_dir, "generation-scaffold-review.md", {"SCAFFOLD_CONTEXT": canonical_json({
-        "tasks": tasks, "committed_genesis_sources": sources}).decode()})
-    query = step + "_review_" + sha256_bytes(prompt.encode())[:16]
-    result, response = request_architecture_analysis(run_dir, query, prompt, schema, transport,
-        planning_mode=True, max_tokens=3072, pause_stage="Scaffold causal support",
+    def prepare(page):
+        source_ids = {identifier for task in page.values() for identifier in task.get("support", {}).get("genesis_source_ids", [])}
+        sources = retrieve_original_sources(run_dir, [{"sources": [{"artifact_id": identifier} for identifier in sorted(source_ids)]}],
+            limit=None, strict=True, follow_sources=False) if source_ids else []
+        schema = {"type": "object", "additionalProperties": False, "required": ["issues"], "properties": {
+            "issues": {"type": "object", "additionalProperties": False, "properties": {
+                identifier: {"type": "string", "minLength": 1} for identifier in page}}}}
+        prompt = render_prompt(run_dir, "generation-scaffold-review.md", {"SCAFFOLD_CONTEXT": canonical_json({
+            "tasks": page, "committed_genesis_sources": sources}).decode()})
+        return prompt, schema, None
+    query = step + "_review_" + sha256_bytes(canonical_json(tasks))[:16]
+    issues = request_analysis_task_pages(run_dir, "architecture_core", query, tasks, prepare, transport,
+        result_key="issues", kind="scaffold_connection_review", max_tokens=3072, pause_stage="Scaffold causal support",
         system_prompt="Review only the supplied causal tasks. Return JSON only.")
-    preserve_planning_result(run_dir, "architecture_core", query, result, response, kind="scaffold_connection_review")
-    return [tasks[identifier] | {"reason": reason} for identifier, reason in sorted(result["issues"].items())]
+    return [tasks[identifier] | {"reason": reason} for identifier, reason in sorted(issues.items())]
 
 
 def prepare_scaffold_expansion(run_dir, state, core, targets, allocated, transport):
@@ -9484,9 +9536,7 @@ def request_scaffold_audit_tasks(run_dir, step_id, query, node, local, checks, e
             identifier = deterministic_id("scaffold_audit_task", check_id, case_id, entry)
             tasks[identifier] = {"check_id": check_id, "description": description, "case_id": case_id,
                 "entry_from_slot": entry, "source_ids": sorted(allowed_sources[(case_id, entry)])}
-    ordered, verified = sorted(tasks), []
-    for offset in range(0, len(ordered), 8):
-        page = {identifier: tasks[identifier] for identifier in ordered[offset:offset + 8]}
+    def prepare(page, rejected=None):
         entries = {task["entry_from_slot"] for task in page.values()}
         cases = {task["case_id"] for task in page.values()}
         source_ids = {identifier for task in page.values() for identifier in task["source_ids"]}
@@ -9496,28 +9546,27 @@ def request_scaffold_audit_tasks(run_dir, step_id, query, node, local, checks, e
             "inherited_guarantee_evidence": [proof for proof in local["inherited_guarantee_evidence"] if proof["from_slot_id"] in entries],
             "opening_support": local["opening_support"] if "genesis" in entries else [],
             "immutable_source_units": {identifier: units[identifier] for identifier in sorted(source_ids)}}
+        if rejected:
+            context["previous_unsupported_judgments"] = {identifier: rejected[identifier] for identifier in page}
         def validate(result):
             for identifier, answer in result["tasks"].items():
                 task = page[identifier]
                 for quote in answer["evidence_quotes"]:
                     if quote["source_id"] not in task["source_ids"] or not any(quote["quote"] in text for text in units[quote["source_id"]]):
                         raise SchemaError(f"Scaffold audit task {identifier} must quote its permitted immutable evidence exactly")
-        def ask(context, kind, suffix):
-            prompt = render_prompt(run_dir, "generation-scaffold-audit.md", {"SCAFFOLD_CONTEXT": canonical_json(context).decode()})
-            page_query = query + suffix + sha256_bytes(prompt.encode())[:16]
-            result, response = request_architecture_analysis(run_dir, page_query, prompt, scaffold_audit_task_schema(context["tasks"]),
-                transport, validator=validate, phase="validation", planning_mode=True, context_purpose="semantic", max_tokens=8192,
-                pause_stage="Scaffold evidence", system_prompt="Audit only the supplied task identifiers against immutable prose. Return JSON only.")
-            preserve_planning_result(run_dir, step_id, page_query, result, response, kind=kind, phase="validation")
-            return result
-        result = ask(context, "scaffold_evidence_tasks", "_page_")
-        rejected = {identifier: answer for identifier, answer in result["tasks"].items() if not answer["supported"]}
-        if rejected:
-            reconsidered = ask(context | {"tasks": {identifier: page[identifier] for identifier in rejected},
-                "previous_unsupported_judgments": rejected}, "scaffold_evidence_reconsideration", "_reconsider_")
-            result = {"tasks": result["tasks"] | reconsidered["tasks"]}
-        verified.extend({"check_id": tasks[identifier]["check_id"], "case_id": tasks[identifier]["case_id"],
-            "entry_from_slot": tasks[identifier]["entry_from_slot"], **result["tasks"][identifier]} for identifier in sorted(page))
+        prompt = render_prompt(run_dir, "generation-scaffold-audit.md", {"SCAFFOLD_CONTEXT": canonical_json(context).decode()})
+        return prompt, scaffold_audit_task_schema(page), validate
+
+    options = {"result_key": "tasks", "phase": "validation", "context_purpose": "semantic", "max_tokens": 8192,
+        "pause_stage": "Scaffold evidence", "system_prompt": "Audit only the supplied task identifiers against immutable prose. Return JSON only."}
+    result = request_analysis_task_pages(run_dir, step_id, query, tasks, prepare, transport,
+        kind="scaffold_evidence_tasks", **options)
+    rejected = {identifier: answer for identifier, answer in result.items() if not answer["supported"]}
+    if rejected:
+        result.update(request_analysis_task_pages(run_dir, step_id, query + "_reconsider", {identifier: tasks[identifier] for identifier in rejected},
+            lambda page: prepare(page, rejected), transport, kind="scaffold_evidence_reconsideration", **options))
+    verified = [{"check_id": tasks[identifier]["check_id"], "case_id": tasks[identifier]["case_id"],
+        "entry_from_slot": tasks[identifier]["entry_from_slot"], **result[identifier]} for identifier in sorted(tasks)]
     digest = sha256_bytes(canonical_json(tasks))
     assembled = {"_cathedrals_request": {"step_id": query, "attempt": 1,
         "parameters": {"assembly": "scaffold_audit_tasks", "seed": step_seed(read_json(run_dir / "generation-brief.json")["generation_seed"], query)},
@@ -10145,7 +10194,7 @@ def validate_complete_work(run_dir: Path) -> dict:
         reasons.append("Creative-step budget was exceeded.")
     if state["analysis_step_count"] > manifest["budgets"]["max_analysis_step_count"]:
         reasons.append("Analysis-step budget was exceeded.")
-    if state["input_tokens"] > manifest["budgets"]["max_cumulative_input_tokens"] or state["output_tokens"] > manifest["budgets"]["max_cumulative_output_tokens"]:
+    if state["input_tokens"] > manifest["budgets"]["max_cumulative_input_tokens"] or final_output_token_total(run_dir) > manifest["budgets"]["max_cumulative_output_tokens"]:
         reasons.append("Cumulative token budget was exceeded.")
     if len(constraint_events) > manifest["budgets"]["max_constraint_events"]:
         reasons.append("Constraint-event capacity was exceeded.")
@@ -10476,7 +10525,11 @@ def make_finalization(run_dir: Path, status: str, failure_class: str, reason: st
         "committed_record_hashes": committed_hashes(run_dir),
         "constraint_event_stream_hash": sha256_file(constraint_path) if constraint_path.exists() else sha256_bytes(b""),
         "prospective_plan_history_hash": sha256_file(prospective_history) if prospective_history.exists() else sha256_bytes(b""),
-        "token_accounting": {"input_tokens": state["input_tokens"], "output_tokens": state["output_tokens"], "cost": state["cost"], "currency": None},
+        "token_accounting": {"input_tokens": state["input_tokens"], "output_tokens": state["output_tokens"],
+            "final_output_tokens": final_output_token_total(run_dir),
+            "final_output_tokens_estimated": any(entry["token_accounting"].get("final_output_tokens_estimated") for entry in entries),
+            "reasoning_tokens": sum(entry["token_accounting"].get("reasoning_tokens") or 0 for entry in entries),
+            "cost": state["cost"], "currency": None},
         "mechanical_validation": mechanical,
         "artistic_acceptance": artistic,
         "static_build_validation": build,
@@ -10712,7 +10765,7 @@ def print_success(run_dir: Path, build_path: Path, counts: dict, brief: dict, ou
     output_fn(f"Run:\npython3 -m http.server 4321 --directory {build_path}")
 
 
-def probe_execution_policy(base_url, model, transport, output_fn=print):
+def probe_execution_policy(base_url, model, transport, output_fn=print, *, context_window_tokens):
     artifacts = []
     tool = next(item for item in retrieval_tools() if item["function"]["name"] == "get_records")
     request = {"model": model, "messages": [{"role": "user", "content":
@@ -10721,6 +10774,7 @@ def probe_execution_policy(base_url, model, transport, output_fn=print):
         "temperature": 0.0, "max_tokens": 8192, "seed": step_seed("synthetic_preflight", "capability_probe"), "stream": True, "stream_options": {"include_usage": True}}
     mode = "automatic"
     def dispatch(label, payload, allow_tools=False):
+        set_provider_output_limit(None, payload, payload, "LM Studio preflight", context_window_tokens=context_window_tokens)
         artifact = {"step_id": label, "request": copy.deepcopy(payload), "started_at": utc_now()}
         artifacts.append(artifact)
         try:
@@ -10804,7 +10858,7 @@ def main(argv=None, *, input_fn=input, output_fn=print, transport=http_json) -> 
             base_url = configured_lm_studio_url()
             model = lm_studio_preflight(base_url, os.environ.get("CATHEDRALS_MODEL"), input_fn, output_fn, transport)
             model_context_window_tokens = preflight_model_capacity(base_url, model, output_fn, transport)
-            policy, probes = probe_execution_policy(base_url, model, transport, output_fn)
+            policy, probes = probe_execution_policy(base_url, model, transport, output_fn, context_window_tokens=model_context_window_tokens)
             run_dir = create_run(
                 frozen,
                 base_url,

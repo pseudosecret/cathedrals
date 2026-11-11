@@ -37,7 +37,10 @@ retry: `provider_incomplete_response` immediately pauses and retains partial evi
 Require a finish reason and `[DONE]` for streamed completions; never accept an
 incomplete envelope or repair missing JSON by inference. Socket inactivity, including
 the initial wait, defaults to 5,400 seconds; total active generation time is unbounded
-by HTTP timeout but remains subject to frozen output-token limits.
+by HTTP timeout. Reasoning shares the physical generation space left after the complete request
+and safety reserve; cumulative output quotas count final content separately. Truncated
+review pages split from four tasks downward, retain accepted pages, and pause when
+a single task exhausts physical context. No identical fixed-budget truncation retry is made.
 Validate the 1,200-word scene/ending chunk ceiling, including nested artifacts, before
 preserving artistic prose or requesting semantic normalization. A length overrun is
 an uncommitted payload correction, never a metadata correction. The 4,800-word logical
@@ -161,15 +164,23 @@ and exact accounting. All provider
 responses are synthetic; the local model is never required by these checks.
 
 The semantic-recovery suite uses metadata-only measurements from the saved 4,096-token
-truncation. Verify the 8,192-token initial allowance, concise extraction instructions,
+truncation. Verify the 8,192-token final-output reserve, physical context for reasoning,
+concise extraction instructions,
 and unchanged literary bytes. A cut-off whole response must retain complete categories
 and records; only pending categories are paged. Pages may continue beyond eight total
 records, with stable fact aliases and delayed resolution of locally created motifs.
-Check page-size reduction, expanded single-record headroom, no-progress rejection,
+Check page-size reduction, immediate single-record context exhaustion, no-progress rejection,
 accurate attempt counts, category-specific canonical correction, interrupted-page
 resume, exact response accounting, and a capacity pause before any oversized request.
 The full 20-scene rehearsal must exercise semantic truncation recovery and retain its
 complete validation, publication, and zero-human-intervention result.
+
+`test_reasoning_budget.py` verifies final/reasoning/total accounting, estimated final
+usage when reasoning statistics are absent, and complete-envelope context reserves.
+Its 16-task review splits truncated pages immediately and reuses accepted pages
+without duplicate requests or usage. Writing audit tests check the same recovery
+with exact source quotations scoped to each page. Single-task exhaustion must name
+the task and preserve its diagnostic instead of retrying unchanged budgets.
 
 Verify packet-plan normalization never offers `active` as an update, while new
 obligations still start active and unchanged obligations retain their state. Inject
